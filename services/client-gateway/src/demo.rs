@@ -53,13 +53,9 @@ impl Demo {
         gw_cfg.reconnect_delay_ms = 200;
         gw_cfg.store_dir = None;
         gw_cfg.nats = None;
-        let symbols: Vec<String> = gw_cfg
-            .instruments
-            .iter()
-            .map(|i| i.symbol.clone())
-            .collect();
+        let instruments = gw_cfg.instruments.clone();
         let gateway = fix_gateway::start(gw_cfg)?;
-        let hub = Hub::new(cfg, auth, symbols, Some(gateway.orders()));
+        let hub = Hub::with_instruments(cfg, auth, &instruments, Some(gateway.orders()));
         tokio::spawn(hub.clone().run_bridge(gateway.subscribe()));
         Ok(Demo { hub, sim, gateway })
     }
