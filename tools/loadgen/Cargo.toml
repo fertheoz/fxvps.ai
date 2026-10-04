@@ -1,0 +1,26 @@
+[package]
+name = "loadgen"
+description = "WebSocket load generator for client-gateway: N clients, quote fan-out and order latency percentiles"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "loadgen"
+path = "src/main.rs"
+
+[dependencies]
+client-proto.workspace = true
+client-gateway = { path = "../../services/client-gateway" }
+domain.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio-tungstenite = "0.26"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[lints]
+workspace = true
