@@ -1,54 +1,65 @@
-# Checkpoint — 4 Ekim 2026
+# Checkpoint — 4 Ekim 2026 (son durum)
 
-Bulut oturumu kredi sınırında durduruldu. Bu belge, `main`'in bu noktadaki durumunu ve yarım kalan işleri kaydeder. Git etiketi: `checkpoint-2026-10-04`.
+Bu belge, bulut oturumu kapanmadan önce projenin **tek kaynaklı özetidir**. Yeni bir oturum buradan başlamalıdır.
+Sabit nokta: `checkpoint/2026-10-04` dalı = `main` @ `cc766cf`.
 
-## `main`'de olanlar (birleşmiş PR'lar, hepsi CI yeşil)
+## Proje
+
+**fxvps.ai** — LP'lere (ör. LMAX) FIX 4.4 ile bağlanan, müşterilere alt hesap + MT5/cTrader sınıfı terminal veren
+çok kiracılı trading platformu. Depo: `github.com/fertheoz/fxvps.ai`.
+
+## `main`'e birleşenler (16 PR, hepsi CI yeşil)
 
 | PR | İçerik |
 |---|---|
-| #1 | M0 — araştırma: MT5/cTrader rakip analizi, FIX/LMAX entegrasyonu, teknoloji mimarisi |
-| #2 | M1 — FIX 4.4 codec, oturum katmanı, LMAX benzeri LP simülatörü, fix-gateway, CI |
-| #3 | M3 — web terminali (React 19, Market Watch, grafikler, emir bileti, DoM, EN/TR) |
-| #4 | M4 — back office (Next.js 16, RBAC, mock AdminApi) |
-| #5 | client-gateway — protobuf/JSON WebSocket protokol v1, JWT, demo modu |
-| #6 | Altyapı — Dockerfile'lar, compose geliştirme ortamı, Helm chart, GHCR + Pages iş akışları |
-| #7 | M2 — money, çift taraflı defter, risk, OMS, core-engine |
-| #8 | M5 — Tauri 2 masaüstü, Expo mobil, ortak `trading-core` paketi |
-| #9 | Terminal ↔ client-gateway gerçek protokol + canlı e2e |
-| #10 | Çekirdek entegrasyonu: gateway → core-engine (risk/OMS/defter) → FIX LP, gerçek bakiye ve K/Z |
-| #12 | Kimlik servisi: kayıt/giriş, 2FA, passkey, dönen oturumlar, JWKS; terminal girişi |
-| #13 | Back office ↔ core-engine admin API (JWT RBAC, 4-göz, idempotency, denetim, SSE) |
-| #14 | Yük testi aracı, güvenlik incelemesi (17 bulgu), README/mimari |
-| #15 | Güvenlik düzeltmeleri G1–G13, G16 |
+| #1 | M0 araştırma: rakip analizi (MT5/cTrader), FIX/LMAX, teknoloji mimarisi → `docs/01-03` |
+| #2 | M1: FIX 4.4 codec, oturum katmanı, LMAX benzeri LP simülatörü, fix-gateway |
+| #3 | M3: web terminali (React 19 + Vite, grafik, emir bileti, DoM, EN/TR) |
+| #4 | M4: back office (Next.js 16, RBAC) |
+| #5 | client-gateway: protobuf/JSON WebSocket protokolü, JWT, demo modu |
+| #6 | Altyapı: Dockerfile'lar, compose, Helm, GHCR + Pages iş akışları → `docs/04` |
+| #7 | M2: money, çift taraflı defter, risk (ESMA), OMS, core-engine |
+| #8 | M5: Tauri 2 masaüstü, Expo mobil, `packages/trading-core` |
+| #9 | Terminal ↔ gateway gerçek protokol + canlı e2e |
+| #10 | Çekirdek entegrasyonu: gateway → core-engine → FIX LP; gerçek bakiye/K-Z |
+| #11 | Protokol v1.2: stop/stop-limit, SL/TP/trailing, hedging, kısmi kapanış, OCO, GTD, geçmiş |
+| #12 | Kimlik servisi: kayıt/giriş, 2FA, passkey, dönen oturumlar, JWKS |
+| #13 | Back office ↔ core-engine admin API (RBAC, 4-göz, idempotency, denetim, SSE) |
+| #14 | Yük testi aracı (`tools/loadgen`), güvenlik incelemesi → `docs/05`, `docs/06` |
+| #15 | Güvenlik düzeltmeleri G1–G13, G16 → `docs/07` |
+| #22 | Masaüstü köprüsü (grafik pencere ayırma, tepsi, bildirim) + mobil canlı WS modu |
 
-## Yarım kalan işler
+## Kod haritası
 
-1. **PR #11 — protokol v1.2 (tüm emir tipleri)** — dal `feat/full-order-types`.
-   Stop/stop-limit, SL/TP/trailing, hedging pozisyonları, kısmi kapanış, OCO, GTD, işlem geçmişi.
-   Önceki commit CI'da tamamen yeşildi; son commit (`b025de8`) #15'i birleştiriyor ve yerelde
-   doğrulanmadı. **Yapılacak:** CI sonucuna bak, yeşilse birleştir; kırmızıysa #15 ile çakışan
-   client-gateway `conn.rs`/`hub.rs`/`main.rs` noktalarını düzelt.
-2. **`feat/native-integration`** (PR yok) — terminal ↔ Tauri köprüsü (grafik pencere ayırma,
-   tepsi durumu, yerel bildirimler) ve mobil canlı WS modu. Commit `415ed56` **WIP, doğrulanmamış**.
-   **Yapılacak:** `main` + #11 birleştir, testleri koş, PR aç.
-3. **Güvenlik:** G14, G15, G17 ertelendi; G8, G10, G13 kısmi — bkz. `docs/07-guvenlik-duzeltmeleri.md`.
-4. **Bilinen eksikler:**
-   - LP oturumları ve işlem geçmişi admin API'de boş.
-   - NATS tabanlı `CoreApi` yok.
-   - Gerçek LMAX FIX spesifikasyonu henüz alınmadı; LMAX'e özgü ayrıntılar `[DOĞRULA]` işaretli.
-   - İmzalı masaüstü sürümü ve updater anahtarları yok.
-
-## Elle yapılması gerekenler (aracın yetkisi dışında)
-
-- **GitHub Pages:** Settings → Pages → Source: **GitHub Actions**. Açılınca `main`'e her push terminali
-  (kök) ve back office'i (`/admin/`) yayınlar. Depo private ise ücretli plan gerekir.
-- **Depo görünürlüğü:** depo public açıldı; private yapmak için Settings → Danger Zone.
+- `crates/`: domain, money, fix-codec, fix-session, client-proto, ledger, risk, oms
+- `services/`: lp-simulator, fix-gateway, core-engine, client-gateway, identity
+- `apps/`: terminal (web), backoffice, desktop (Tauri), mobile (Expo)
+- `packages/trading-core`, `tools/loadgen`, `infra/docker`, `deploy/{compose,helm}`, `.github/workflows`
 
 ## Hızlı başlangıç
 
 ```bash
-cargo run -p client-gateway -- --demo        # simülatör + FIX + çekirdek, demo token stdout'ta
-cd apps/terminal && pnpm install --ignore-workspace && pnpm dev   # ?api=ws&url=...&token=...
+cargo run -p client-gateway -- --demo      # simülatör + FIX + çekirdek; URL ve demo token stdout'ta
+cd apps/terminal && pnpm install --ignore-workspace && pnpm dev
+# tarayıcı: http://localhost:5173 → üst bar "Gateway" → FXVPS_WS_URL + FXVPS_DEMO_TOKEN
 ```
+Ayrıntı: kök `README.md`, `docs/04-operasyon.md`.
 
-Ayrıntılar: kök `README.md`, `docs/04-operasyon.md`, `docs/05-performans.md`.
+## Açık işler (sonraki oturum)
+
+1. **GitHub Pages (elle):** Settings → Pages → Source: **GitHub Actions**. Sonraki `main` push'unda terminal
+   `https://fertheoz.github.io/fxvps.ai/`, back office `/admin/` altında yayınlanır. (Depo private ise ücretli plan gerekir.)
+2. **Depo görünürlüğü:** şu an public; private için Settings → Danger Zone.
+3. **Güvenlik:** G14, G15, G17 ertelendi; G8, G10, G13 kısmi (`docs/07`).
+4. **Ürün eksikleri:**
+   - Admin API'de LP oturumları ve işlem geçmişi boş.
+   - NATS tabanlı `CoreApi` yok.
+   - Terminal henüz `packages/trading-core`'u kullanmıyor (kopya kod).
+   - Mobil EAS native derleme ve push bildirimi yok.
+   - Masaüstü imzalı sürüm + updater anahtarları yok.
+5. **LMAX:** gerçek FIX spesifikasyonu onboarding'de alınmalı; `docs/02`'deki `[DOĞRULA]` maddeleri teyit edilmeli.
+6. **Performans:** sandbox ölçümünde dolum gecikmesi iki tepeli (~1,7 ms ve ~45 ms); kök neden araştırılmadı (`docs/05`).
+
+## Kalan dallar
+
+Tüm iş `main`'de; `feat/*`, `fix/*`, `docs/*` dalları birleşmiş durumda, silinebilir. `checkpoint/2026-10-04` korunmalı.
