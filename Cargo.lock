@@ -1042,6 +1042,7 @@ dependencies = [
 name = "money"
 version = "0.1.0"
 dependencies = [
+ "domain",
  "proptest",
  "serde",
  "serde_json",

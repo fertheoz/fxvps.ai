@@ -281,6 +281,13 @@ macro_rules! fixed_type {
                 write!(f, "{}({})", stringify!($name), self)
             }
         }
+        /// Lossless: `domain::Fixed` uses the same 1e8 scale on an `i64`.
+        impl From<domain::fixed::Fixed> for $name {
+            fn from(f: domain::fixed::Fixed) -> $name { $name(f.raw()) }
+        }
+        impl From<$name> for domain::fixed::Fixed {
+            fn from(v: $name) -> domain::fixed::Fixed { domain::fixed::Fixed::from_raw(v.0) }
+        }
         impl std::ops::Neg for $name {
             type Output = $name;
             fn neg(self) -> $name { $name(-self.0) }
@@ -554,6 +561,15 @@ mod tests {
             qty("0.137").round_to(qty("0.01"), Rounding::Down),
             Some(qty("0.13"))
         );
+    }
+
+    #[test]
+    fn domain_fixed_interop() {
+        let f: domain::fixed::Fixed = "1.23456".parse().unwrap();
+        let p: Price = f.into();
+        assert_eq!(p, px("1.23456"));
+        assert_eq!(domain::fixed::Fixed::from(qty("0.01")).raw(), 1_000_000);
+        assert_eq!(SCALE, domain::fixed::SCALE);
     }
 
     #[test]
