@@ -1,0 +1,6 @@
+apiVersion: v2
+name: fxvps
+description: fxvps.ai platform servisleri (iskelet). FIX GW + core üretimde bare-metal LD4'te koşar; bu chart bulut/staging içindir.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
