@@ -2,9 +2,34 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import type { Plugin } from 'vite';
+
+// G13: page CSP for production builds only (the dev server injects an inline
+// React refresh preamble). The gateway/identity URL is user-configurable, so
+// connect-src allows any https/wss origin plus loopback http/ws for local e2e.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ');
+
+const cspMeta = (): Plugin => ({
+  name: 'fxvps-csp',
+  apply: 'build',
+  transformIndexHtml: () => [
+    { tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: CSP }, injectTo: 'head-prepend' },
+  ],
+});
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), cspMeta()],
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 900,

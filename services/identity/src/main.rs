@@ -17,6 +17,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("identity: configured by environment (see services/identity/README.md)");
         return Ok(());
     }
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("grant-admin") {
+        let email = args.get(2).ok_or("usage: identity grant-admin <email>")?;
+        let url = std::env::var("DATABASE_URL").map_err(|_| "grant-admin needs DATABASE_URL")?;
+        let store = PgStore::connect(&url).await?;
+        let changed = identity::store::grant_admin(&store, email).await?;
+        println!(
+            "{}",
+            if changed {
+                "admin granted"
+            } else {
+                "already admin"
+            }
+        );
+        return Ok(());
+    }
     let cfg = Config::from_env()?;
 
     let store: Arc<dyn Store> = match &cfg.database_url {
