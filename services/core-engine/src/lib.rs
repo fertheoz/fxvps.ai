@@ -4,6 +4,8 @@
 //! then applied. Startup restores the latest snapshot and replays the
 //! journal tail. A small axum admin API exposes accounts and positions.
 
+pub mod admin;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
