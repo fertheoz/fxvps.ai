@@ -13,6 +13,7 @@ members = [
     "services/core-engine",
     "crates/client-proto",
     "services/client-gateway",
+    "services/identity",
 ]
 # Tauri shell needs GTK/WebKit system libs; built by .github/workflows/desktop.yml.
 exclude = ["apps/desktop/src-tauri"]
@@ -36,6 +37,7 @@ risk = { path = "crates/risk" }
 oms = { path = "crates/oms" }
 client-proto = { path = "crates/client-proto" }
 core-engine = { path = "services/core-engine" }
+identity = { path = "services/identity" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "fs", "signal"] }
 thiserror = "2"
@@ -62,3 +64,7 @@ todo = "warn"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# RSA key generation (identity dev keys / tests) is unusably slow unoptimised.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3

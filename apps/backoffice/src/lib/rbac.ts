@@ -69,6 +69,7 @@ export const ROUTE_PERMISSIONS: Record<string, Permission> = {
   "/audit": "audit.view",
   "/users": "users.view",
   "/settings": "settings.view",
+  "/approvals": "balance.approve",
 };
 
 export function normalizePath(pathname: string, basePath = ""): string {

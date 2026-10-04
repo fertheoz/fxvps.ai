@@ -1,0 +1,82 @@
+name: identity
+
+on:
+  push:
+    branches: [main]
+    paths: ['services/identity/**', 'services/client-gateway/**', 'apps/terminal/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/identity.yml']
+  pull_request:
+    paths: ['services/identity/**', 'services/client-gateway/**', 'apps/terminal/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/identity.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: identity-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  postgres:
+    # The workspace `cargo test` (ci.yml) runs the identity suite on the in-memory
+    # store; this job runs the same flows plus store conformance on PostgreSQL.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fxid
+          POSTGRES_PASSWORD: fxid
+          POSTGRES_DB: fxid
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U fxid" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://fxid:fxid@localhost:5432/fxid
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p identity
+      - name: client-gateway accepts identity tokens across JWKS rotation
+        run: cargo test --locked -p client-gateway --test identity_jwks
+
+  terminal-e2e:
+    # register → verify → login → connect → trade → TOTP, against real identity +
+    # client-gateway (--demo, JWKS URL auth), plus the mocked-identity specs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: apps/terminal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build identity + client-gateway
+        working-directory: .
+        run: cargo build --locked -p identity -p client-gateway
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/terminal/pnpm-lock.yaml
+      - run: pnpm install --ignore-workspace --frozen-lockfile
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e:identity
+        env:
+          CI: 'true'
+          FXVPS_IDENTITY_E2E_LIVE: '1'
+          FXVPS_IDENTITY_BIN: ${{ github.workspace }}/target/debug/identity
+          FXVPS_GATEWAY_BIN: ${{ github.workspace }}/target/debug/client-gateway
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-identity-report
+          path: apps/terminal/test-results
+          retention-days: 7

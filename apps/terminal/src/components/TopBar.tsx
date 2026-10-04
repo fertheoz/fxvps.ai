@@ -5,6 +5,7 @@ import type { ConnectionState } from '../api/types';
 import { useState } from 'react';
 import { isGatewayApi } from '../store/api';
 import { loadGateway } from '../store/connection';
+import { UserMenu } from './Auth';
 import { ConnectDialog } from './ConnectDialog';
 
 const connColor: Record<ConnectionState, string> = {
@@ -95,6 +96,7 @@ export function TopBar() {
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <UserMenu />
         <button
           className="px-2 py-1 rounded border border-line text-muted hover:text-fg max-w-[220px] truncate"
           onClick={() => setGwOpen(true)}

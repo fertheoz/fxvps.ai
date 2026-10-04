@@ -4,7 +4,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 
 const port = Number(process.argv[2] ?? 4310);
-const root = join(process.cwd(), "out");
+const root = join(process.cwd(), process.argv[3] ?? "out");
 const types = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css",
   ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
