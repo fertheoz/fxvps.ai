@@ -1,7 +1,7 @@
 import type { TradingApi } from '../api/types';
 import { MockTradingApi } from '../api/mock';
 import { WsTradingApi } from '../api/ws';
-import { resolveGateway } from './connection';
+import { isAllowedWsUrl, resolveGateway } from './connection';
 import { sessionToken } from './session';
 import { RafBatcher } from '../lib/rafBatcher';
 import type { Quote } from '../api/types';
@@ -23,8 +23,13 @@ export function createApiFromLocation(search: string): TradingApi {
     history.replaceState(history.state, '', `${location.pathname}${cleanedSearch}${location.hash}`);
   }
   // Without a pasted dev token the identity session supplies (and silently refreshes)
-  // the access token; it is read on every (re)connect.
-  if (gateway) return new WsTradingApi({ url: gateway.url, token: () => gateway.token || sessionToken() });
+  // the access token; it is read on every (re)connect, and only ever sent to an
+  // allow-listed gateway origin (a manually entered foreign gateway gets no token).
+  if (gateway) {
+    const trusted = isAllowedWsUrl(gateway.url);
+    if (!trusted && !gateway.token) console.warn(`[fxvps] gateway ${gateway.url} is not allow-listed; session token withheld`);
+    return new WsTradingApi({ url: gateway.url, token: () => gateway.token || (trusted ? sessionToken() : '') });
+  }
   return new MockTradingApi();
 }
 

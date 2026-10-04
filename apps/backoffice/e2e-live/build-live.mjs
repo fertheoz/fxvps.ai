@@ -15,6 +15,8 @@ try {
     env: { ...process.env, NEXT_PUBLIC_API_URL: api, NEXT_PUBLIC_DEV_AUTH: "1" },
   });
   if (r.status !== 0) process.exit(r.status ?? 1);
+  const c = spawnSync("node", ["scripts/csp.mjs", "out"], { stdio: "inherit", env: { ...process.env, NEXT_PUBLIC_API_URL: api } });
+  if (c.status !== 0) process.exit(c.status ?? 1);
   rmSync("out-live", { recursive: true, force: true });
   renameSync("out", "out-live");
 } finally {

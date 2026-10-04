@@ -28,6 +28,7 @@ pub fn test_config() -> Config {
         argon2_m_kib: 256,
         argon2_t: 1,
         ip_requests_per_minute: 10_000,
+        admin_require_mfa: false,
         service_token: Some("svc-token-0123456789-0123456789-0123456789".into()),
         ..Config::default()
     }

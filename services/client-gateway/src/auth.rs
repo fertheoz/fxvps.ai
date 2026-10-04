@@ -8,7 +8,9 @@
 //! 2. `FXVPS_JWT_JWKS_FILE` — JWKS JSON (RS256 / ES256 keys selected by `kid`),
 //! 3. `FXVPS_JWT_RS256_PUBLIC_KEY_FILE` — PEM public key,
 //! 4. `FXVPS_JWT_HS256_SECRET` — shared secret,
-//! 5. otherwise the **development-only** [`DEV_HS256_SECRET`] (logged as a warning).
+//! 5. otherwise the **development-only** [`DEV_HS256_SECRET`]. The binary refuses
+//!    to start with it unless `--demo` or `FXVPS_DEV_AUTH=1` is given
+//!    (see [`Authenticator::enforce_dev_key_policy`]).
 //!
 //! `FXVPS_JWT_ISSUER` / `FXVPS_JWT_AUDIENCE`, when set, make `iss` / `aud`
 //! mandatory and checked (always set them with the identity service).
@@ -332,6 +334,31 @@ impl Authenticator {
     }
 }
 
+/// Startup policy for the built-in development key (finding G1): a gateway
+/// without a configured key source may only start in `--demo` mode or with an
+/// explicit `FXVPS_DEV_AUTH=1`; otherwise anyone could forge tokens for any
+/// account with the public [`DEV_HS256_SECRET`].
+pub fn dev_key_allowed(dev_key: bool, demo: bool, dev_auth_flag: Option<&str>) -> bool {
+    !dev_key || demo || dev_auth_flag == Some("1")
+}
+
+impl Authenticator {
+    /// Fails when the development key is in use without `--demo` or
+    /// `FXVPS_DEV_AUTH=1`.
+    pub fn enforce_dev_key_policy(&self, demo: bool) -> Result<(), AuthError> {
+        let flag = std::env::var("FXVPS_DEV_AUTH").ok();
+        if dev_key_allowed(self.dev_key, demo, flag.as_deref()) {
+            return Ok(());
+        }
+        Err(AuthError::Config(
+            "no JWT key configured: set FXVPS_JWT_JWKS_URL (identity), FXVPS_JWT_JWKS_FILE, \
+             FXVPS_JWT_RS256_PUBLIC_KEY_FILE or FXVPS_JWT_HS256_SECRET; the built-in \
+             development key is only allowed with --demo or FXVPS_DEV_AUTH=1"
+                .into(),
+        ))
+    }
+}
+
 /// Issues an HS256 token (tests and `--demo` only).
 pub fn issue_hs256(secret: &[u8], sub: &str, accounts: &[&str], ttl_secs: u64) -> String {
     let claims = Claims {
@@ -398,6 +425,24 @@ mod tests {
     fn dev_key_is_flagged() {
         assert!(Authenticator::hs256(DEV_HS256_SECRET.as_bytes()).dev_key);
         assert!(!Authenticator::hs256(b"x").dev_key);
+    }
+
+    #[test]
+    fn dev_key_needs_demo_or_explicit_flag() {
+        // Configured key: always fine.
+        assert!(dev_key_allowed(false, false, None));
+        // Dev key: refused by default, allowed with --demo or FXVPS_DEV_AUTH=1 only.
+        assert!(!dev_key_allowed(true, false, None));
+        assert!(!dev_key_allowed(true, false, Some("0")));
+        assert!(!dev_key_allowed(true, false, Some("true")));
+        assert!(dev_key_allowed(true, true, None));
+        assert!(dev_key_allowed(true, false, Some("1")));
+        assert!(Authenticator::hs256(b"x")
+            .enforce_dev_key_policy(false)
+            .is_ok());
+        assert!(Authenticator::hs256(DEV_HS256_SECRET.as_bytes())
+            .enforce_dev_key_policy(true)
+            .is_ok());
     }
 
     #[test]

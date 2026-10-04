@@ -71,6 +71,8 @@ pub struct AdminCtx {
     pub auth: Arc<Authenticator>,
     /// Invalidation hints for the live stream (JSON `{"topics": [...]}`).
     pub live: broadcast::Sender<String>,
+    /// Single-use SSE tickets (`POST /v1/stream/ticket`).
+    pub tickets: Arc<stream::Tickets>,
 }
 
 impl AdminCtx {
@@ -139,11 +141,18 @@ impl From<std::io::Error> for ApiError {
 pub type ApiResult<T = Value> = Result<Json<T>, ApiError>;
 
 pub fn need(actor: &Actor, permission: &'static str) -> Result<(), ApiError> {
-    if actor.can(permission) {
-        Ok(())
-    } else {
-        Err(ApiError::forbidden(permission))
+    if !actor.can(permission) {
+        return Err(ApiError::forbidden(permission));
     }
+    if auth::needs_mfa(permission) && !actor.mfa_ok {
+        return Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            code: "mfa_required",
+            message: format!("{permission} requires a multi-factor login"),
+            permission: Some(permission),
+        });
+    }
+    Ok(())
 }
 
 fn bearer(parts: &Parts) -> Option<&str> {
@@ -174,11 +183,13 @@ async fn legacy_guard(State(ctx): State<AdminCtx>, req: Request, next: Next) -> 
     }
     let (mut parts, body) = req.into_parts();
     match Actor::from_request_parts(&mut parts, &ctx).await {
-        Ok(a) if a.role == Role::Admin => next.run(Request::from_parts(parts, body)).await,
+        Ok(a) if a.role == Role::Admin && a.mfa_ok => {
+            next.run(Request::from_parts(parts, body)).await
+        }
         Ok(_) => ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",
-            "legacy engine routes require the admin role",
+            "legacy engine routes require the admin role (with MFA when required)",
         )
         .into_response(),
         Err(e) => e.into_response(),
@@ -219,6 +230,7 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
         store: Arc::new(Mutex::new(store)),
         auth: Arc::new(auth),
         live,
+        tickets: Arc::default(),
     };
     stream::spawn_ticker(ctx.clone(), cfg.live_interval_ms);
     let legacy =

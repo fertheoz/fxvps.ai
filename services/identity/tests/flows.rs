@@ -978,3 +978,101 @@ async fn passkey_ceremony_boundaries() {
         .await;
     assert_eq!(r.body["error"], "invalid_registration");
 }
+
+#[tokio::test]
+async fn totp_disable_guessing_locks_the_account() {
+    let h = H::new();
+    let email = "tess@example.com";
+    h.register_verified(email).await;
+    let access = h.login(email).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let secret = h
+        .post_auth("/v1/2fa/totp/enroll", &access, json!({}))
+        .await
+        .body["secret"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        h.post_auth(
+            "/v1/2fa/totp/confirm",
+            &access,
+            json!({"code": totp_code(&secret, email, 0)}),
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    // A stolen access token must not allow unlimited code guessing.
+    let mut statuses = Vec::new();
+    for _ in 0..6 {
+        statuses.push(
+            h.post_auth("/v1/2fa/totp/disable", &access, json!({"code": "000000"}))
+                .await
+                .status,
+        );
+    }
+    assert!(statuses.contains(&StatusCode::LOCKED), "{statuses:?}");
+    // locked: even the right code is refused, and password login is locked too
+    assert_eq!(
+        h.post_auth(
+            "/v1/2fa/totp/disable",
+            &access,
+            json!({"code": totp_code(&secret, email, 0)}),
+        )
+        .await
+        .status,
+        StatusCode::LOCKED
+    );
+    assert_eq!(
+        h.post("/v1/login", json!({"email": email, "password": PW}))
+            .await
+            .status,
+        StatusCode::LOCKED
+    );
+}
+
+#[tokio::test]
+async fn admin_routes_need_mfa_and_sensitive_routes_are_rate_limited() {
+    let mut cfg = test_config();
+    cfg.bootstrap_admins = vec!["boss@example.com".into()];
+    cfg.admin_require_mfa = true;
+    let h = H::with(Arc::new(MemoryStore::new()), cfg);
+    h.register_verified("boss@example.com").await;
+    let pwd_only = h.login("boss@example.com").await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = h.get_auth("/v1/admin/audit", &pwd_only).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{:?}", r.body);
+    assert_eq!(r.body["error"], "mfa_required");
+    // the service token is not a user login: exempt
+    assert_eq!(
+        h.get_auth("/v1/admin/audit", &h.service_token())
+            .await
+            .status,
+        StatusCode::OK
+    );
+
+    let mut cfg = test_config();
+    cfg.ip_requests_per_minute = 3;
+    let h = H::with(Arc::new(MemoryStore::new()), cfg);
+    let mut codes = Vec::new();
+    for _ in 0..5 {
+        codes.push(
+            h.post_auth("/v1/2fa/totp/disable", "bogus", json!({"code": "1"}))
+                .await
+                .status,
+        );
+    }
+    assert_eq!(
+        codes
+            .iter()
+            .filter(|c| **c == StatusCode::TOO_MANY_REQUESTS)
+            .count(),
+        2,
+        "{codes:?}"
+    );
+}

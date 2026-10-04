@@ -31,6 +31,14 @@ pub mod close_code {
     pub const UNAUTHENTICATED: u16 = 4001;
     pub const AUTH_TIMEOUT: u16 = 4003;
     pub const SLOW_CONSUMER: u16 = 4008;
+    /// Connection refused by a policy limit (too many connections).
+    pub const POLICY: u16 = 4009;
+}
+
+/// Instant at which a token with `exp` (unix seconds) stops being valid, given
+/// the current unix time `now_s`.
+pub fn token_deadline(exp: u64, now_s: u64) -> tokio::time::Instant {
+    tokio::time::Instant::now() + Duration::from_secs(exp.saturating_sub(now_s))
 }
 
 /// Outbound queue is full: the consumer is too slow.
@@ -101,8 +109,9 @@ fn close_msg(code: u16, reason: &str) -> Message {
     }))
 }
 
-/// Runs a connection to completion.
-pub async fn run(hub: Arc<Hub>, socket: WebSocket) {
+/// Runs a connection to completion. `slot` is the connection's reservation in
+/// [`crate::limits::ConnLimits`], released when the connection ends.
+pub async fn run(hub: Arc<Hub>, socket: WebSocket, mut slot: crate::limits::Slot) {
     hub.metrics.connections.inc();
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<Message>(hub.cfg.queue_capacity);
@@ -139,7 +148,8 @@ pub async fn run(hub: Arc<Hub>, socket: WebSocket) {
         let _ = sink.close().await;
     });
 
-    let outcome = session(&hub, &mut stream, tx).await;
+    let outcome = session(&hub, &mut stream, tx, &mut slot).await;
+    drop(slot);
     if let Some((code, reason)) = outcome {
         if code == close_code::SLOW_CONSUMER {
             hub.metrics.slow_consumer_drops.inc();
@@ -171,6 +181,7 @@ async fn session(
     hub: &Hub,
     stream: &mut Stream,
     tx: mpsc::Sender<Message>,
+    slot: &mut crate::limits::Slot,
 ) -> Option<(u16, String)> {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(hub.cfg.auth_timeout_ms);
     let slow = || Some((close_code::SLOW_CONSUMER, "slow consumer".to_string()));
@@ -227,6 +238,18 @@ async fn session(
             }
         },
     };
+    if slot.bind_subject(&claims.sub).is_err() {
+        hub.metrics.connections_rejected.inc();
+        let _ = out.error(
+            "",
+            ErrorCode::RateLimited,
+            "too many connections for this user",
+        );
+        return Some((close_code::POLICY, "too many connections".into()));
+    }
+    // The token is re-checked for the whole connection: at `exp` the session is
+    // closed with UNAUTHENTICATED and the client reconnects with a fresh token.
+    let expiry = token_deadline(claims.exp, domain::now_ns() / 1_000_000_000);
     let mut groups = HashSet::new();
     let mut infos = Vec::new();
     let mut snaps = Vec::new();
@@ -269,8 +292,15 @@ async fn session(
     let mut hb = interval(Duration::from_secs(hub.cfg.heartbeat_secs.max(1)));
     hb.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
+    let expired = tokio::time::sleep_until(expiry);
+    tokio::pin!(expired);
     loop {
         tokio::select! {
+            () = &mut expired => {
+                hub.metrics.sessions_expired.inc();
+                let _ = out.error("", ErrorCode::Unauthenticated, "token expired");
+                return Some((close_code::UNAUTHENTICATED, "token expired".into()));
+            }
             inbound = next_inbound(stream) => match inbound {
                 Inbound::Closed => return None,
                 Inbound::Bad(e) => {
@@ -597,6 +627,15 @@ async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn token_deadline_is_relative_to_exp() {
+        let now = tokio::time::Instant::now();
+        let d = token_deadline(1_100, 1_000);
+        assert!(d >= now + Duration::from_secs(100) && d < now + Duration::from_secs(101));
+        // already expired: immediately
+        assert!(token_deadline(900, 1_000) <= tokio::time::Instant::now());
+    }
 
     #[test]
     fn full_queue_is_slow_consumer() {
