@@ -18,6 +18,7 @@ const KEY: &[u8] = b"core-e2e-key";
 struct Client {
     ws: WebSocketStream<MaybeTlsStream<TcpStream>>,
     seq: u64,
+    backlog: Vec<Body>,
 }
 
 impl Client {
@@ -25,7 +26,11 @@ impl Client {
         let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
             .await
             .unwrap();
-        let mut c = Client { ws, seq: 0 };
+        let mut c = Client {
+            ws,
+            seq: 0,
+            backlog: Vec::new(),
+        };
         c.send(Body::Hello(Hello {
             protocol_version: PROTOCOL_VERSION,
             client_name: "core-e2e".into(),
@@ -80,7 +85,15 @@ impl Client {
     }
 
     async fn until<T>(&mut self, mut f: impl FnMut(Body) -> Option<T>) -> T {
+        // frames skipped while waiting for an Ack come first
+        while !self.backlog.is_empty() {
+            if let Some(t) = f(self.backlog.remove(0)) {
+                return t;
+            }
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
+            assert!(tokio::time::Instant::now() < deadline, "until: timed out");
             if let Some(t) = f(self.next().await) {
                 return t;
             }
@@ -257,14 +270,19 @@ fn px_off(mid: Fixed, off: &str) -> Fixed {
 
 impl Client {
     /// Sends `body` and waits for its Ack (panics on Error).
+    /// Sends `body` and waits for its Ack (panics on Error); other frames
+    /// (e.g. OrderUpdates published before the Ack) stay available to `until`.
     async fn acked(&mut self, id: &str, body: Body) {
         self.send(body).await;
-        self.until(|b| match b {
-            Body::Ack(a) if a.request_id == id => Some(()),
-            Body::Error(e) if e.request_id == id => panic!("{id} failed: {e:?}"),
-            _ => None,
-        })
-        .await
+        let mut skipped = Vec::new();
+        loop {
+            match self.next().await {
+                Body::Ack(a) if a.request_id == id => break,
+                Body::Error(e) if e.request_id == id => panic!("{id} failed: {e:?}"),
+                b => skipped.push(b),
+            }
+        }
+        self.backlog.extend(skipped);
     }
 
     async fn order_update(&mut self, id: &str, status: OrderStatus) -> OrderUpdate {
@@ -307,7 +325,11 @@ async fn order_types_protection_hedging_and_history() {
     let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
         .await
         .unwrap();
-    let mut h = Client { ws, seq: 0 };
+    let mut h = Client {
+        ws,
+        seq: 0,
+        backlog: Vec::new(),
+    };
     h.send(Body::Hello(Hello {
         protocol_version: PROTOCOL_VERSION,
         ..Default::default()
@@ -543,9 +565,24 @@ async fn order_types_protection_hedging_and_history() {
 
     // price rises through the stop: it fills, the OCO sibling is cancelled
     assert!(demo.sim.set_mid("EUR/USD", px_off(m, "0.0040")));
-    let filled = c.filled("stp").await;
+    // (the sibling is cancelled when the stop starts executing, before its fill)
+    let mut cancelled = false;
+    let filled = c
+        .until(|b| match b {
+            Body::OrderUpdate(u) if u.client_request_id == "lim" => {
+                cancelled |= u.status == OrderStatus::Canceled as i32;
+                None
+            }
+            Body::OrderUpdate(u)
+                if u.client_request_id == "stp" && u.status == OrderStatus::Filled as i32 =>
+            {
+                Some(u)
+            }
+            _ => None,
+        })
+        .await;
+    assert!(cancelled, "OCO sibling cancelled");
     assert!(fx(filled.avg_price) >= px_off(m, "0.0015"));
-    c.order_update("lim", OrderStatus::Canceled).await;
     let pos = c.position(|p| fx(p.net_qty).is_positive()).await;
     assert_eq!(
         fx(pos.tp),
