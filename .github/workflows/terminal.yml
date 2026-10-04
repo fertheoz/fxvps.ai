@@ -30,7 +30,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: apps/terminal/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --ignore-workspace --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
