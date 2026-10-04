@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, BalanceOpResult, DashboardStats, MarginCallRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, BalanceOpResult, DashboardStats, MarginCallRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 export class ForbiddenError extends Error {
@@ -74,6 +74,25 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     return out.sort((a, b) => Math.abs(b.notional) - Math.abs(a.notional));
   };
 
+  /** 4-eyes queue (in-memory). */
+  const approvals: (ApprovalRequest & { key: string; requesterId: string })[] = [];
+  const actorId = (a: Actor) => a.sub ?? a.name;
+  const applyOp = (c: Client, type: "deposit" | "withdraw" | "credit", amount: number) => {
+    if (type === "withdraw") {
+      const free = c.equity - c.margin - c.credit;
+      if (amount > free) throw new Error("Insufficient free margin for withdrawal");
+      c.balance -= amount;
+    } else if (type === "deposit") c.balance += amount;
+    else c.credit += amount;
+    recompute(c);
+  };
+  const publicApproval = (a: (typeof approvals)[number]): ApprovalRequest => {
+    const { key: _key, requesterId: _rid, ...rest } = a;
+    void _key;
+    void _rid;
+    return rest;
+  };
+
   const marginLevel = (c: Client) => (c.margin > 0 ? (c.equity / c.margin) * 100 : Infinity);
 
   const api: AdminApi & { _state: SeedData } = {
@@ -125,23 +144,51 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       const c = s.clients.find((x) => x.id === parsed.clientId);
       if (!c) throw new Error("Client not found");
       if (c.currency !== parsed.currency) throw new Error("Currency mismatch");
+      const queued = approvals.find((a) => a.key === parsed.idempotencyKey);
+      if (queued) return delay({ id: queued.id, status: queued.status === "pending_approval" ? "pending_approval" : "applied", newBalance: c.balance, newCredit: c.credit } as BalanceOpResult);
       const prior = s.audit.find((a) => a.details.includes(parsed.idempotencyKey));
       if (prior) return delay({ id: prior.id, status: "applied", newBalance: c.balance, newCredit: c.credit });
-      const pending = Math.abs(parsed.amount) >= s.settings.fourEyesThreshold && !can(actor.role, "balance.approve");
+      // Large amounts always need a second approver (a different user with balance.approve).
+      const pending = Math.abs(parsed.amount) >= s.settings.fourEyesThreshold;
       const amt = formatMoney(parsed.amount, parsed.currency);
       if (pending) {
-        audit(actor, `balance.${parsed.type}.requested`, `#${c.login}`, `${amt} — ${parsed.reason} — awaiting 2nd approval [${parsed.idempotencyKey}]`);
-        return delay({ id: `a${seq}`, status: "pending_approval", newBalance: c.balance, newCredit: c.credit });
+        const id = `op-${++seq}`;
+        approvals.unshift({
+          id, clientId: c.id, login: c.login, type: parsed.type, amount: parsed.amount, currency: parsed.currency, reason: parsed.reason,
+          requestedBy: actor.name, requestedByRole: actor.role, requestedBySub: actorId(actor), requestedAt: new Date().toISOString(),
+          status: "pending_approval", decidedBy: null, decidedAt: null, note: null, key: parsed.idempotencyKey, requesterId: actorId(actor),
+        });
+        audit(actor, `balance.${parsed.type}.requested`, `#${c.login}`, `${amt} — ${parsed.reason} — awaiting 2nd approval (${id}) [${parsed.idempotencyKey}]`);
+        return delay({ id, status: "pending_approval", newBalance: c.balance, newCredit: c.credit });
       }
-      if (parsed.type === "withdraw") {
-        const free = c.equity - c.margin - c.credit;
-        if (parsed.amount > free) throw new Error("Insufficient free margin for withdrawal");
-        c.balance -= parsed.amount;
-      } else if (parsed.type === "deposit") c.balance += parsed.amount;
-      else c.credit += parsed.amount;
-      recompute(c);
+      applyOp(c, parsed.type, parsed.amount);
       audit(actor, `balance.${parsed.type}`, `#${c.login}`, `${amt} — ${parsed.reason} [${parsed.idempotencyKey}]`);
       return delay({ id: `a${seq}`, status: "applied", newBalance: c.balance, newCredit: c.credit });
+    },
+
+    async listApprovals(status = "pending_approval") {
+      return delay(approvals.filter((a) => status === "all" || a.status === status).map(publicApproval));
+    },
+    async approve(id, actor) {
+      guard(actor, "balance.approve");
+      const a = approvals.find((x) => x.id === id);
+      if (!a) throw new Error("Approval not found");
+      if (a.status !== "pending_approval") throw new Error("Approval already decided");
+      if (a.requesterId === actorId(actor)) throw new Error("The second approval must come from a different user");
+      const c = s.clients.find((x) => x.id === a.clientId)!;
+      applyOp(c, a.type, a.amount);
+      Object.assign(a, { status: "applied", decidedBy: actor.name, decidedAt: new Date().toISOString() });
+      audit(actor, `balance.${a.type}.approved`, `#${c.login}`, `${formatMoney(a.amount, a.currency)} (${a.id}) requested by ${a.requestedBy}`);
+      return delay(publicApproval(a));
+    },
+    async reject(id, reason, actor) {
+      guard(actor, "balance.approve");
+      const a = approvals.find((x) => x.id === id);
+      if (!a) throw new Error("Approval not found");
+      if (a.status !== "pending_approval") throw new Error("Approval already decided");
+      Object.assign(a, { status: "rejected", decidedBy: actor.name, decidedAt: new Date().toISOString(), note: reason });
+      audit(actor, `balance.${a.type}.rejected`, `#${a.login}`, `${formatMoney(a.amount, a.currency)} (${a.id}) — ${reason}`);
+      return delay(publicApproval(a));
     },
 
     async setKyc(id, kyc, actor) {

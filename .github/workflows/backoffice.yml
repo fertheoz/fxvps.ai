@@ -3,9 +3,21 @@ name: backoffice
 on:
   push:
     branches: [main]
-    paths: ["apps/backoffice/**", ".github/workflows/backoffice.yml"]
+    paths:
+      - "apps/backoffice/**"
+      - "services/core-engine/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/backoffice.yml"
   pull_request:
-    paths: ["apps/backoffice/**", ".github/workflows/backoffice.yml"]
+    paths:
+      - "apps/backoffice/**"
+      - "services/core-engine/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/backoffice.yml"
 
 permissions:
   contents: read
@@ -44,4 +56,36 @@ jobs:
           path: |
             apps/backoffice/docs/screenshot.png
             apps/backoffice/test-results/
+          if-no-files-found: ignore
+
+  e2e-live:
+    name: e2e:live (core-engine)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/backoffice
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build core-engine
+        working-directory: .
+        run: cargo build --locked -p core-engine
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/backoffice/pnpm-lock.yaml
+      - run: pnpm install --ignore-workspace --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e:live
+        env:
+          CI: "true"
+          CORE_ENGINE_BIN: ${{ github.workspace }}/target/debug/core-engine
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backoffice-e2e-live
+          path: apps/backoffice/test-results/
           if-no-files-found: ignore

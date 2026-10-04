@@ -7,6 +7,8 @@ import type { Role } from "../rbac";
 export interface Actor {
   name: string;
   role: Role;
+  /** Stable user id (token `sub`) when known; used for the 4-eyes rule. */
+  sub?: string;
 }
 
 export interface SymbolExposure {
@@ -41,6 +43,31 @@ export interface BalanceOpResult {
   newBalance: number;
   newCredit: number;
 }
+
+/** A balance operation awaiting (or after) the second approval (4-eyes). */
+export interface ApprovalRequest {
+  id: string;
+  clientId: string;
+  login: number;
+  type: "deposit" | "withdraw" | "credit";
+  amount: number;
+  currency: string;
+  reason: string;
+  requestedBy: string;
+  requestedByRole: string;
+  /** Stable subject of the requester (token `sub`); the approver must differ. */
+  requestedBySub?: string;
+  requestedAt: string;
+  status: "pending_approval" | "applied" | "rejected";
+  decidedBy: string | null;
+  decidedAt: string | null;
+  note: string | null;
+}
+
+export type ApprovalStatusFilter = "pending_approval" | "all";
+
+/** Live-update subscription: topics are AdminApi method names to refetch ("*" = all). */
+export type Unsubscribe = () => void;
 
 export interface ListQuery {
   search?: string;
@@ -101,9 +128,16 @@ export interface AdminApi {
 
   listAudit(): Promise<AuditEntry[]>;
 
+  listApprovals(status?: ApprovalStatusFilter): Promise<ApprovalRequest[]>;
+  approve(id: string, actor: Actor): Promise<ApprovalRequest>;
+  reject(id: string, reason: string, actor: Actor): Promise<ApprovalRequest>;
+
   listUsers(): Promise<AdminUser[]>;
   saveUser(u: AdminUser, actor: Actor): Promise<AdminUser>;
 
   getSettings(): Promise<Settings>;
   saveSettings(s: Settings, actor: Actor): Promise<Settings>;
+
+  /** Server push (SSE). Adapters without push omit it and the UI polls. */
+  subscribe?(onTopics: (topics: string[]) => void, onStatus?: (connected: boolean) => void): Unsubscribe;
 }
