@@ -1,0 +1,44 @@
+name: mobile
+
+on:
+  push:
+    branches: [main]
+    paths: ['apps/mobile/**', 'packages/trading-core/**', '.github/workflows/mobile.yml']
+  pull_request:
+    paths: ['apps/mobile/**', 'packages/trading-core/**', '.github/workflows/mobile.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: apps/mobile
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/mobile/pnpm-lock.yaml
+      - run: pnpm install --ignore-workspace --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint --max-warnings 0
+      - run: pnpm test --ci
+      - run: pnpm export:web
+        env:
+          CI: '1'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-web
+          path: apps/mobile/dist
+          retention-days: 7
