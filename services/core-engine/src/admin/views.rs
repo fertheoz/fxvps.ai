@@ -354,3 +354,47 @@ pub fn presets() -> Value {
             .collect(),
     )
 }
+
+/// Closed-trade history: one row per closing (`Out`) deal, newest first. The
+/// open price is the volume-weighted price of the position's `In` deals.
+pub fn trades(e: &Engine) -> Value {
+    let deals = e.deals();
+    let mut rows: Vec<Value> = deals
+        .iter()
+        .filter(|d| d.entry == oms::DealEntry::Out)
+        .map(|d| {
+            let (mut vol, mut notional) = (0f64, 0f64);
+            for i in deals
+                .iter()
+                .filter(|i| i.position_id == d.position_id && i.entry == oms::DealEntry::In)
+            {
+                vol += qty_f(i.volume);
+                notional += qty_f(i.volume) * price_f(i.price);
+            }
+            let close = price_f(d.price);
+            let open = if vol > 0.0 { notional / vol } else { close };
+            let routing = e
+                .account(d.account)
+                .and_then(|a| e.group(&a.group))
+                .map(|g| book(g.routing))
+                .unwrap_or("A");
+            json!({
+                "id": d.id.to_string(),
+                "login": d.account,
+                "symbol": d.symbol,
+                // The closing deal trades against the position's side.
+                "side": side_str(d.side.opposite()),
+                "lots": qty_f(d.volume),
+                "openPrice": open,
+                "closePrice": close,
+                "pnl": minor(d.pnl.minor),
+                "commission": minor(d.commission.minor),
+                "swap": 0,
+                "book": routing,
+                "closedAt": iso(d.ts),
+            })
+        })
+        .collect();
+    rows.reverse();
+    Value::Array(rows)
+}

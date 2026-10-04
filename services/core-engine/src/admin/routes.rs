@@ -1053,10 +1053,9 @@ async fn lp_reconnect(actor: Actor, Path(_id): Path<String>) -> ApiResult {
 // reports / audit
 // ---------------------------------------------------------------------------
 
-async fn trades(actor: Actor) -> ApiResult {
+async fn trades(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "reports.view")?;
-    // Closed-trade history is not retained by the engine yet.
-    Ok(Json(json!([])))
+    Ok(Json(ctx.q(views::trades).await?))
 }
 
 async fn statements(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

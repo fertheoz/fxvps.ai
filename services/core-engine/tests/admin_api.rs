@@ -849,6 +849,14 @@ async fn groups_symbols_positions_kyc_users() {
         .as_array()
         .unwrap()
         .is_empty());
+    // the forced close shows up in the closed-trade report
+    let (s, v) = t.get("/v1/reports/trades", &adm).await;
+    assert_eq!(s, StatusCode::OK);
+    let rows = v.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{v}");
+    assert_eq!(rows[0]["symbol"], "EURUSD");
+    assert!(rows[0]["lots"].as_f64().unwrap() > 0.0);
+    assert!(rows[0]["openPrice"].as_f64().unwrap() > 0.0);
     // kyc
     let (s, v) = t
         .req(
