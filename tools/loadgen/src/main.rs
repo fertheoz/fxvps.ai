@@ -71,6 +71,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if spawn_demo {
         let gw = client_gateway::ClientGatewayConfig {
             max_quote_hz: 20,
+            // Load test: lift the per-IP / per-subject connection caps (G9);
+            // a deployed gateway needs FXVPS_MAX_CONNECTIONS_PER_IP / _PER_SUBJECT raised.
+            max_connections: 0,
+            max_connections_per_ip: 0,
+            max_connections_per_subject: 0,
             ..Default::default()
         };
         let d = client_gateway::demo::Demo::start(
