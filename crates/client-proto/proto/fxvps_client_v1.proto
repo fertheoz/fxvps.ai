@@ -1,0 +1,255 @@
+// fxvps.ai client wire protocol, version 1.
+// See crates/client-proto/PROTOCOL.md for semantics. Field numbers are frozen:
+// only add new fields/messages; never renumber or reuse.
+syntax = "proto3";
+
+package fxvps.client.v1;
+
+// Fixed-point decimal: real value = value * 10^-scale.
+message Decimal {
+  int64 value = 1;
+  uint32 scale = 2;
+}
+
+// Every frame is exactly one Envelope.
+message Envelope {
+  // Protocol version of the sender (current: 1).
+  uint32 version = 1;
+  // Sender-side monotonically increasing frame sequence (informational).
+  uint64 seq = 2;
+  oneof body {
+    Hello hello = 10;
+    Auth auth = 11;
+    AuthOk auth_ok = 12;
+    Subscribe subscribe = 20;
+    Unsubscribe unsubscribe = 21;
+    QuoteBatch quote_batch = 22;
+    CandleRequest candle_request = 30;
+    CandleResponse candle_response = 31;
+    AccountSnapshot account_snapshot = 40;
+    PositionUpdate position_update = 41;
+    OrderUpdate order_update = 42;
+    PlaceOrder place_order = 50;
+    CancelOrder cancel_order = 51;
+    ModifyOrder modify_order = 52;
+    Ack ack = 60;
+    Error error = 61;
+    Heartbeat heartbeat = 70;
+    Ping ping = 71;
+    Pong pong = 72;
+  }
+}
+
+// Client -> server, first frame. Server answers with its own Hello.
+message Hello {
+  uint32 protocol_version = 1;
+  string client_name = 2;
+  // Requested max quote rate in Hz (0 = server default; capped by server).
+  uint32 max_quote_hz = 3;
+}
+
+// Client -> server: JWT bearer token.
+message Auth {
+  string token = 1;
+}
+
+message AuthOk {
+  string subject = 1;
+  repeated string account_ids = 2;
+  uint64 expires_at_s = 3;
+}
+
+message Subscribe {
+  string request_id = 1;
+  repeated string symbols = 2;
+}
+
+message Unsubscribe {
+  string request_id = 1;
+  repeated string symbols = 2;
+}
+
+message Quote {
+  string symbol = 1;
+  Decimal bid = 2;
+  Decimal ask = 3;
+  Decimal bid_size = 4;
+  Decimal ask_size = 5;
+  uint64 ts_ns = 6;
+}
+
+// Coalesced quotes: at most one (latest) quote per symbol.
+message QuoteBatch {
+  repeated Quote quotes = 1;
+}
+
+enum Timeframe {
+  TIMEFRAME_UNSPECIFIED = 0;
+  M1 = 1;
+  M5 = 2;
+  M15 = 3;
+  M30 = 4;
+  H1 = 5;
+  H4 = 6;
+  D1 = 7;
+}
+
+message CandleRequest {
+  string request_id = 1;
+  string symbol = 2;
+  Timeframe timeframe = 3;
+  // Inclusive bucket-open bounds in ns since epoch; 0 = unbounded.
+  uint64 from_ns = 4;
+  uint64 to_ns = 5;
+  // Max candles (most recent); 0 = server default.
+  uint32 limit = 6;
+}
+
+message Candle {
+  uint64 open_time_ns = 1;
+  Decimal open = 2;
+  Decimal high = 3;
+  Decimal low = 4;
+  Decimal close = 5;
+  uint64 ticks = 6;
+}
+
+message CandleResponse {
+  string request_id = 1;
+  string symbol = 2;
+  Timeframe timeframe = 3;
+  repeated Candle candles = 4;
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  BUY = 1;
+  SELL = 2;
+}
+
+enum OrderType {
+  ORDER_TYPE_UNSPECIFIED = 0;
+  MARKET = 1;
+  LIMIT = 2;
+}
+
+enum TimeInForce {
+  TIME_IN_FORCE_UNSPECIFIED = 0;
+  DAY = 1;
+  GTC = 2;
+  IOC = 3;
+  FOK = 4;
+}
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  PENDING_NEW = 1;
+  NEW = 2;
+  PARTIALLY_FILLED = 3;
+  FILLED = 4;
+  CANCELED = 5;
+  REPLACED = 6;
+  REJECTED = 7;
+  EXPIRED = 8;
+}
+
+message Position {
+  string symbol = 1;
+  // Signed net quantity (positive = long).
+  Decimal net_qty = 2;
+  Decimal avg_price = 3;
+}
+
+message AccountSnapshot {
+  string account_id = 1;
+  string currency = 2;
+  Decimal balance = 3;
+  Decimal equity = 4;
+  Decimal margin_used = 5;
+  repeated Position positions = 6;
+}
+
+message PositionUpdate {
+  string account_id = 1;
+  Position position = 2;
+}
+
+message OrderUpdate {
+  string account_id = 1;
+  string client_request_id = 2;
+  string order_id = 3;
+  string symbol = 4;
+  Side side = 5;
+  OrderStatus status = 6;
+  Decimal filled_qty = 7;
+  Decimal leaves_qty = 8;
+  Decimal avg_price = 9;
+  Decimal last_qty = 10;
+  Decimal last_price = 11;
+  string text = 12;
+  uint64 ts_ns = 13;
+}
+
+message PlaceOrder {
+  // Client-chosen idempotency/correlation id, echoed in Ack/Error/OrderUpdate.
+  string request_id = 1;
+  string account_id = 2;
+  string symbol = 3;
+  Side side = 4;
+  OrderType order_type = 5;
+  Decimal qty = 6;
+  Decimal limit_price = 7;
+  TimeInForce tif = 8;
+}
+
+message CancelOrder {
+  string request_id = 1;
+  string account_id = 2;
+  // request_id of the PlaceOrder (or last ModifyOrder) to cancel.
+  string target_request_id = 3;
+}
+
+message ModifyOrder {
+  string request_id = 1;
+  string account_id = 2;
+  string target_request_id = 3;
+  Decimal qty = 4;
+  Decimal limit_price = 5;
+}
+
+message Ack {
+  string request_id = 1;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  BAD_REQUEST = 1;
+  UNSUPPORTED_VERSION = 2;
+  UNAUTHENTICATED = 3;
+  FORBIDDEN = 4;
+  RATE_LIMITED = 5;
+  UNKNOWN_SYMBOL = 6;
+  UNKNOWN_ORDER = 7;
+  UNAVAILABLE = 8;
+  INTERNAL = 9;
+}
+
+message Error {
+  string request_id = 1;
+  ErrorCode code = 2;
+  string message = 3;
+}
+
+message Heartbeat {
+  uint64 ts_ns = 1;
+}
+
+message Ping {
+  uint64 nonce = 1;
+  uint64 ts_ns = 2;
+}
+
+message Pong {
+  uint64 nonce = 1;
+  uint64 ts_ns = 2;
+}
