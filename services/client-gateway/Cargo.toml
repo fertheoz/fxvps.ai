@@ -27,11 +27,13 @@ thiserror.workspace = true
 axum = { version = "0.8", features = ["ws"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 governor = "0.8"
 prometheus = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 tokio-tungstenite = "0.26"
+identity.workspace = true
 
 [lints]
 workspace = true
