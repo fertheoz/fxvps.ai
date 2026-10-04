@@ -11,4 +11,7 @@ pub mod normalize;
 pub mod nats;
 
 pub use config::{GatewayConfig, NatsConfig, SessionEndpoint};
-pub use gateway::{start, GatewayError, GatewayEvent, GatewayHandle, OrderCommand, SessionKind};
+pub use gateway::{
+    apply_status, start, GatewayError, GatewayEvent, GatewayHandle, OrderCommand, SessionKind,
+    SessionStatus,
+};

@@ -82,6 +82,17 @@ impl T {
         let mut cfg = AdminConfig::new(dir);
         cfg.live_interval_ms = 50;
         cfg.cors_origins = Some(vec!["http://bo.test".into()]);
+        cfg.lp_status = Some(std::sync::Arc::new(std::sync::RwLock::new(vec![
+            fix_gateway::SessionStatus {
+                kind: fix_gateway::SessionKind::Trading,
+                sender_comp_id: "FXVPS".into(),
+                target_comp_id: "LMAX".into(),
+                logged_on: true,
+                since_ms: 1_700_000_000_000,
+                last_down_reason: None,
+                rejects: 2,
+            },
+        ])));
         let app = admin::app(h.clone(), Authenticator::hs256(SECRET), cfg).unwrap();
         T {
             app,
@@ -473,6 +484,12 @@ async fn read_endpoints() {
     let (_, st) = t.get("/v1/reports/statements", &a).await;
     assert_eq!(st.as_array().unwrap().len(), 2);
     assert_eq!(t.get("/v1/reports/trades", &a).await.0, StatusCode::OK);
+    let (s, v) = t.get("/v1/lp/sessions", &a).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v[0]["kind"], "TRADING");
+    assert_eq!(v[0]["status"], "logged_on");
+    assert_eq!(v[0]["targetCompId"], "LMAX");
+    assert_eq!(v[0]["rejects24h"], 2);
     assert_eq!(t.get("/v1/lp/sessions", &a).await.0, StatusCode::OK);
     let (s, _) = t
         .req(

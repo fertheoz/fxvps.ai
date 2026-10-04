@@ -37,7 +37,13 @@ pub struct AdminConfig {
     pub cors_origins: Option<Vec<String>>,
     /// Interval of the engine-change ticker that feeds the live stream.
     pub live_interval_ms: u64,
+    /// FIX session table of an in-process fix-gateway (`GatewayHandle::status_source`).
+    /// `None`: `/v1/lp/sessions` returns an empty list.
+    pub lp_status: Option<LpStatus>,
 }
+
+/// Shared FIX session table written by fix-gateway.
+pub type LpStatus = Arc<std::sync::RwLock<Vec<fix_gateway::SessionStatus>>>;
 
 impl AdminConfig {
     pub fn new(data_dir: impl Into<PathBuf>) -> AdminConfig {
@@ -45,6 +51,7 @@ impl AdminConfig {
             data_dir: data_dir.into(),
             cors_origins: None,
             live_interval_ms: 1_000,
+            lp_status: None,
         }
     }
 
@@ -80,6 +87,7 @@ pub struct AdminCtx {
     pub live: broadcast::Sender<String>,
     /// Single-use SSE tickets (`POST /v1/stream/ticket`).
     pub tickets: Arc<stream::Tickets>,
+    pub lp_status: Option<LpStatus>,
 }
 
 impl AdminCtx {
@@ -238,6 +246,7 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
         auth: Arc::new(auth),
         live,
         tickets: Arc::default(),
+        lp_status: cfg.lp_status.clone(),
     };
     stream::spawn_ticker(ctx.clone(), cfg.live_interval_ms);
     let legacy =
