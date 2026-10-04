@@ -1,5 +1,6 @@
 [package]
 name = "core-engine"
+description = "Single-writer OMS/risk/ledger engine service with journal, snapshots and admin HTTP"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
@@ -18,7 +19,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
 
 [lints]
 workspace = true

@@ -274,12 +274,14 @@ name = "core-engine"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "http-body-util",
  "ledger",
  "money",
  "oms",
  "risk",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tower",
  "tracing",

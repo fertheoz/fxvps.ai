@@ -148,6 +148,10 @@ impl Engine {
             .filter(|p| p.account == account)
             .collect()
     }
+    /// Latest raw LP quote for a symbol.
+    pub fn snapshot_quote(&self, symbol: &str) -> Option<Quote> {
+        self.st.quotes.get(symbol)
+    }
     pub fn lp_order(&self, id: LpOrderId) -> Option<&LpOrder> {
         self.st.lp_orders.get(&id)
     }
