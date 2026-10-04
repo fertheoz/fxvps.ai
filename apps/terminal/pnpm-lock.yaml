@@ -15,7 +15,7 @@ importers:
         specifier: ^3.14.13
         version: 3.14.13(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@tauri-apps/api':
-        specifier: ^2
+        specifier: ^2.9.0
         version: 2.12.1
       big.js:
         specifier: ^7.0.1
