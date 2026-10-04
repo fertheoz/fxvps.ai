@@ -1,0 +1,105 @@
+global:
+  imageRegistry: ghcr.io/fertheoz
+  imageTag: ""            # boşsa .Chart.AppVersion
+  imagePullSecrets: []
+  natsUrl: nats://nats:4222
+
+serviceMonitor:
+  enabled: false          # prometheus-operator CRD'leri kuruluysa true
+  interval: 15s
+
+networkPolicy:
+  enabled: true
+
+# Her servis: enabled, image, replicas, ports, probes, resources, pdb, env, existingSecret.
+# Sırlar burada DEĞİL: existingSecret (External Secrets / SOPS ile oluşturulan Secret) adı verilir.
+services:
+  lp-simulator:
+    enabled: true
+    image: fxvps-lp-simulator
+    replicas: 1
+    ports: { md: 9880, trade: 9881 }
+    metricsPort: null
+    probes: { type: tcp, port: md }
+    resources:
+      requests: { cpu: 100m, memory: 64Mi }
+      limits: { memory: 256Mi }
+    pdb: { enabled: false, minAvailable: 1 }
+    env: { RUST_LOG: info }
+    existingSecret: ""
+    ingressFrom: [fix-gateway]
+
+  fix-gateway:
+    enabled: true
+    image: fxvps-fix-gateway
+    replicas: 1           # FIX oturumu tekil olmalı (aynı CompID ile iki oturum açılmaz)
+    ports: {}
+    metricsPort: null
+    probes: { type: none }
+    resources:
+      requests: { cpu: 250m, memory: 128Mi }
+      limits: { memory: 512Mi }
+    pdb: { enabled: false, maxUnavailable: 1 }
+    env: { RUST_LOG: info }
+    existingSecret: fix-gateway-lp-credentials   # FIX_GATEWAY_MD_PASSWORD / FIX_GATEWAY_TRADE_PASSWORD
+    ingressFrom: []
+
+  client-gateway:
+    enabled: false
+    image: fxvps-client-gateway
+    replicas: 2
+    ports: { http: 8080 }
+    metricsPort: http
+    probes: { type: http, port: http, liveness: /healthz, readiness: /healthz }
+    resources:
+      requests: { cpu: 250m, memory: 128Mi }
+      limits: { memory: 512Mi }
+    pdb: { enabled: true, minAvailable: 1 }
+    env: { RUST_LOG: info }
+    existingSecret: ""
+    ingressFrom: ["*"]
+
+  core-engine:            # BEKLEMEDE: services/core-engine başka dalda
+    enabled: false
+    image: fxvps-core-engine
+    replicas: 1           # single-writer
+    ports: { http: 8080 }
+    metricsPort: http
+    probes: { type: http, port: http, liveness: /healthz, readiness: /readyz }
+    resources:
+      requests: { cpu: "1", memory: 512Mi }
+      limits: { memory: 2Gi }
+    pdb: { enabled: true, maxUnavailable: 0 }
+    env: { RUST_LOG: info }
+    existingSecret: ""
+    ingressFrom: [client-gateway]
+
+  terminal:
+    enabled: false
+    image: fxvps-terminal
+    replicas: 2
+    ports: { http: 8080 }
+    metricsPort: null
+    probes: { type: http, port: http, liveness: /healthz, readiness: /healthz }
+    resources:
+      requests: { cpu: 20m, memory: 32Mi }
+      limits: { memory: 64Mi }
+    pdb: { enabled: true, minAvailable: 1 }
+    env: {}
+    existingSecret: ""
+    ingressFrom: ["*"]
+
+  backoffice:
+    enabled: false
+    image: fxvps-backoffice
+    replicas: 2
+    ports: { http: 8080 }
+    metricsPort: null
+    probes: { type: http, port: http, liveness: /healthz, readiness: /healthz }
+    resources:
+      requests: { cpu: 20m, memory: 32Mi }
+      limits: { memory: 64Mi }
+    pdb: { enabled: true, minAvailable: 1 }
+    env: {}
+    existingSecret: ""
+    ingressFrom: ["*"]

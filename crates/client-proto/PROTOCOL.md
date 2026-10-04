@@ -42,6 +42,11 @@ Timestamps are `uint64` nanoseconds since the UNIX epoch. Symbols are compact (`
      intentionally dropped; clients must treat every quote as a full replacement.
    - `CandleRequest{symbol, timeframe M1..D1, from_ns, to_ns, limit}` →
      `CandleResponse` (mid-price OHLC, oldest first, at most `limit`, default 500).
+   - `SymbolListRequest{request_id}` → `SymbolList{request_id, instruments}`: every symbol
+     the gateway serves with `base`, `quote`, `tick_size`, `digits`, `qty_step` and
+     `contract_size` (base units per lot). Quantities on the wire are always base units.
+     Servers predating this message answer `Error{BAD_REQUEST}`; clients should fall
+     back to local defaults.
    - `PlaceOrder{request_id, account_id, symbol, side, order_type, qty, limit_price, tif}`,
      `CancelOrder{request_id, account_id, target_request_id}`,
      `ModifyOrder{request_id, account_id, target_request_id, qty?, limit_price?}`:

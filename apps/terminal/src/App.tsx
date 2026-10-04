@@ -11,6 +11,7 @@ import { ChartGrid } from './components/ChartGrid';
 import { OrderTicket } from './components/OrderTicket';
 import { DepthOfMarket } from './components/DepthOfMarket';
 import { Toolbox } from './components/Toolbox';
+import { ConnectDialog } from './components/ConnectDialog';
 import { CommandPalette, ShortcutsDialog, TicketDialog, Toasts } from './components/Dialogs';
 
 // One bootstrap per API instance for the app's lifetime (StrictMode mounts effects twice).
@@ -49,7 +50,13 @@ export function App({ api }: { api: TradingApi }) {
     };
   }, [api]);
 
-  if (error) return <div className="p-6 text-down">{error}</div>;
+  if (error)
+    return (
+      <div className="p-6 flex flex-col gap-3 items-start" data-testid="connect-error">
+        <div className="text-down">{t('gw.failed', { error })}</div>
+        <ConnectDialog onClose={() => undefined} />
+      </div>
+    );
   if (!ready) return <div className="h-full grid place-items-center text-muted">{t('conn.connecting')}…</div>;
 
   return (

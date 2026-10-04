@@ -1,0 +1,80 @@
+{{- range $name, $svc := .Values.services }}
+{{- if $svc.enabled }}
+{{- $ctx := dict "name" $name "root" $ }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels: {{- include "fxvps.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ $svc.replicas }}
+  {{- if eq (int $svc.replicas) 1 }}
+  strategy: { type: Recreate }
+  {{- end }}
+  selector:
+    matchLabels: {{- include "fxvps.selector" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "fxvps.labels" $ctx | nindent 8 }}
+    spec:
+      {{- with $.Values.global.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: {{ $name }}
+          image: "{{ $.Values.global.imageRegistry }}/{{ $svc.image }}:{{ $.Values.global.imageTag | default $.Chart.AppVersion }}"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          {{- if $svc.ports }}
+          ports:
+            {{- range $pname, $port := $svc.ports }}
+            - { name: {{ $pname }}, containerPort: {{ $port }}, protocol: TCP }
+            {{- end }}
+          {{- end }}
+          env:
+            - { name: NATS_URL, value: {{ $.Values.global.natsUrl | quote }} }
+            {{- range $k, $v := $svc.env }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+          {{- if $svc.existingSecret }}
+          envFrom:
+            - secretRef: { name: {{ $svc.existingSecret }}, optional: true }
+          {{- end }}
+          {{- if ne $svc.probes.type "none" }}
+          livenessProbe:
+            {{- include "fxvps.probe" (dict "probes" $svc.probes "path" ($svc.probes.liveness | default "/healthz")) | nindent 12 }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            {{- include "fxvps.probe" (dict "probes" $svc.probes "path" ($svc.probes.readiness | default "/readyz")) | nindent 12 }}
+            periodSeconds: 5
+          {{- end }}
+          resources: {{- toYaml $svc.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+{{- if $svc.ports }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels: {{- include "fxvps.labels" $ctx | nindent 4 }}
+spec:
+  selector: {{- include "fxvps.selector" $ctx | nindent 4 }}
+  ports:
+    {{- range $pname, $port := $svc.ports }}
+    - { name: {{ $pname }}, port: {{ $port }}, targetPort: {{ $pname }} }
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

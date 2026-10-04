@@ -1,6 +1,7 @@
 import type { TradingApi } from '../api/types';
 import { MockTradingApi } from '../api/mock';
 import { WsTradingApi } from '../api/ws';
+import { resolveGateway } from './connection';
 import { RafBatcher } from '../lib/rafBatcher';
 import type { Quote } from '../api/types';
 import { useTerminal } from './terminal';
@@ -9,12 +10,23 @@ import { volumeToLots } from '../lib/money';
 
 let api: TradingApi | null = null;
 
-/** `?api=ws&url=wss://...` selects the gateway adapter; default is the in-browser mock. */
+/**
+ * `?api=ws&url=ws://host:port/ws&token=<jwt>` or a gateway saved by the connect dialog
+ * (sessionStorage) selects the gateway adapter; default is the in-browser mock.
+ * See store/connection.ts.
+ */
 export function createApiFromLocation(search: string): TradingApi {
-  const params = new URLSearchParams(search);
-  const url = params.get('url');
-  if (params.get('api') === 'ws' && url) return new WsTradingApi({ url });
+  const { gateway, cleanedSearch } = resolveGateway(search);
+  if (cleanedSearch !== search && typeof history !== 'undefined' && typeof location !== 'undefined') {
+    // Do not leave the bearer token in the address bar / history.
+    history.replaceState(history.state, '', `${location.pathname}${cleanedSearch}${location.hash}`);
+  }
+  if (gateway) return new WsTradingApi({ url: gateway.url, token: () => gateway.token });
   return new MockTradingApi();
+}
+
+export function isGatewayApi(a: TradingApi | null = api): boolean {
+  return a instanceof WsTradingApi;
 }
 
 export function getApi(): TradingApi {
