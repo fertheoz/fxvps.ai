@@ -366,12 +366,18 @@ impl Money {
     }
     pub fn checked_add(self, o: Money) -> Result<Money, MoneyError> {
         self.same(o)?;
-        let m = self.minor.checked_add(o.minor).ok_or(MoneyError::Overflow)?;
+        let m = self
+            .minor
+            .checked_add(o.minor)
+            .ok_or(MoneyError::Overflow)?;
         Ok(Money::new(m, self.currency))
     }
     pub fn checked_sub(self, o: Money) -> Result<Money, MoneyError> {
         self.same(o)?;
-        let m = self.minor.checked_sub(o.minor).ok_or(MoneyError::Overflow)?;
+        let m = self
+            .minor
+            .checked_sub(o.minor)
+            .ok_or(MoneyError::Overflow)?;
         Ok(Money::new(m, self.currency))
     }
     pub fn checked_neg(self) -> Result<Money, MoneyError> {
@@ -393,7 +399,12 @@ impl Money {
     }
     /// Converts into `to` multiplying by `rate` (units of `to` per unit of
     /// `self.currency`). Single rounding step.
-    pub fn convert_mul(self, rate: Price, to: Currency, mode: Rounding) -> Result<Money, MoneyError> {
+    pub fn convert_mul(
+        self,
+        rate: Price,
+        to: Currency,
+        mode: Rounding,
+    ) -> Result<Money, MoneyError> {
         let num = self
             .minor
             .checked_mul(pow10(to.minor_exponent()))
@@ -407,7 +418,12 @@ impl Money {
     }
     /// Converts into `to` dividing by `rate` (units of `self.currency` per
     /// unit of `to`). Single rounding step.
-    pub fn convert_div(self, rate: Price, to: Currency, mode: Rounding) -> Result<Money, MoneyError> {
+    pub fn convert_div(
+        self,
+        rate: Price,
+        to: Currency,
+        mode: Rounding,
+    ) -> Result<Money, MoneyError> {
         if rate.0 == 0 {
             return Err(MoneyError::DivByZero);
         }
@@ -482,8 +498,14 @@ mod tests {
         let m = Money::parse("12.34", Currency::USD).unwrap();
         assert_eq!(m.minor, 1234);
         assert_eq!(m.to_string(), "12.34 USD");
-        assert_eq!(Money::parse("-0.05", Currency::USD).unwrap().to_string(), "-0.05 USD");
-        assert_eq!(Money::parse("100", Currency::JPY).unwrap().to_string(), "100 JPY");
+        assert_eq!(
+            Money::parse("-0.05", Currency::USD).unwrap().to_string(),
+            "-0.05 USD"
+        );
+        assert_eq!(
+            Money::parse("100", Currency::JPY).unwrap().to_string(),
+            "100 JPY"
+        );
         assert!(Money::parse("1.5", Currency::JPY).is_err());
     }
 
@@ -491,7 +513,10 @@ mod tests {
     fn checked_ops() {
         let a = Money::new(100, Currency::USD);
         let b = Money::new(50, Currency::EUR);
-        assert!(matches!(a.checked_add(b), Err(MoneyError::CurrencyMismatch(..))));
+        assert!(matches!(
+            a.checked_add(b),
+            Err(MoneyError::CurrencyMismatch(..))
+        ));
         assert_eq!(a.checked_sub(a).unwrap(), Money::zero(Currency::USD));
         assert_eq!(
             Money::new(i128::MAX, Currency::USD).checked_add(Money::new(1, Currency::USD)),
@@ -504,11 +529,15 @@ mod tests {
     fn conversion() {
         // 100 EUR * 1.10 = 110 USD
         let eur = Money::parse("100", Currency::EUR).unwrap();
-        let usd = eur.convert_mul(px("1.1"), Currency::USD, Rounding::HalfEven).unwrap();
+        let usd = eur
+            .convert_mul(px("1.1"), Currency::USD, Rounding::HalfEven)
+            .unwrap();
         assert_eq!(usd, Money::parse("110", Currency::USD).unwrap());
         // 15000 JPY / 150 = 100 USD
         let jpy = Money::parse("15000", Currency::JPY).unwrap();
-        let usd = jpy.convert_div(px("150"), Currency::USD, Rounding::HalfEven).unwrap();
+        let usd = jpy
+            .convert_div(px("150"), Currency::USD, Rounding::HalfEven)
+            .unwrap();
         assert_eq!(usd, Money::parse("100", Currency::USD).unwrap());
         assert_eq!(
             jpy.convert_div(Price::ZERO, Currency::USD, Rounding::Down),
@@ -521,7 +550,10 @@ mod tests {
         let m = Money::from_scaled(123_456_789, Currency::USD, Rounding::HalfEven).unwrap();
         assert_eq!(m.minor, 123); // 1.23456789 -> 1.23
         assert_eq!(m.to_scaled().unwrap(), 123_000_000);
-        assert_eq!(qty("0.137").round_to(qty("0.01"), Rounding::Down), Some(qty("0.13")));
+        assert_eq!(
+            qty("0.137").round_to(qty("0.01"), Rounding::Down),
+            Some(qty("0.13"))
+        );
     }
 
     #[test]
