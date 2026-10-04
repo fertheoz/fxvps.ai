@@ -3,9 +3,13 @@
 # Bağlam: depo kökü.  docker build -f infra/docker/core-engine.Dockerfile -t fxvps-core-engine .
 # DURUM: BEKLEMEDE (pending) — services/core-engine başka bir dalda geliştiriliyor; main'e
 # girene kadar bu Dockerfile derlenmez. docker.yml dosyası dizin yoksa bu imajı atlar.
-ARG RUST_VERSION=1.87
+# Tam sürüm: rust-toolchain.toml "stable" der; RUSTUP_TOOLCHAIN onu ezer ki derleme
+# imajdaki pinli toolchain ile, ağdan kanal güncellemesi çekmeden koşsun.
+ARG RUST_VERSION=1.90.0
 
 FROM lukemathwalker/cargo-chef:latest-rust-${RUST_VERSION}-bookworm AS chef
+ARG RUST_VERSION
+ENV RUSTUP_TOOLCHAIN=${RUST_VERSION}
 WORKDIR /src
 
 FROM chef AS planner
