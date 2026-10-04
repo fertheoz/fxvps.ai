@@ -29,15 +29,20 @@ Service wrapper around `oms::Engine`:
 
 | Env | Meaning |
 |---|---|
+| `CORE_JWT_JWKS_URL` | identity JWKS (`https://id…/.well-known/jwks.json`), RS256 by `kid`; **production path**; refreshed every `CORE_JWT_JWKS_REFRESH_SECS` (300) |
+| `CORE_JWT_JWKS_FILE` | the same JWKS as a file |
 | `CORE_JWT_RS256_PUBLIC_KEY_FILE` | PEM public key of the IdP (RS256) |
-| `CORE_JWT_HS256_SECRET` | HS256 shared secret |
-| `CORE_DEV_AUTH=1` | enables `POST /auth/dev-token {role, sub?, name?}`; without a secret uses a public DEV key (never in production) |
+| `CORE_JWT_HS256_SECRET` | HS256 shared secret (legacy / tests) |
+| `CORE_JWT_ISSUER` / `CORE_JWT_AUDIENCE` | required + checked `iss` / `aud` (identity values) |
+| `CORE_REQUIRE_MFA=1` | mutating permissions (not `*.view`) and legacy routes need an MFA `amr` (`otp`/`mfa`/`hwk`) |
+| `CORE_DEV_AUTH=1` | enables `POST /auth/dev-token {role, name?}` with a random per-process key; refused with any `CORE_JWT_*` key or a non-loopback `CORE_ADMIN_ADDR`; `sub` = `dev-<role>` |
+| `CORE_DEV_AUTH_ADMIN=1` | dev tokens may carry `admin` |
 | `CORE_CORS_ORIGINS` | comma separated allowed origins (`*` = any); unset = no CORS |
 | `CORE_SEED=1` | seeds demo symbols/groups/accounts/positions into an empty engine |
 
-Startup fails without a JWT key unless `CORE_DEV_AUTH=1`.
+Startup fails without a JWT key unless `CORE_DEV_AUTH=1` (loopback only). Leeway on `exp` is 5 s.
 
-Run (dev): `CORE_DATA_DIR=./data CORE_DEV_AUTH=1 CORE_SEED=1 CORE_CORS_ORIGINS=http://localhost:3000 cargo run -p core-engine`.
+Run (dev): `CORE_DATA_DIR=./data CORE_DEV_AUTH=1 CORE_DEV_AUTH_ADMIN=1 CORE_SEED=1 CORE_CORS_ORIGINS=http://localhost:3000 cargo run -p core-engine`.
 
 Gaps: no real LP routing (A-book orders are filled at the current quote by
 the simulator loop; wiring to M1's fix-gateway is next), journal is fsync'd

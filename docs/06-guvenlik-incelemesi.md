@@ -3,6 +3,8 @@
 Kapsam: `services/identity`, `services/client-gateway` (kimlik doğrulama), `services/core-engine` (admin API, RBAC, CORS, dev-auth), sır yönetimi, `infra/docker/*`, `deploy/helm/fxvps`, `.github/workflows/*`, `apps/terminal`, `apps/backoffice`, `apps/desktop`.
 Yöntem: kaynak okuma (statik). Çalışan sistemde sızma testi yapılmadı. **Bu PR hiçbir bulguyu düzeltmez** (başka PR'lar aynı dosyalarda açık); her bulgu ayrı bir işe dönüştürülmelidir.
 
+> **Durum (fix/security-findings):** G1–G13 ve G16 düzeltildi/kısmi; ayrıntı ve kalanlar `docs/07-guvenlik-duzeltmeleri.md`.
+
 Önem: **Kritik** (üretimde doğrudan hesap/para ele geçirme) · **Yüksek** · **Orta** · **Düşük** · **Bilgi**.
 
 ## Özet tablo

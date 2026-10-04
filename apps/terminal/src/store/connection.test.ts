@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { loadGateway, resolveGateway, saveGateway } from './connection';
+import { isAllowedWsUrl, loadGateway, parseOrigins, resolveGateway, saveGateway, type WsPolicy } from './connection';
 
 describe('gateway selection', () => {
   beforeEach(() => sessionStorage.clear());
@@ -22,5 +22,33 @@ describe('gateway selection', () => {
     saveGateway({ url: 'wss://gw.example/ws', token: 't' });
     expect(resolveGateway('?api=mock').gateway).toBeNull();
     expect(loadGateway()).toBeNull();
+  });
+
+  it('denies ?url= links to gateways outside the allow list (token exfiltration)', () => {
+    const prod: WsPolicy = { allowed: ['wss://gw.fxvps.ai'], pageOrigin: 'https://terminal.fxvps.ai', dev: false };
+    const r = resolveGateway('?api=ws&url=wss%3A%2F%2Fevil.example%2Fws', prod);
+    expect(r.gateway).toBeNull();
+    expect(loadGateway()).toBeNull();
+    expect(resolveGateway('?api=ws&url=wss%3A%2F%2Fgw.fxvps.ai%2Fws', prod).gateway?.url).toBe('wss://gw.fxvps.ai/ws');
+  });
+});
+
+describe('gateway allow list', () => {
+  const prod: WsPolicy = { allowed: parseOrigins(' wss://gw.fxvps.ai/ , wss://gw2.fxvps.ai'), pageOrigin: 'https://terminal.fxvps.ai', dev: false };
+  it('allows listed origins and the page origin only', () => {
+    expect(isAllowedWsUrl('wss://gw.fxvps.ai/ws', prod)).toBe(true);
+    expect(isAllowedWsUrl('wss://gw2.fxvps.ai/ws', prod)).toBe(true);
+    expect(isAllowedWsUrl('wss://terminal.fxvps.ai/ws', prod)).toBe(true);
+    expect(isAllowedWsUrl('ws://terminal.fxvps.ai/ws', prod)).toBe(false);
+    expect(isAllowedWsUrl('wss://gw.fxvps.ai.evil.example/ws', prod)).toBe(false);
+    expect(isAllowedWsUrl('wss://evil.example/ws', prod)).toBe(false);
+    expect(isAllowedWsUrl('ws://127.0.0.1:9000/ws', prod)).toBe(false);
+    expect(isAllowedWsUrl('https://gw.fxvps.ai/ws', prod)).toBe(false);
+    expect(isAllowedWsUrl('not a url', prod)).toBe(false);
+  });
+  it('allows loopback gateways in dev builds or on loopback pages', () => {
+    expect(isAllowedWsUrl('ws://127.0.0.1:9000/ws', { ...prod, dev: true })).toBe(true);
+    expect(isAllowedWsUrl('ws://localhost:9000/ws', { allowed: [], pageOrigin: 'http://localhost:4173', dev: false })).toBe(true);
+    expect(isAllowedWsUrl('wss://evil.example/ws', { allowed: [], pageOrigin: 'http://localhost:4173', dev: true })).toBe(false);
   });
 });

@@ -27,6 +27,8 @@ fn token(sub: &str, role: Role) -> String {
             role,
             exp: unix_now() + 600,
             iat: None,
+            amr: vec![],
+            iss: None,
         },
     )
 }
@@ -204,6 +206,8 @@ async fn auth_is_required_and_validated() {
             role: Role::Admin,
             exp: unix_now() + 60,
             iat: None,
+            amr: vec![],
+            iss: None,
         },
     );
     assert_eq!(
@@ -218,6 +222,8 @@ async fn auth_is_required_and_validated() {
             role: Role::Admin,
             exp: unix_now() - 3600,
             iat: None,
+            amr: vec![],
+            iss: None,
         },
     );
     assert_eq!(
@@ -259,7 +265,7 @@ async fn auth_is_required_and_validated() {
 async fn dev_token_flow() {
     let dir = tempfile::tempdir().unwrap();
     let (h, join) = spawn(Settings::new(dir.path())).unwrap();
-    let auth = Authenticator::hs256(SECRET).with_dev_signer(b"dev-secret-for-test");
+    let auth = Authenticator::hs256(SECRET).with_dev_signer(b"dev-secret-for-test", false);
     let t = T {
         app: admin::app(h.clone(), auth, AdminConfig::new(dir.path())).unwrap(),
         h,
@@ -292,6 +298,29 @@ async fn dev_token_flow() {
         )
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+    // admin is not mintable without CORE_DEV_AUTH_ADMIN=1
+    let (s, _) = t
+        .req(
+            Method::POST,
+            "/auth/dev-token",
+            None,
+            Some(json!({"role": "admin"})),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    // a caller-chosen sub is ignored: the server derives it from the role
+    let (_, v) = t
+        .req(
+            Method::POST,
+            "/auth/dev-token",
+            None,
+            Some(json!({"role": "risk", "sub": "someone-else"})),
+            &[],
+        )
+        .await;
+    let (_, me) = t.get("/v1/me", v["token"].as_str().unwrap()).await;
+    assert_eq!(me["sub"], "dev-risk");
     t.stop();
 }
 
@@ -967,19 +996,42 @@ async fn live_stream_and_cors() {
     let t = T::start(dir.path(), true).await;
     let (s, _) = t.req(Method::GET, "/v1/stream", None, None, &[]).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
-    let res = t
-        .app
-        .clone()
-        .oneshot(
-            Request::get(format!(
-                "/v1/stream?access_token={}",
-                token("o", Role::Readonly)
-            ))
-            .body(Body::empty())
-            .unwrap(),
+    // the bearer token is never accepted in the URL
+    let (s, _) = t
+        .req(
+            Method::GET,
+            &format!("/v1/stream?access_token={}", token("o", Role::Readonly)),
+            None,
+            None,
+            &[],
         )
-        .await
-        .unwrap();
+        .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let (s, tk) = t
+        .req(
+            Method::POST,
+            "/v1/stream/ticket",
+            Some(&token("o", Role::Readonly)),
+            None,
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{tk}");
+    let ticket = tk["ticket"].as_str().unwrap().to_string();
+    let open = |q: String| {
+        t.app
+            .clone()
+            .oneshot(Request::get(q).body(Body::empty()).unwrap())
+    };
+    let res = open(format!("/v1/stream?ticket={ticket}")).await.unwrap();
+    // single use
+    assert_eq!(
+        open(format!("/v1/stream?ticket={ticket}"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
     assert_eq!(res.status(), StatusCode::OK);
     assert!(res.headers()["content-type"]
         .to_str()

@@ -1,8 +1,11 @@
 //! `GET /v1/stream`: server-sent events carrying invalidation hints
 //! (`event: invalidate`, `data: {"topics": ["listClients", ...]}`); topic
 //! names are `AdminApi` method names so the UI can invalidate its queries.
-//! `EventSource` cannot send headers, so the token may be passed as
-//! `?access_token=`.
+//! `EventSource` cannot send headers, so instead of putting the bearer token in
+//! the URL (it would end up in proxy / access logs) the client first calls
+//! `POST /v1/stream/ticket` with its `Authorization` header and opens
+//! `/v1/stream?ticket=<id>`: the ticket is random, single-use and expires after
+//! [`TICKET_TTL`]. An `Authorization` header (fetch-based SSE) works as well.
 
 use super::auth::Actor;
 use super::{AdminCtx, ApiError};
@@ -11,14 +14,49 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::convert::Infallible;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
+/// Lifetime of a stream ticket.
+pub const TICKET_TTL: Duration = Duration::from_secs(30);
+
+/// Single-use stream tickets: id -> (actor, expiry).
+#[derive(Default)]
+pub struct Tickets(std::sync::Mutex<HashMap<String, (Actor, Instant)>>);
+
+impl Tickets {
+    pub fn issue(&self, actor: Actor) -> String {
+        use rand::RngCore;
+        let mut b = [0u8; 24];
+        rand::rngs::OsRng.fill_bytes(&mut b);
+        let id: String = b.iter().map(|x| format!("{x:02x}")).collect();
+        let now = Instant::now();
+        let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        m.retain(|_, (_, exp)| *exp > now);
+        m.insert(id.clone(), (actor, now + TICKET_TTL));
+        id
+    }
+
+    /// Consumes a ticket (single use); `None` when unknown or expired.
+    pub fn redeem(&self, id: &str) -> Option<Actor> {
+        let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let (actor, exp) = m.remove(id)?;
+        (exp > Instant::now()).then_some(actor)
+    }
+}
+
+/// `POST /v1/stream/ticket` -> `{ "ticket", "expiresInMs" }`.
+pub async fn ticket(State(ctx): State<AdminCtx>, actor: Actor) -> Response {
+    let t = ctx.tickets.issue(actor);
+    axum::Json(json!({ "ticket": t, "expiresInMs": TICKET_TTL.as_millis() as u64 })).into_response()
+}
+
 #[derive(Deserialize)]
 pub struct StreamQuery {
-    access_token: Option<String>,
+    ticket: Option<String>,
 }
 
 pub async fn stream(
@@ -26,11 +64,11 @@ pub async fn stream(
     Query(q): Query<StreamQuery>,
     req: Request,
 ) -> Response {
-    let actor: Result<Actor, ApiError> = match q.access_token {
+    let actor: Result<Actor, ApiError> = match q.ticket {
         Some(t) => ctx
-            .auth
-            .verify(&t)
-            .map_err(|e| ApiError::unauthorized(format!("invalid token: {}", e.0))),
+            .tickets
+            .redeem(&t)
+            .ok_or_else(|| ApiError::unauthorized("invalid or expired stream ticket")),
         None => {
             let (mut parts, _) = req.into_parts();
             Actor::from_request_parts(&mut parts, &ctx).await

@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use identity::keys::{parse_private_pem, KeyRing};
-use identity::mail::LogMailer;
+use identity::mail::{select_mailer, LogMailer, Mailer, MailerKind, SmtpMailer};
 use identity::pg::PgStore;
 use identity::store::{MemoryStore, Store};
 use identity::{App, Config};
@@ -48,14 +48,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     tracing::info!(kid = %keys.active_kid(), issuer = %cfg.issuer, "signing key loaded");
 
-    // TODO(prod): plug an SMTP / provider mailer; LogMailer only logs.
-    tracing::warn!("using the DEVELOPMENT log mailer: emails (verification/reset links) are written to the log");
+    let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let smtp_url = var("IDENTITY_SMTP_URL");
+    let dev_mailer = var("IDENTITY_DEV_MAILER").is_some_and(|v| v == "1" || v == "true");
+    let mailer: Arc<dyn Mailer> =
+        match select_mailer(smtp_url.as_deref(), cfg.database_url.is_some(), dev_mailer)? {
+            MailerKind::Smtp => {
+                let from = var("IDENTITY_MAIL_FROM")
+                    .ok_or("IDENTITY_MAIL_FROM is required with IDENTITY_SMTP_URL")?;
+                Arc::new(SmtpMailer::from_url(
+                    smtp_url.as_deref().unwrap_or_default(),
+                    &from,
+                )?)
+            }
+            MailerKind::Log => {
+                tracing::warn!("using the DEVELOPMENT log mailer: emails are not sent");
+                Arc::new(LogMailer {
+                    file: std::env::var_os("IDENTITY_DEV_MAIL_FILE").map(Into::into),
+                })
+            }
+        };
     let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;
     let addr = listener.local_addr()?;
-    let mailer = LogMailer {
-        file: std::env::var_os("IDENTITY_DEV_MAIL_FILE").map(Into::into),
-    };
-    let app = App::new(cfg, store, keys, Arc::new(mailer))?;
+    let app = App::new(cfg, store, keys, mailer)?;
     tracing::info!(%addr, "identity listening");
     // Machine-readable line for scripts/tests (e.g. `IDENTITY_LISTEN=127.0.0.1:0`).
     println!("FXVPS_IDENTITY_URL=http://{addr}");

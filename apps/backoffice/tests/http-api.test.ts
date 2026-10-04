@@ -114,14 +114,21 @@ describe("HTTP AdminApi adapter", () => {
         this.closed = true;
       }
     }
-    const api = createHttpApi("http://x", () => "a.b c", { eventSource: FakeES as unknown as typeof EventSource });
+    const calls: { url: string; auth: string | null; method: string }[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, auth: new Headers(init.headers).get("authorization"), method: init.method ?? "GET" });
+      return new Response(JSON.stringify({ ticket: "t1 x", expiresInMs: 30000 }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createHttpApi("http://x", () => "a.b c", { eventSource: FakeES as unknown as typeof EventSource, fetchImpl });
     const topics: string[][] = [];
     const status: boolean[] = [];
     const stop = api.subscribe!((t) => topics.push(t), (s) => status.push(s));
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(FakeES.last).toBeDefined());
     const es = FakeES.last;
-    expect(es.url).toBe("http://x/v1/stream?access_token=a.b%20c");
+    // the bearer token goes in a header to the ticket endpoint, never in the URL
+    expect(calls).toEqual([{ url: "http://x/v1/stream/ticket", auth: "Bearer a.b c", method: "POST" }]);
+    expect(es.url).toBe("http://x/v1/stream?ticket=t1%20x");
+    expect(es.url).not.toContain("a.b");
     es.listeners.hello!(new MessageEvent("hello", { data: "{}" }));
     es.listeners.invalidate!(new MessageEvent("invalidate", { data: JSON.stringify({ topics: ["listClients", "listAudit"] }) }));
     expect(topics).toEqual([["listClients", "listAudit"]]);

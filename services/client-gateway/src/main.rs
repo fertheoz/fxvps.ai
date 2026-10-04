@@ -46,7 +46,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(l) = listen {
         cfg.listen = l;
     }
+    cfg.apply_env()?;
     let auth = Authenticator::from_env()?;
+    auth.enforce_dev_key_policy(demo)?;
     if auth.dev_key {
         tracing::warn!(
             "using the built-in DEVELOPMENT JWT key; set FXVPS_JWT_HS256_SECRET or FXVPS_JWT_JWKS_FILE outside local dev"
