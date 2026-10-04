@@ -21,7 +21,7 @@ COPY . .
 WORKDIR /src/apps/${APP}
 RUN pnpm install --ignore-workspace --frozen-lockfile && pnpm build
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0 AS runtime
+FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:26b0bf6fbf07297983cb341998d79c831508787de26627dd2a112321b9c3a4af AS runtime
 ARG APP=terminal
 ARG OUT=dist
 COPY infra/docker/nginx-spa.conf /etc/nginx/conf.d/default.conf
