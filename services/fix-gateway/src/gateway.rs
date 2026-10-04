@@ -1,0 +1,419 @@
+//! Session supervisors: connect, log on, normalize, reconnect.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use domain::{Execution, Order, Quote, Side};
+use fix_codec::{
+    now_timestamp, Body, MarketDataRequest, MdEntryType, OrderCancelReplaceRequest,
+    OrderCancelRequest, SubscriptionRequestType,
+};
+use fix_session::{
+    run_session, FileStore, MemoryStore, MessageStore, Role, Session, SessionCommand,
+    SessionConfig, SessionEvent,
+};
+use serde::Serialize;
+use tokio::net::TcpStream;
+use tokio::sync::{broadcast, mpsc, watch};
+use tokio::task::JoinHandle;
+use tracing::{info, warn};
+
+use crate::config::{GatewayConfig, SessionEndpoint};
+use crate::normalize::{self, Books};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum SessionKind {
+    MarketData,
+    Trading,
+}
+
+/// Normalized events published on the internal channel.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GatewayEvent {
+    SessionUp {
+        session: SessionKind,
+    },
+    SessionDown {
+        session: SessionKind,
+        reason: String,
+    },
+    Quote(Quote),
+    Execution(Execution),
+    /// LP rejected a cancel or replace (OrderCancelReject 9).
+    CancelRejected {
+        cl_ord_id: String,
+        orig_cl_ord_id: String,
+        text: Option<String>,
+    },
+    /// The gateway could not forward a command (session down, unknown symbol, ...).
+    CommandRejected {
+        cl_ord_id: String,
+        reason: String,
+    },
+    /// Session-level Reject from the LP.
+    SessionReject {
+        session: SessionKind,
+        ref_seq_num: u64,
+        text: Option<String>,
+    },
+}
+
+/// Commands accepted from internal components (OMS, tests).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OrderCommand {
+    Submit(Order),
+    Cancel {
+        cl_ord_id: String,
+        orig_cl_ord_id: String,
+        symbol: String,
+        side: Side,
+    },
+    Replace {
+        orig_cl_ord_id: String,
+        order: Order,
+    },
+}
+
+impl OrderCommand {
+    fn cl_ord_id(&self) -> &str {
+        match self {
+            OrderCommand::Submit(o) | OrderCommand::Replace { order: o, .. } => &o.cl_ord_id,
+            OrderCommand::Cancel { cl_ord_id, .. } => cl_ord_id,
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum GatewayError {
+    #[error("message store: {0}")]
+    Store(#[from] std::io::Error),
+}
+
+pub struct GatewayHandle {
+    events: broadcast::Sender<GatewayEvent>,
+    orders: mpsc::Sender<OrderCommand>,
+    shutdown: watch::Sender<bool>,
+    tasks: Vec<JoinHandle<()>>,
+}
+
+impl GatewayHandle {
+    /// New receiver for normalized events (slow receivers lag, see tokio broadcast).
+    pub fn subscribe(&self) -> broadcast::Receiver<GatewayEvent> {
+        self.events.subscribe()
+    }
+
+    /// Sender for order commands.
+    pub fn orders(&self) -> mpsc::Sender<OrderCommand> {
+        self.orders.clone()
+    }
+
+    /// Logs out both sessions and waits for the supervisors to stop.
+    pub async fn shutdown(self) {
+        let _ = self.shutdown.send(true);
+        for t in self.tasks {
+            let _ = t.await;
+        }
+    }
+}
+
+type Store = Box<dyn MessageStore>;
+
+fn store_for(cfg: &GatewayConfig, name: &str) -> Result<Store, GatewayError> {
+    Ok(match &cfg.store_dir {
+        Some(dir) => Box::new(FileStore::open(dir.join(name))?),
+        None => Box::new(MemoryStore::new()),
+    })
+}
+
+fn session_for(cfg: &GatewayConfig, ep: &SessionEndpoint, store: Store) -> Session<Store> {
+    let mut c = SessionConfig::new(Role::Initiator, &ep.sender_comp_id, &ep.target_comp_id);
+    c.heartbeat_interval = Duration::from_secs(cfg.heartbeat_secs.max(1));
+    c.reset_on_logon = ep.reset_on_logon;
+    c.username = ep.username.clone();
+    c.password = ep.password.clone();
+    Session::new(c, store, std::time::Instant::now())
+}
+
+/// Starts MD and trading supervisors. Event channel capacity: 4096.
+pub fn start(cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
+    let (events, _) = broadcast::channel(4096);
+    let (orders, orders_rx) = mpsc::channel(1024);
+    let (shutdown, sd) = watch::channel(false);
+    let md_session = session_for(&cfg, &cfg.md, store_for(&cfg, "md")?);
+    let trade_session = session_for(&cfg, &cfg.trade, store_for(&cfg, "trade")?);
+    let cfg = Arc::new(cfg);
+    let tasks = vec![
+        tokio::spawn(md_task(cfg.clone(), md_session, events.clone(), sd.clone())),
+        tokio::spawn(trade_task(
+            cfg,
+            trade_session,
+            events.clone(),
+            orders_rx,
+            sd,
+        )),
+    ];
+    Ok(GatewayHandle {
+        events,
+        orders,
+        shutdown,
+        tasks,
+    })
+}
+
+/// Connects or returns `None` on shutdown.
+async fn connect(addr: &str, sd: &mut watch::Receiver<bool>) -> Option<std::io::Result<TcpStream>> {
+    tokio::select! {
+        r = TcpStream::connect(addr) => Some(r.and_then(|s| { s.set_nodelay(true)?; Ok(s) })),
+        _ = sd.changed() => None,
+    }
+}
+
+/// Sleeps; returns false on shutdown.
+async fn backoff(cfg: &GatewayConfig, sd: &mut watch::Receiver<bool>) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_millis(cfg.reconnect_delay_ms)) => !*sd.borrow(),
+        _ = sd.changed() => false,
+    }
+}
+
+async fn graceful_logout(
+    cmd: &mpsc::Sender<SessionCommand>,
+    ev: &mut mpsc::Receiver<SessionEvent>,
+) {
+    let _ = cmd
+        .send(SessionCommand::Logout(Some("gateway shutdown".into())))
+        .await;
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        while let Some(e) = ev.recv().await {
+            if matches!(e, SessionEvent::Disconnected(_)) {
+                break;
+            }
+        }
+    })
+    .await;
+}
+
+fn down(events: &broadcast::Sender<GatewayEvent>, session: SessionKind, reason: String) {
+    warn!(?session, %reason, "session down");
+    let _ = events.send(GatewayEvent::SessionDown { session, reason });
+}
+
+async fn md_task(
+    cfg: Arc<GatewayConfig>,
+    session: Session<Store>,
+    events: broadcast::Sender<GatewayEvent>,
+    mut sd: watch::Receiver<bool>,
+) {
+    let kind = SessionKind::MarketData;
+    let mut session = Some(session);
+    let mut req_counter = 0u64;
+    while let Some(s) = session.take() {
+        let io = match connect(&cfg.md.addr, &mut sd).await {
+            None => break,
+            Some(Ok(io)) => io,
+            Some(Err(e)) => {
+                down(&events, kind, format!("connect {}: {e}", cfg.md.addr));
+                session = Some(s);
+                if !backoff(&cfg, &mut sd).await {
+                    break;
+                }
+                continue;
+            }
+        };
+        let (cmd, cmd_rx) = mpsc::channel(64);
+        let (ev_tx, mut ev) = mpsc::channel(4096);
+        let handle = tokio::spawn(run_session(io, s, cmd_rx, ev_tx));
+        let mut books = Books::default();
+        let mut stop = false;
+        loop {
+            tokio::select! {
+                e = ev.recv() => match e {
+                    Some(SessionEvent::LoggedOn) => {
+                        info!("MD session logged on, subscribing");
+                        let _ = events.send(GatewayEvent::SessionUp { session: kind });
+                        req_counter += 1;
+                        let req = Body::MarketDataRequest(MarketDataRequest {
+                            md_req_id: format!("md-{req_counter}"),
+                            subscription_type: SubscriptionRequestType::Subscribe,
+                            market_depth: cfg.market_depth,
+                            md_update_type: Some(0),
+                            entry_types: vec![MdEntryType::Bid, MdEntryType::Offer],
+                            instruments: cfg
+                                .instruments
+                                .iter()
+                                .filter_map(|i| normalize::instrument_ref(&cfg, &i.symbol))
+                                .collect(),
+                        });
+                        let _ = cmd.send(SessionCommand::Send(req)).await;
+                    }
+                    Some(SessionEvent::App(m)) => match &m.body {
+                        Body::MarketDataSnapshot(w) => {
+                            if let Some(q) = books.snapshot(&cfg, w) {
+                                let _ = events.send(GatewayEvent::Quote(q));
+                            }
+                        }
+                        Body::MarketDataIncremental(x) => {
+                            for q in books.incremental(&cfg, x) {
+                                let _ = events.send(GatewayEvent::Quote(q));
+                            }
+                        }
+                        other => warn!(msg_type = other.msg_type(), "unexpected message on MD session"),
+                    },
+                    Some(SessionEvent::PeerReject(r)) => {
+                        let _ = events.send(GatewayEvent::SessionReject { session: kind, ref_seq_num: r.ref_seq_num, text: r.text });
+                    }
+                    Some(SessionEvent::Disconnected(r)) => {
+                        down(&events, kind, r);
+                        break;
+                    }
+                    None => break,
+                },
+                _ = sd.changed() => {
+                    graceful_logout(&cmd, &mut ev).await;
+                    stop = true;
+                    break;
+                }
+            }
+        }
+        drop(cmd);
+        session = handle.await.ok();
+        if stop || !backoff(&cfg, &mut sd).await {
+            break;
+        }
+    }
+}
+
+fn to_body(cfg: &GatewayConfig, c: &OrderCommand) -> Result<Body, String> {
+    let unknown = |s: &str| format!("unknown symbol {s}");
+    Ok(match c {
+        OrderCommand::Submit(o) => Body::NewOrderSingle(
+            normalize::new_order_single(cfg, o).ok_or_else(|| unknown(&o.symbol))?,
+        ),
+        OrderCommand::Cancel {
+            cl_ord_id,
+            orig_cl_ord_id,
+            symbol,
+            side,
+        } => Body::OrderCancelRequest(OrderCancelRequest {
+            orig_cl_ord_id: orig_cl_ord_id.clone(),
+            cl_ord_id: cl_ord_id.clone(),
+            instrument: normalize::instrument_ref(cfg, symbol).ok_or_else(|| unknown(symbol))?,
+            side: *side,
+            transact_time: now_timestamp(),
+            order_qty: None,
+        }),
+        OrderCommand::Replace {
+            orig_cl_ord_id,
+            order,
+        } => Body::OrderCancelReplaceRequest(OrderCancelReplaceRequest {
+            orig_cl_ord_id: orig_cl_ord_id.clone(),
+            cl_ord_id: order.cl_ord_id.clone(),
+            instrument: normalize::instrument_ref(cfg, &order.symbol)
+                .ok_or_else(|| unknown(&order.symbol))?,
+            side: order.side,
+            transact_time: now_timestamp(),
+            order_qty: order.qty,
+            ord_type: order.ord_type,
+            price: order.limit_price,
+            time_in_force: Some(order.tif),
+        }),
+    })
+}
+
+fn reject_cmd(events: &broadcast::Sender<GatewayEvent>, c: &OrderCommand, reason: String) {
+    warn!(cl_ord_id = c.cl_ord_id(), %reason, "order command rejected by gateway");
+    let _ = events.send(GatewayEvent::CommandRejected {
+        cl_ord_id: c.cl_ord_id().to_owned(),
+        reason,
+    });
+}
+
+async fn trade_task(
+    cfg: Arc<GatewayConfig>,
+    session: Session<Store>,
+    events: broadcast::Sender<GatewayEvent>,
+    mut orders: mpsc::Receiver<OrderCommand>,
+    mut sd: watch::Receiver<bool>,
+) {
+    let kind = SessionKind::Trading;
+    let mut session = Some(session);
+    let mut orders_open = true;
+    while let Some(s) = session.take() {
+        let io = match connect(&cfg.trade.addr, &mut sd).await {
+            None => break,
+            Some(Ok(io)) => io,
+            Some(Err(e)) => {
+                down(&events, kind, format!("connect {}: {e}", cfg.trade.addr));
+                session = Some(s);
+                // Fail fast instead of queueing orders while disconnected.
+                while let Ok(c) = orders.try_recv() {
+                    reject_cmd(&events, &c, "trading session down".into());
+                }
+                if !backoff(&cfg, &mut sd).await {
+                    break;
+                }
+                continue;
+            }
+        };
+        let (cmd, cmd_rx) = mpsc::channel(1024);
+        let (ev_tx, mut ev) = mpsc::channel(4096);
+        let handle = tokio::spawn(run_session(io, s, cmd_rx, ev_tx));
+        let mut up = false;
+        let mut stop = false;
+        loop {
+            tokio::select! {
+                e = ev.recv() => match e {
+                    Some(SessionEvent::LoggedOn) => {
+                        info!("trading session logged on");
+                        up = true;
+                        let _ = events.send(GatewayEvent::SessionUp { session: kind });
+                    }
+                    Some(SessionEvent::App(m)) => match &m.body {
+                        Body::ExecutionReport(er) => {
+                            let _ = events.send(GatewayEvent::Execution(normalize::execution(&cfg, er)));
+                        }
+                        Body::OrderCancelReject(r) => {
+                            let _ = events.send(GatewayEvent::CancelRejected {
+                                cl_ord_id: r.cl_ord_id.clone(),
+                                orig_cl_ord_id: r.orig_cl_ord_id.clone(),
+                                text: r.text.clone(),
+                            });
+                        }
+                        other => warn!(msg_type = other.msg_type(), "unexpected message on trading session"),
+                    },
+                    Some(SessionEvent::PeerReject(r)) => {
+                        let _ = events.send(GatewayEvent::SessionReject { session: kind, ref_seq_num: r.ref_seq_num, text: r.text });
+                    }
+                    Some(SessionEvent::Disconnected(r)) => {
+                        down(&events, kind, r);
+                        break;
+                    }
+                    None => break,
+                },
+                c = orders.recv(), if orders_open => match c {
+                    None => orders_open = false,
+                    Some(c) if !up => reject_cmd(&events, &c, "trading session not logged on".into()),
+                    Some(c) => match to_body(&cfg, &c) {
+                        Ok(body) => {
+                            if cmd.send(SessionCommand::Send(body)).await.is_err() {
+                                reject_cmd(&events, &c, "trading session closed".into());
+                            }
+                        }
+                        Err(reason) => reject_cmd(&events, &c, reason),
+                    },
+                },
+                _ = sd.changed() => {
+                    graceful_logout(&cmd, &mut ev).await;
+                    stop = true;
+                    break;
+                }
+            }
+        }
+        drop(cmd);
+        session = handle.await.ok();
+        if stop || !backoff(&cfg, &mut sd).await {
+            break;
+        }
+    }
+}
