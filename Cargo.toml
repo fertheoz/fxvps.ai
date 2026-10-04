@@ -6,6 +6,8 @@ members = [
     "crates/fix-session",
     "services/lp-simulator",
     "services/fix-gateway",
+    "crates/client-proto",
+    "services/client-gateway",
 ]
 
 [workspace.package]
@@ -21,6 +23,7 @@ fix-codec = { path = "crates/fix-codec" }
 fix-session = { path = "crates/fix-session" }
 lp-simulator = { path = "services/lp-simulator" }
 fix-gateway = { path = "services/fix-gateway" }
+client-proto = { path = "crates/client-proto" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "fs", "signal"] }
 thiserror = "2"
