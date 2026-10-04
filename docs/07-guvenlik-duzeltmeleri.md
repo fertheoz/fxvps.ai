@@ -24,7 +24,7 @@ hangi commit, hangi test, ne kaldı. Durum: **Düzeltildi** / **Kısmi** / **Ert
 | G14 | Düşük | Kısmi (ayrıcalıklı roller için 60 sn TTL; bootstrap CLI'ya taşınmadı) | `fix/security-remainder` |
 | G15 | Düşük | Düzeltildi (`*` yalnız `CORE_DEV_AUTH=1` ile) | `fix/security-remainder` |
 | G16 | Düşük | Düzeltildi | `7f3142b` |
-| G17 | Bilgi | Ertelendi | — |
+| G17 | Bilgi | Tamam (çalışma zamanı imajları digest; SBOM + provenance + cosign keyless) | `fix/g17` |
 
 ## Ayrıntılar
 
@@ -160,7 +160,7 @@ hangi commit, hangi test, ne kaldı. Durum: **Düzeltildi** / **Kısmi** / **Ert
 - **G14** (erişim jetonu 5 dk durumsuz, bootstrap admin kayıtta): değişiklik yok. Öneri: admin
   rolleri için ≤ 60 sn TTL, bootstrap'ı tek seferlik CLI'ya taşımak.
 - **G15** (`CORE_CORS_ORIGINS=*`): değişiklik yok. Öneri: `CORE_DEV_AUTH` dışında `*`'ı reddet.
-- **G17** (imaj digest sabitleme, SBOM/cosign): değişiklik yok.
+- **G17** tamamlandı: distroless/nginx çalışma zamanı imajları digest ile sabit (Dependabot docker); yayında SBOM, `provenance: mode=max` ve cosign keyless imza. Doğrulama: `cosign verify ghcr.io/fertheoz/fxvps-<svc>@<digest> --certificate-identity-regexp "^https://github.com/fertheoz/fxvps.ai/" --certificate-oidc-issuer https://token.actions.githubusercontent.com`. Derleme imajları (cargo-chef, node) sabitlenmedi.
 - **G2 derleme özelliği:** dev-auth `--features dev-auth` arkasına alınmadı; bunun yerine çalışma
   zamanı kapıları (loopback, üretim anahtarıyla birlikte ret, rastgele anahtar, admin bayrağı).
 

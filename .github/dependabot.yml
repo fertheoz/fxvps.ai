@@ -5,3 +5,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # G17: digest-pinned runtime base images.
+  - package-ecosystem: docker
+    directories: ["/infra/docker"]
+    schedule:
+      interval: weekly

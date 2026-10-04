@@ -70,6 +70,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # G17: keyless cosign signing
     strategy:
       fail-fast: false
       matrix:
@@ -106,13 +107,23 @@ jobs:
             type=ref,event=pr
             type=raw,value=latest,enable={{is_default_branch}}
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        id: push
         if: steps.exists.outputs.ok == 'true'
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           build-args: ${{ matrix.args }}
           push: true
+          sbom: true
+          provenance: mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.svc }}
           cache-to: type=gha,mode=max,scope=${{ matrix.svc }}
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        if: steps.exists.outputs.ok == 'true'
+      - name: Sign image (keyless, by digest)
+        if: steps.exists.outputs.ok == 'true'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/fertheoz/fxvps-${{ matrix.svc }}@${DIGEST}"
