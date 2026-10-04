@@ -105,6 +105,7 @@ async fn demo_quotes_and_market_order_fill() {
         }),
         limit_price: None,
         tif: TimeInForce::Ioc as i32,
+        ..Default::default()
     })))
     .await
     .unwrap();

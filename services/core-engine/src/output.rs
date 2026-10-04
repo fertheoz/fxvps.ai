@@ -5,10 +5,13 @@ use std::sync::Arc;
 
 use domain::Fixed;
 use money::{Money, Price, Qty};
-use oms::{AccountNo, Engine, Event, OrderId};
+use oms::{AccountNo, Engine, Event, OrderId, PositionId};
 use tokio::sync::broadcast;
 
-use crate::api::{AccountNames, AccountView, CoreEvent, GroupQuote, OrderView, PositionView};
+use crate::api::{
+    AccountNames, AccountView, CoreEvent, DealPage, DealQuery, DealView, GroupQuote, OrderView,
+    PositionView,
+};
 
 /// Lots -> base units.
 pub fn units(lots: Qty, contract_size: i64) -> Fixed {
@@ -38,8 +41,23 @@ pub fn order_view(
     ts_ns: u64,
 ) -> Option<OrderView> {
     let o = e.order(id)?;
-    let cs = e.symbol_spec(&o.req.symbol)?.contract_size;
+    let spec = e.symbol_spec(&o.req.symbol)?;
+    let cs = spec.contract_size;
+    let point = spec.point();
+    let r = &o.req;
     Some(OrderView {
+        kind: r.order_type.into(),
+        limit_price: r.limit_price.map(Into::into),
+        stop_price: r.stop_price.map(Into::into),
+        sl: r.sl.map(Into::into),
+        tp: r.tp.map(Into::into),
+        trailing_distance: r.trailing_points.map(|t| distance(point, t)),
+        oco_group: r.oco_group,
+        expire_at_ns: r.expire_at,
+        position_id: o.position,
+        close_position_id: o.close_position,
+        stop_triggered: o.stop_triggered,
+        created_ns: o.created_ts,
         account: names.name(o.req.account),
         client_order_id: client_id(&o.req.client_order_id).to_string(),
         order_id: o.id,
@@ -56,54 +74,113 @@ pub fn order_view(
     })
 }
 
-/// Net position of `account` in `symbol` (flat if none).
-pub fn position_view(
-    e: &Engine,
-    account: AccountNo,
-    symbol: &str,
-    names: &AccountNames,
-) -> PositionView {
-    let cs = e.symbol_spec(symbol).map_or(1, |s| s.contract_size);
-    let mut net: i128 = 0;
-    let mut notional: i128 = 0;
-    let mut gross: i128 = 0;
-    let mut pnl = Fixed::ZERO;
-    for p in e
-        .positions_of(account)
-        .into_iter()
-        .filter(|p| p.symbol == symbol)
-    {
-        let v = p.volume.raw() as i128;
-        net += v * p.side.sign() as i128;
-        gross += v;
-        notional += v * p.open_price.raw() as i128;
-        if let Ok(m) = e.position_pnl(p.id) {
-            pnl = pnl + money_fixed(m);
-        }
-    }
-    let avg = if gross > 0 {
-        (notional / gross) as i64
-    } else {
-        0
-    };
-    PositionView {
-        account: names.name(account),
-        symbol: symbol.to_string(),
-        net_qty: units(Qty::from_raw(net as i64), cs),
-        avg_price: Fixed::from_raw(avg),
-        unrealized_pnl: pnl,
-    }
+/// Trailing points -> price distance.
+pub fn distance(point: Price, points: i64) -> Fixed {
+    Fixed::from_raw(point.raw().saturating_mul(points))
+}
+
+/// View of an open position.
+pub fn position_view(e: &Engine, id: PositionId, names: &AccountNames) -> Option<PositionView> {
+    let p = e.position(id)?;
+    let spec = e.symbol_spec(&p.symbol)?;
+    let cs = spec.contract_size;
+    let qty = units(p.volume, cs);
+    Some(PositionView {
+        account: names.name(p.account),
+        position_id: p.id,
+        symbol: p.symbol.clone(),
+        side: p.side.into(),
+        net_qty: if p.side.sign() < 0 {
+            Fixed::ZERO - qty
+        } else {
+            qty
+        },
+        avg_price: p.open_price.into(),
+        unrealized_pnl: e.position_pnl(p.id).map(money_fixed).unwrap_or(Fixed::ZERO),
+        sl: p.sl.map(Into::into),
+        tp: p.tp.map(Into::into),
+        trailing_distance: p.trailing_points.map(|t| distance(spec.point(), t)),
+        open_ts_ns: p.opened_ts,
+    })
+}
+
+/// A closed position (`net_qty` = 0), reconstructed from its last deal.
+fn closed_view(e: &Engine, id: PositionId, names: &AccountNames) -> Option<PositionView> {
+    let d = e.deals().iter().rev().find(|d| d.position_id == id)?;
+    Some(PositionView {
+        account: names.name(d.account),
+        position_id: id,
+        symbol: d.symbol.clone(),
+        side: d.side.into(),
+        net_qty: Fixed::ZERO,
+        avg_price: Fixed::ZERO,
+        unrealized_pnl: Fixed::ZERO,
+        sl: None,
+        tp: None,
+        trailing_distance: None,
+        open_ts_ns: 0,
+    })
 }
 
 pub fn positions_view(e: &Engine, account: AccountNo, names: &AccountNames) -> Vec<PositionView> {
-    let syms: BTreeSet<String> = e
-        .positions_of(account)
+    e.positions_of(account)
         .into_iter()
-        .map(|p| p.symbol.clone())
-        .collect();
-    syms.iter()
-        .map(|s| position_view(e, account, s, names))
+        .filter_map(|p| position_view(e, p.id, names))
         .collect()
+}
+
+/// Pending (working) orders of an account, oldest first.
+pub fn pending_orders_view(e: &Engine, account: AccountNo, names: &AccountNames) -> Vec<OrderView> {
+    e.orders()
+        .filter(|o| o.req.account == account && o.is_pending())
+        .filter_map(|o| order_view(e, o.id, None, names, o.created_ts))
+        .collect()
+}
+
+pub fn deal_view(e: &Engine, id: u64, names: &AccountNames) -> Option<DealView> {
+    let d = e.deal(id)?;
+    let cs = e.symbol_spec(&d.symbol).map_or(1, |s| s.contract_size);
+    let clid = e
+        .order(d.order_id)
+        .map(|o| client_id(&o.req.client_order_id).to_string())
+        .unwrap_or_default();
+    Some(DealView {
+        account: names.name(d.account),
+        deal_id: d.id,
+        order_id: d.order_id,
+        client_order_id: clid,
+        position_id: d.position_id,
+        symbol: d.symbol.clone(),
+        side: d.side.into(),
+        entry: d.entry,
+        qty: units(d.volume, cs),
+        price: d.price.into(),
+        pnl: money_fixed(d.pnl),
+        commission: money_fixed(d.commission),
+        ts_ns: d.ts,
+        reason: d.reason,
+    })
+}
+
+/// One page of an account's deals (oldest first).
+pub fn deal_page(e: &Engine, account: AccountNo, q: DealQuery, names: &AccountNames) -> DealPage {
+    let limit = q.limit.max(1);
+    let mut deals = Vec::new();
+    let mut next = None;
+    let start = usize::try_from(q.after).unwrap_or(usize::MAX);
+    for d in e.deals().iter().skip(start) {
+        if d.account != account || d.ts < q.from_ns || (q.to_ns != 0 && d.ts > q.to_ns) {
+            continue;
+        }
+        if deals.len() == limit {
+            next = deals.last().map(|v: &DealView| v.deal_id);
+            break;
+        }
+        if let Some(v) = deal_view(e, d.id, names) {
+            deals.push(v);
+        }
+    }
+    DealPage { deals, next }
 }
 
 pub fn account_view(e: &Engine, account: AccountNo, names: &AccountNames) -> Option<AccountView> {
@@ -129,6 +206,8 @@ pub fn account_view(e: &Engine, account: AccountNo, names: &AccountNames) -> Opt
             .and_then(|l| i64::try_from(l).ok())
             .map(|l| Fixed::from_raw(l.saturating_mul(1_000_000))),
         margin_call: a.margin_call,
+        margin_mode: g.margin_mode,
+        leverage: g.leverage,
         positions: positions_view(e, account, names),
     })
 }
@@ -163,12 +242,39 @@ impl Publisher {
     pub fn publish(&mut self, e: &Engine, quote: Option<&str>, events: &[Event], ts: u64) {
         // account -> touched symbols
         let mut touched: BTreeMap<AccountNo, BTreeSet<String>> = BTreeMap::new();
+        let mut closed: Vec<PositionId> = Vec::new();
         for ev in events {
             let (id, last) = match ev {
+                Event::DealAdded { deal_id } => {
+                    if let Some(v) = deal_view(e, *deal_id, &self.names) {
+                        self.send(CoreEvent::Deal(v));
+                    }
+                    continue;
+                }
+                Event::PositionClosed {
+                    position_id,
+                    remaining,
+                    ..
+                } => {
+                    if remaining.is_zero() {
+                        closed.push(*position_id);
+                    }
+                    continue;
+                }
+                Event::PositionModified { position_id, .. } => {
+                    if let Some(p) = e.position(*position_id) {
+                        touched
+                            .entry(p.account)
+                            .or_default()
+                            .insert(p.symbol.clone());
+                    }
+                    continue;
+                }
                 Event::OrderAccepted { order_id }
                 | Event::OrderCancelled { order_id }
                 | Event::OrderExpired { order_id }
                 | Event::OrderTriggered { order_id }
+                | Event::OrderModified { order_id }
                 | Event::OrderRejected { order_id, .. } => (*order_id, None),
                 Event::OrderFilled {
                     order_id,
@@ -222,10 +328,19 @@ impl Publisher {
                 }
             }
         }
+        for pid in closed {
+            if let Some(v) = closed_view(e, pid, &self.names) {
+                self.send(CoreEvent::Position(v));
+            }
+        }
         for (a, syms) in touched {
             self.last_pnl.insert(a, ts);
-            for s in syms {
-                self.send(CoreEvent::Position(position_view(e, a, &s, &self.names)));
+            for p in e.positions_of(a) {
+                if syms.contains(&p.symbol) {
+                    if let Some(v) = position_view(e, p.id, &self.names) {
+                        self.send(CoreEvent::Position(v));
+                    }
+                }
             }
             if let Some(v) = account_view(e, a, &self.names) {
                 self.send(CoreEvent::Account(v));

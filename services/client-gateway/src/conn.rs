@@ -11,9 +11,11 @@ use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use client_proto::{
-    Ack, AuthOk, Body, CandleResponse, Encoding, Envelope, ErrorCode, Heartbeat, Hello, OrderType,
-    Pong, QuoteBatch, Timeframe, PROTOCOL_VERSION,
+    Ack, AuthOk, Body, CandleResponse, DealHistory, Decimal, Encoding, Envelope, ErrorCode,
+    Heartbeat, Hello, OrderList, OrderType, Pong, QuoteBatch, Timeframe, PROTOCOL_VERSION,
 };
+use core_engine::api::{DealQuery, OrderKind, OrderModify, Protection};
+use domain::Fixed;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{interval, timeout, MissedTickBehavior};
@@ -225,25 +227,32 @@ async fn session(
             }
         },
     };
+    let mut groups = HashSet::new();
+    let mut infos = Vec::new();
+    let mut snaps = Vec::new();
+    for acc in &claims.accounts {
+        if let Some(g) = hub.account_group(acc) {
+            groups.insert(g);
+        }
+        if let Some((info, snap)) = hub.account_state(acc).await {
+            infos.push(info);
+            snaps.push(snap);
+        }
+    }
     if out
         .send(Body::AuthOk(AuthOk {
             subject: claims.sub.clone(),
             account_ids: claims.accounts.clone(),
             expires_at_s: claims.exp,
+            accounts: infos,
         }))
         .is_err()
     {
         return slow();
     }
-    let mut groups = HashSet::new();
-    for acc in &claims.accounts {
-        if let Some(g) = hub.account_group(acc) {
-            groups.insert(g);
-        }
-        if let Some(snap) = hub.account_snapshot(acc).await {
-            if out.send(Body::AccountSnapshot(snap)).is_err() {
-                return slow();
-            }
+    for snap in snaps {
+        if out.send(Body::AccountSnapshot(snap)).is_err() {
+            return slow();
         }
     }
 
@@ -296,6 +305,7 @@ async fn session(
                         AccountEvent::Order(o) => Body::OrderUpdate(o.clone()),
                         AccountEvent::Position(p) => Body::PositionUpdate(p.clone()),
                         AccountEvent::Account(a) => Body::AccountSnapshot(a.clone()),
+                        AccountEvent::Deal(d) => Body::DealUpdate(d.clone()),
                     };
                     if out.send(body).is_err() { return slow(); }
                 },
@@ -332,6 +342,15 @@ struct ConnState {
     /// Groups of the authorized accounts (marked-up quote streams).
     groups: HashSet<String>,
     conflator: Conflator,
+}
+
+/// Optional wire decimal -> Fixed; present but not representable = error.
+fn fixed(d: Option<Decimal>, what: &str) -> Result<Option<Fixed>, CmdError> {
+    d.map(|d| {
+        d.to_fixed()
+            .ok_or_else(|| CmdError(ErrorCode::BadRequest, format!("{what}: invalid decimal")))
+    })
+    .transpose()
 }
 
 fn reply(out: &mut Outbox, request_id: &str, r: Result<(), CmdError>) -> Result<(), SlowConsumer> {
@@ -417,8 +436,10 @@ async fn handle(
                     .and_then(|s| s.to_domain())
                     .ok_or_else(|| CmdError(ErrorCode::BadRequest, "side required".into()))?;
                 let ord_type = match OrderType::try_from(p.order_type) {
-                    Ok(OrderType::Market) => domain::OrderType::Market,
-                    Ok(OrderType::Limit) => domain::OrderType::Limit,
+                    Ok(OrderType::Market) => OrderKind::Market,
+                    Ok(OrderType::Limit) => OrderKind::Limit,
+                    Ok(OrderType::Stop) => OrderKind::Stop,
+                    Ok(OrderType::StopLimit) => OrderKind::StopLimit,
                     _ => {
                         return Err(CmdError(
                             ErrorCode::BadRequest,
@@ -437,10 +458,16 @@ async fn handle(
                     side,
                     ord_type,
                     qty,
-                    limit_price: p.limit_price.and_then(|d| d.to_fixed()),
+                    limit_price: fixed(p.limit_price, "limit_price")?,
                     tif: client_proto::TimeInForce::try_from(p.tif)
                         .ok()
                         .filter(|t| *t != client_proto::TimeInForce::Unspecified),
+                    stop_price: fixed(p.stop_price, "stop_price")?,
+                    sl: fixed(p.sl, "sl")?,
+                    tp: fixed(p.tp, "tp")?,
+                    trailing_distance: fixed(p.trailing_distance, "trailing_distance")?,
+                    oco_group: (p.oco_group != 0).then_some(p.oco_group),
+                    expire_at_ns: (p.expire_at_ns != 0).then_some(p.expire_at_ns),
                 })
             });
             let r = match r {
@@ -457,19 +484,102 @@ async fn handle(
             reply(out, &c.request_id, r)
         }
         Body::ModifyOrder(m) => {
-            let r = match check_account(hub, st, &m.account_id) {
-                Ok(()) => {
-                    hub.modify_order(
-                        &m.account_id,
-                        &m.target_request_id,
-                        m.qty.and_then(|d| d.to_fixed()),
-                        m.limit_price.and_then(|d| d.to_fixed()),
-                    )
-                    .await
+            let change = || -> Result<OrderModify, CmdError> {
+                Ok(OrderModify {
+                    qty: fixed(m.qty, "qty")?,
+                    limit_price: fixed(m.limit_price, "limit_price")?,
+                    stop_price: fixed(m.stop_price, "stop_price")?,
+                    sl: fixed(m.sl, "sl")?,
+                    tp: fixed(m.tp, "tp")?,
+                    trailing_distance: fixed(m.trailing_distance, "trailing_distance")?,
+                    expire_at_ns: (m.expire_at_ns != 0).then_some(m.expire_at_ns),
+                    clear_expiry: m.clear_expiry,
+                    replace_protection: m.replace_protection,
+                })
+            };
+            let r = match check_account(hub, st, &m.account_id).and_then(|()| change()) {
+                Ok(c) => {
+                    hub.modify_order(&m.account_id, &m.target_request_id, c)
+                        .await
                 }
                 Err(e) => Err(e),
             };
             reply(out, &m.request_id, r)
+        }
+        Body::ModifyPosition(m) => {
+            let prot = || -> Result<Protection, CmdError> {
+                Ok(Protection {
+                    sl: fixed(m.sl, "sl")?,
+                    tp: fixed(m.tp, "tp")?,
+                    trailing_distance: fixed(m.trailing_distance, "trailing_distance")?,
+                })
+            };
+            let r = match check_account(hub, st, &m.account_id).and_then(|()| prot()) {
+                Ok(p) => hub.modify_position(&m.account_id, &m.position_id, p).await,
+                Err(e) => Err(e),
+            };
+            reply(out, &m.request_id, r)
+        }
+        Body::ClosePosition(c) => {
+            let r = match check_account(hub, st, &c.account_id).and_then(|()| fixed(c.qty, "qty")) {
+                Ok(q) => {
+                    hub.close_position(&c.account_id, &c.position_id, q, &c.request_id)
+                        .await
+                }
+                Err(e) => Err(e),
+            };
+            reply(out, &c.request_id, r)
+        }
+        Body::OrderListRequest(r) => {
+            if !st.claims.may_access(&r.account_id) {
+                return out.error(
+                    &r.request_id,
+                    ErrorCode::Forbidden,
+                    "account not authorized",
+                );
+            }
+            match hub.orders(&r.account_id).await {
+                Ok(orders) => out.send(Body::OrderList(OrderList {
+                    request_id: r.request_id,
+                    account_id: r.account_id,
+                    orders,
+                })),
+                Err(CmdError(code, msg)) => out.error(&r.request_id, code, &msg),
+            }
+        }
+        Body::DealHistoryRequest(r) => {
+            if !st.claims.may_access(&r.account_id) {
+                return out.error(
+                    &r.request_id,
+                    ErrorCode::Forbidden,
+                    "account not authorized",
+                );
+            }
+            let after = match r.cursor.as_str() {
+                "" => Ok(0),
+                c => c.parse::<u64>(),
+            };
+            let Ok(after) = after else {
+                return out.error(&r.request_id, ErrorCode::BadRequest, "bad cursor");
+            };
+            let q = DealQuery {
+                from_ns: r.from_ns,
+                to_ns: r.to_ns,
+                after,
+                limit: match r.limit {
+                    0 => 500,
+                    n => n.min(5_000) as usize,
+                },
+            };
+            match hub.deals(&r.account_id, q).await {
+                Ok(page) => out.send(Body::DealHistory(DealHistory {
+                    request_id: r.request_id,
+                    account_id: r.account_id,
+                    deals: page.deals.iter().map(crate::hub::deal).collect(),
+                    next_cursor: page.next.map(|n| n.to_string()).unwrap_or_default(),
+                })),
+                Err(CmdError(code, msg)) => out.error(&r.request_id, code, &msg),
+            }
         }
         Body::SymbolListRequest(r) => out.send(Body::SymbolList(client_proto::SymbolList {
             request_id: r.request_id,

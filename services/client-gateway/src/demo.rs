@@ -4,7 +4,8 @@
 //!
 //! Seeded accounts: `DEMO-1`..`DEMO-3`, each funded with `cfg.demo_balance`
 //! `cfg.currency` in group `demo-retail` (ESMA retail 1:30 on major FX,
-//! netting, A-book, 0.5 pip markup, USD 3.50 commission per lot per side).
+//! netting, A-book, 0.5 pip markup, USD 3.50 commission per lot per side) and
+//! `DEMO-H1` in `demo-hedge` (same, but hedging: several positions per symbol).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,6 +25,8 @@ const GW_TOML: &str = include_str!("../../fix-gateway/config/default.toml");
 
 /// Number of seeded demo accounts.
 pub const DEMO_ACCOUNTS: u64 = 3;
+/// Number of seeded hedging demo accounts (`DEMO-H1`..).
+pub const DEMO_HEDGING_ACCOUNTS: u64 = 1;
 
 pub struct Demo {
     pub hub: Arc<Hub>,
@@ -63,7 +66,7 @@ pub fn demo_seed(cfg: &ClientGatewayConfig, gw: &GatewayConfig) -> Result<Seed, 
         .map_err(|_| DemoError::Funding(format!("bad currency {}", cfg.currency)))?;
     let deposit =
         Money::parse(&cfg.demo_balance, ccy).map_err(|e| DemoError::Funding(e.to_string()))?;
-    Ok(Seed::demo(gw, DEMO_ACCOUNTS, deposit))
+    Ok(Seed::demo(gw, DEMO_ACCOUNTS, deposit).with_hedging(DEMO_HEDGING_ACCOUNTS))
 }
 
 fn temp_dir() -> PathBuf {
