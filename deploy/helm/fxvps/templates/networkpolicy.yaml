@@ -1,4 +1,5 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
 {{- range $name, $svc := .Values.services }}
 {{- if $svc.enabled }}
 ---
@@ -10,22 +11,69 @@ metadata:
 spec:
   podSelector:
     matchLabels: {{- include "fxvps.selector" (dict "name" $name "root" $) | nindent 6 }}
-  policyTypes: [Ingress]
-  {{- if has "*" $svc.ingressFrom }}
+  # Default deny in both directions; only the rules below are allowed (G10).
+  policyTypes: [Ingress, Egress]
   ingress:
-    - {}
-  {{- else if $svc.ingressFrom }}
-  ingress:
+    {{- if has "*" $svc.ingressFrom }}
+    # Public: every port except the metrics port.
+    - ports:
+        {{- range $pname, $port := $svc.ports }}
+        {{- if ne $pname ($svc.metricsPort | default "") }}
+        - { port: {{ $pname }}, protocol: TCP }
+        {{- end }}
+        {{- end }}
+    {{- else if $svc.ingressFrom }}
     - from:
         {{- range $svc.ingressFrom }}
         - podSelector:
             matchLabels: { app.kubernetes.io/name: {{ . }} }
         {{- end }}
+    {{- end }}
+    {{- if $svc.metricsPort }}
+    - from:
+        - namespaceSelector: {{- toYaml $np.prometheus.namespaceSelector | nindent 12 }}
+          podSelector:
+            matchLabels: {{- toYaml $np.prometheus.podSelector | nindent 14 }}
+      ports:
+        - { port: {{ $svc.metricsPort }}, protocol: TCP }
+    {{- end }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {{- toYaml $np.dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels: {{- toYaml $np.dns.podSelector | nindent 14 }}
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
         - podSelector:
-            matchLabels: { app.kubernetes.io/name: prometheus }
-  {{- else }}
-  ingress: []
-  {{- end }}
+            matchLabels: {{- toYaml $np.nats.podSelector | nindent 14 }}
+      ports:
+        - { port: {{ $np.nats.port }}, protocol: TCP }
+    {{- range $svc.egressTo }}
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: {{ . }} }
+    {{- end }}
+    {{- if $svc.egressIdentity }}
+    - to:
+        - namespaceSelector: {{- toYaml $np.identity.namespaceSelector | nindent 12 }}
+          podSelector:
+            matchLabels: {{- toYaml $np.identity.podSelector | nindent 14 }}
+      ports:
+        - { port: {{ $np.identity.port }}, protocol: TCP }
+    {{- end }}
+    {{- range $svc.egressCIDRs }}
+    - to:
+        - ipBlock: { cidr: {{ .cidr }} }
+      {{- with .ports }}
+      ports:
+        {{- range . }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+      {{- end }}
+    {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

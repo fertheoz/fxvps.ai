@@ -1,6 +1,8 @@
 {{- range $name, $svc := .Values.services }}
 {{- if $svc.enabled }}
 {{- $ctx := dict "name" $name "root" $ }}
+{{- $uid := $svc.runAsUser | default $.Values.podSecurity.runAsUser }}
+{{- $persist := and $svc.persistence $svc.persistence.enabled }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -9,7 +11,7 @@ metadata:
   labels: {{- include "fxvps.labels" $ctx | nindent 4 }}
 spec:
   replicas: {{ $svc.replicas }}
-  {{- if eq (int $svc.replicas) 1 }}
+  {{- if or (eq (int $svc.replicas) 1) $persist }}
   strategy: { type: Recreate }
   {{- end }}
   selector:
@@ -24,6 +26,11 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        # Numeric ids: distroless `USER nonroot:nonroot` is not numeric, so the
+        # kubelet cannot verify runAsNonRoot without them (G11).
+        runAsUser: {{ $uid }}
+        runAsGroup: {{ $svc.runAsUser | default $.Values.podSecurity.runAsGroup }}
+        fsGroup: {{ $svc.runAsUser | default $.Values.podSecurity.fsGroup }}
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: {{ $name }}
@@ -41,12 +48,26 @@ spec:
           {{- end }}
           env:
             - { name: NATS_URL, value: {{ $.Values.global.natsUrl | quote }} }
+            {{- if eq $name "client-gateway" }}
+            # G1: identity JWKS is mandatory; the gateway refuses to start on its dev key.
+            - { name: FXVPS_JWT_JWKS_URL, value: {{ required "auth.jwksUrl is required when client-gateway is enabled" $.Values.auth.jwksUrl | quote }} }
+            - { name: FXVPS_JWT_ISSUER, value: {{ required "auth.issuer is required when client-gateway is enabled" $.Values.auth.issuer | quote }} }
+            - { name: FXVPS_JWT_AUDIENCE, value: {{ required "auth.audience is required" $.Values.auth.audience | quote }} }
+            {{- end }}
+            {{- if eq $name "core-engine" }}
+            # G5: identity JWKS (RS256) + iss/aud + MFA for mutating admin routes.
+            - { name: CORE_JWT_JWKS_URL, value: {{ required "auth.jwksUrl is required when core-engine is enabled" $.Values.auth.jwksUrl | quote }} }
+            - { name: CORE_JWT_ISSUER, value: {{ required "auth.issuer is required when core-engine is enabled" $.Values.auth.issuer | quote }} }
+            - { name: CORE_JWT_AUDIENCE, value: {{ required "auth.audience is required" $.Values.auth.audience | quote }} }
+            - { name: CORE_REQUIRE_MFA, value: {{ ternary "1" "0" $.Values.auth.requireMfa | quote }} }
+            {{- end }}
             {{- range $k, $v := $svc.env }}
             - { name: {{ $k }}, value: {{ $v | quote }} }
             {{- end }}
           {{- if $svc.existingSecret }}
           envFrom:
-            - secretRef: { name: {{ $svc.existingSecret }}, optional: true }
+            # Not optional: a missing secret must stop the pod, not fall back to dev defaults (G10).
+            - secretRef: { name: {{ $svc.existingSecret }}, optional: false }
           {{- end }}
           {{- if ne $svc.probes.type "none" }}
           livenessProbe:
@@ -60,8 +81,33 @@ spec:
           resources: {{- toYaml $svc.resources | nindent 12 }}
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+            {{- if $persist }}
+            - { name: data, mountPath: {{ $svc.persistence.mountPath }} }
+            {{- end }}
       volumes:
         - { name: tmp, emptyDir: {} }
+        {{- if $persist }}
+        - name: data
+          persistentVolumeClaim: { claimName: {{ $name }}-data }
+        {{- end }}
+{{- if $persist }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-data
+  labels: {{- include "fxvps.labels" $ctx | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with $svc.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $svc.persistence.size }}
+{{- end }}
 {{- if $svc.ports }}
 ---
 apiVersion: v1
