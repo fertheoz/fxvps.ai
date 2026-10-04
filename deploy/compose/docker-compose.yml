@@ -1,0 +1,137 @@
+# fxvps.ai yerel geliştirme yığını. Çalıştır (depo kökünden):
+#   cp deploy/compose/.env.example deploy/compose/.env
+#   docker compose -f deploy/compose/docker-compose.yml up -d --build
+name: fxvps
+
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  postgres:
+    <<: *defaults
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fxvps}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-only-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-fxvps}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [pg-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      retries: 20
+
+  valkey:
+    <<: *defaults
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: [valkey-data:/data]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      retries: 20
+
+  nats:
+    <<: *defaults
+    image: nats:2.11-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports: ["127.0.0.1:4222:4222", "127.0.0.1:8222:8222"]
+    volumes: [nats-data:/data]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz?js-enabled-only=true"]
+      interval: 5s
+      retries: 20
+
+  questdb:
+    <<: *defaults
+    image: questdb/questdb:8.2.3
+    environment:
+      QDB_METRICS_ENABLED: "true"
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9009:9009", "127.0.0.1:8812:8812", "127.0.0.1:9003:9003"]
+    volumes: [questdb-data:/var/lib/questdb]
+
+  clickhouse:
+    <<: *defaults
+    image: clickhouse/clickhouse-server:25.3-alpine
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-fxvps}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-dev-only-change-me}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports: ["127.0.0.1:8123:8123", "127.0.0.1:9440:9000"]
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes: [clickhouse-data:/var/lib/clickhouse]
+
+  otel-collector:
+    <<: *defaults
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes: ["./config/otel-collector.yaml:/etc/otelcol/config.yaml:ro"]
+    ports: ["127.0.0.1:4317:4317", "127.0.0.1:4318:4318"]
+
+  prometheus:
+    <<: *defaults
+    image: prom/prometheus:v3.2.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+
+  grafana:
+    <<: *defaults
+    image: grafana/grafana-oss:11.5.2
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-dev-only-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [prometheus]
+
+  lp-simulator:
+    <<: *defaults
+    build:
+      context: ../..
+      dockerfile: infra/docker/lp-simulator.Dockerfile
+    image: ghcr.io/fertheoz/fxvps-lp-simulator:dev
+    command: ["/app/config/compose.toml"]
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes: ["./config/lp-simulator.toml:/app/config/compose.toml:ro"]
+    ports: ["127.0.0.1:9880:9880", "127.0.0.1:9881:9881"]
+
+  fix-gateway:
+    <<: *defaults
+    build:
+      context: ../..
+      dockerfile: infra/docker/fix-gateway.Dockerfile
+    image: ghcr.io/fertheoz/fxvps-fix-gateway:dev
+    command: ["/app/config/compose.toml"]
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      FIX_GATEWAY_MD_PASSWORD: ${FIX_GATEWAY_MD_PASSWORD:-demo}
+      FIX_GATEWAY_TRADE_PASSWORD: ${FIX_GATEWAY_TRADE_PASSWORD:-demo}
+    volumes: ["./config/fix-gateway.toml:/app/config/compose.toml:ro"]
+    depends_on:
+      lp-simulator: { condition: service_started }
+      nats: { condition: service_healthy }
+
+volumes:
+  pg-data:
+  valkey-data:
+  nats-data:
+  questdb-data:
+  clickhouse-data:
+  prometheus-data:
+  grafana-data:

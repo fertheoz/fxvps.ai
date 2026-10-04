@@ -1,0 +1,51 @@
+# LP simulator configuration. Values marked "assumption" mimic LMAX but are NOT verified
+# against the LMAX FIX spec (see docs/02, [DOĞRULA]).
+
+tick_interval_ms = 250
+depth = 5
+seed = 42
+# SecurityIDSource(22) used for instruments. Assumption: LMAX uses 8 (exchange symbol).
+security_id_source = "8"
+
+[md]
+listen = "0.0.0.0:9880"
+comp_id = "LMXBDM"          # assumption: LMAX-style MD target CompID
+client_comp_id = "FXVPS-MD"
+# Demo credentials for local use only; not secrets.
+username = "demo"
+password = "demo"
+
+[trade]
+listen = "0.0.0.0:9881"
+comp_id = "LMXBD"           # assumption: LMAX-style trading target CompID
+client_comp_id = "FXVPS-TRD"
+username = "demo"
+password = "demo"
+
+# EUR/USD = 4001 is confirmed by public LMAX SDK samples; other ids are placeholders.
+[[instruments]]
+symbol = "EUR/USD"
+security_id = "4001"
+initial_mid = "1.08500"
+tick_size = "0.00001"
+spread_ticks = 2
+volatility_ticks = 3
+level_size = "1000000"
+
+[[instruments]]
+symbol = "GBP/USD"
+security_id = "4002"        # assumption
+initial_mid = "1.27000"
+tick_size = "0.00001"
+spread_ticks = 3
+volatility_ticks = 4
+level_size = "1000000"
+
+[[instruments]]
+symbol = "USD/JPY"
+security_id = "4004"        # assumption
+initial_mid = "151.200"
+tick_size = "0.001"
+spread_ticks = 3
+volatility_ticks = 4
+level_size = "1000000"

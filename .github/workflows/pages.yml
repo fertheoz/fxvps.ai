@@ -1,0 +1,77 @@
+name: Pages
+
+# terminal -> https://fertheoz.github.io/fxvps.ai/        (Vite base /fxvps.ai/)
+# backoffice -> https://fertheoz.github.io/fxvps.ai/admin/ (NEXT_PUBLIC_BASE_PATH=/fxvps.ai/admin)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect apps
+        id: apps
+        run: |
+          echo "terminal=$([ -f apps/terminal/package.json ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "backoffice=$([ -f apps/backoffice/package.json ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      # Sürüm kök package.json "packageManager" alanından gelir (version: verilmez).
+      - uses: pnpm/action-setup@v4
+        if: steps.apps.outputs.terminal == 'true' || steps.apps.outputs.backoffice == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.apps.outputs.terminal == 'true' || steps.apps.outputs.backoffice == 'true'
+        with:
+          node-version: 22
+      - run: mkdir -p _site
+      - name: Build terminal
+        if: steps.apps.outputs.terminal == 'true'
+        working-directory: apps/terminal
+        run: |
+          pnpm install --ignore-workspace --frozen-lockfile
+          pnpm exec vite build --base=/fxvps.ai/
+          cp -r dist/. ../../_site/
+      - name: Build backoffice
+        if: steps.apps.outputs.backoffice == 'true'
+        working-directory: apps/backoffice
+        env:
+          NEXT_PUBLIC_BASE_PATH: /fxvps.ai/admin
+        run: |
+          pnpm install --ignore-workspace --frozen-lockfile
+          pnpm build
+          mkdir -p ../../_site/admin
+          cp -r out/. ../../_site/admin/
+      - name: Landing page fallback
+        run: |
+          touch _site/.nojekyll
+          if [ ! -f _site/index.html ]; then
+            cat > _site/index.html <<'HTML'
+          <!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>fxvps.ai</title></head>
+          <body style="font-family:system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem"><h1>fxvps.ai</h1><p>Trading platformu: yakında.</p><p><a href="admin/">Back office</a></p></body></html>
+          HTML
+          fi
+          # SPA derin bağlantıları için
+          [ -f _site/404.html ] || cp _site/index.html _site/404.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
