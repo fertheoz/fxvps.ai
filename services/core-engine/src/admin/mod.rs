@@ -48,19 +48,26 @@ impl AdminConfig {
         }
     }
 
-    /// Reads `CORE_CORS_ORIGINS` (comma separated, `*` for any).
-    pub fn with_env(mut self) -> AdminConfig {
+    /// Reads `CORE_CORS_ORIGINS` (comma separated). `*` (any origin) is only
+    /// accepted together with dev auth (G15); otherwise startup fails.
+    pub fn with_env(mut self, dev_auth: bool) -> Result<AdminConfig, String> {
         if let Ok(v) = std::env::var("CORE_CORS_ORIGINS") {
             let list: Vec<String> = v
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
+            if list.iter().any(|o| o == "*") && !dev_auth {
+                return Err(
+                    "CORE_CORS_ORIGINS=* is only allowed with CORE_DEV_AUTH=1; list explicit origins"
+                        .into(),
+                );
+            }
             if !list.is_empty() {
                 self.cors_origins = Some(list);
             }
         }
-        self
+        Ok(self)
     }
 }
 
@@ -240,4 +247,24 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
         app = app.layer(cors(o));
     }
     Ok(app)
+}
+
+#[cfg(test)]
+mod cors_env_tests {
+    use super::AdminConfig;
+
+    #[test]
+    fn wildcard_cors_requires_dev_auth() {
+        // Single test touches the env var to avoid races between tests.
+        std::env::set_var("CORE_CORS_ORIGINS", "*");
+        assert!(AdminConfig::new("/tmp").with_env(false).is_err());
+        assert!(AdminConfig::new("/tmp").with_env(true).is_ok());
+        std::env::set_var("CORE_CORS_ORIGINS", "https://admin.example");
+        let cfg = AdminConfig::new("/tmp").with_env(false).unwrap();
+        assert_eq!(
+            cfg.cors_origins,
+            Some(vec!["https://admin.example".to_string()])
+        );
+        std::env::remove_var("CORE_CORS_ORIGINS");
+    }
 }

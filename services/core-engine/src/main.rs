@@ -21,7 +21,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if flag("CORE_SEED") && admin::seed::seed_if_empty(&handle).await? {
         tracing::info!("seeded demo data");
     }
-    let app = admin::app(handle.clone(), auth, AdminConfig::new(&dir).with_env())?;
+    let app = admin::app(
+        handle.clone(),
+        auth,
+        AdminConfig::new(&dir).with_env(flag("CORE_DEV_AUTH"))?,
+    )?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("core-engine admin API on {addr}");
     axum::serve(listener, app)
