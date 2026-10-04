@@ -25,8 +25,9 @@ pub struct ClientGatewayConfig {
     pub max_frame_bytes: usize,
     /// Candles retained per symbol and timeframe.
     pub candle_capacity: usize,
-    /// Demo balance shown in account snapshots (account currency units).
+    /// Initial deposit of each seeded demo account (account currency units).
     pub demo_balance: String,
+    /// Currency of seeded demo accounts.
     pub currency: String,
 }
 
@@ -42,7 +43,7 @@ impl Default for ClientGatewayConfig {
             heartbeat_secs: 15,
             max_frame_bytes: 64 * 1024,
             candle_capacity: 1_000,
-            demo_balance: "100000".into(),
+            demo_balance: "10000".into(),
             currency: "USD".into(),
         }
     }

@@ -278,12 +278,14 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "client-proto",
+ "core-engine",
  "domain",
  "fix-gateway",
  "futures-util",
  "governor",
  "jsonwebtoken",
  "lp-simulator",
+ "money",
  "prometheus",
  "serde",
  "serde_json",
@@ -320,14 +322,18 @@ name = "core-engine"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "domain",
+ "fix-gateway",
  "http-body-util",
  "ledger",
+ "lp-simulator",
  "money",
  "oms",
  "risk",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tower",
  "tracing",
@@ -1843,6 +1849,7 @@ dependencies = [
 name = "risk"
 version = "0.1.0"
 dependencies = [
+ "domain",
  "money",
  "proptest",
  "serde",

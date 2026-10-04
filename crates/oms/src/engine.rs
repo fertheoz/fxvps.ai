@@ -148,6 +148,33 @@ impl Engine {
             .filter(|p| p.account == account)
             .collect()
     }
+    pub fn symbol_spec(&self, symbol: &str) -> Option<&SymbolSpec> {
+        self.st.symbols.get(symbol)
+    }
+    pub fn symbols(&self) -> impl Iterator<Item = &SymbolSpec> {
+        self.st.symbols.values()
+    }
+    pub fn group(&self, name: &str) -> Option<&GroupConfig> {
+        self.st.groups.get(name)
+    }
+    pub fn groups(&self) -> impl Iterator<Item = &GroupConfig> {
+        self.st.groups.values()
+    }
+    /// Client (marked-up) quote of `symbol` for group `group`.
+    pub fn group_quote(&self, group: &str, symbol: &str) -> Option<Quote> {
+        let g = self.st.groups.get(group)?;
+        self.client_quote(g, symbol).ok()
+    }
+    /// Floating P&L of a position at the account's client quote, in the
+    /// account currency.
+    pub fn position_pnl(&self, id: PositionId) -> R<Money> {
+        let p = self.st.positions.get(&id).ok_or("unknown position")?;
+        let a = &self.st.accounts[&p.account];
+        let g = &self.st.groups[&a.group];
+        let spec = &self.st.symbols[&p.symbol];
+        let q = self.client_quote(g, &p.symbol).map_err(e2s)?;
+        risk::floating_pnl(spec, &p.view(), q, g.currency, &self.st.quotes).map_err(e2s)
+    }
     /// Latest raw LP quote for a symbol.
     pub fn snapshot_quote(&self, symbol: &str) -> Option<Quote> {
         self.st.quotes.get(symbol)

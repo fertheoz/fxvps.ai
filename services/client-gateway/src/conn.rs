@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use client_proto::{
-    AccountSnapshot, Ack, AuthOk, Body, CandleResponse, Decimal, Encoding, Envelope, ErrorCode,
-    Heartbeat, Hello, OrderType, Pong, QuoteBatch, Timeframe, PROTOCOL_VERSION,
+    Ack, AuthOk, Body, CandleResponse, Encoding, Envelope, ErrorCode, Heartbeat, Hello, OrderType,
+    Pong, QuoteBatch, Timeframe, PROTOCOL_VERSION,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -235,24 +235,22 @@ async fn session(
     {
         return slow();
     }
-    let balance: domain::Fixed = hub.cfg.demo_balance.parse().unwrap_or_default();
+    let mut groups = HashSet::new();
     for acc in &claims.accounts {
-        let snap = AccountSnapshot {
-            account_id: acc.clone(),
-            currency: hub.cfg.currency.clone(),
-            balance: Some(balance.into()),
-            equity: Some(balance.into()),
-            margin_used: Some(Decimal::from_fixed(domain::Fixed::ZERO)),
-            positions: hub.positions(acc),
-        };
-        if out.send(Body::AccountSnapshot(snap)).is_err() {
-            return slow();
+        if let Some(g) = hub.account_group(acc) {
+            groups.insert(g);
+        }
+        if let Some(snap) = hub.account_snapshot(acc).await {
+            if out.send(Body::AccountSnapshot(snap)).is_err() {
+                return slow();
+            }
         }
     }
 
     let mut state = ConnState {
         claims,
         subs: HashSet::new(),
+        groups,
         conflator: Conflator::default(),
     };
     let mut quotes = hub.subscribe_quotes();
@@ -272,7 +270,7 @@ async fn session(
                 Inbound::Frame(env, _) => {
                     hub.metrics.frames_in.inc();
                     if let Some(body) = env.body {
-                        match handle(hub, &mut state, &mut out, body) {
+                        match handle(hub, &mut state, &mut out, body).await {
                             Ok(()) => {}
                             Err(SlowConsumer) => return slow(),
                         }
@@ -280,7 +278,12 @@ async fn session(
                 }
             },
             q = quotes.recv() => match q {
-                Ok(q) => if state.subs.contains(&*q.symbol) { state.conflator.push(q) },
+                Ok(m) => {
+                    let visible = m.group.as_deref().is_none_or(|g| state.groups.contains(g));
+                    if visible && state.subs.contains(&*m.quote.symbol) {
+                        state.conflator.push(Arc::new(m.quote.clone()))
+                    }
+                }
                 // Latest-wins semantics: missing intermediate ticks is fine.
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => {
@@ -292,6 +295,7 @@ async fn session(
                     let body = match &*ev {
                         AccountEvent::Order(o) => Body::OrderUpdate(o.clone()),
                         AccountEvent::Position(p) => Body::PositionUpdate(p.clone()),
+                        AccountEvent::Account(a) => Body::AccountSnapshot(a.clone()),
                     };
                     if out.send(body).is_err() { return slow(); }
                 },
@@ -325,6 +329,8 @@ async fn session(
 struct ConnState {
     claims: Claims,
     subs: HashSet<String>,
+    /// Groups of the authorized accounts (marked-up quote streams).
+    groups: HashSet<String>,
     conflator: Conflator,
 }
 
@@ -353,7 +359,12 @@ fn check_account(hub: &Hub, st: &ConnState, account_id: &str) -> Result<(), CmdE
     Ok(())
 }
 
-fn handle(hub: &Hub, st: &mut ConnState, out: &mut Outbox, body: Body) -> Result<(), SlowConsumer> {
+async fn handle(
+    hub: &Hub,
+    st: &mut ConnState,
+    out: &mut Outbox,
+    body: Body,
+) -> Result<(), SlowConsumer> {
     match body {
         Body::Subscribe(s) => {
             let unknown: Vec<_> = s
@@ -419,7 +430,7 @@ fn handle(hub: &Hub, st: &mut ConnState, out: &mut Outbox, body: Body) -> Result
                     .qty
                     .and_then(|d| d.to_fixed())
                     .ok_or_else(|| CmdError(ErrorCode::BadRequest, "qty required".into()))?;
-                hub.place_order(NewOrder {
+                Ok(NewOrder {
                     request_id: p.request_id.clone(),
                     account_id: p.account_id.clone(),
                     symbol: p.symbol.clone(),
@@ -432,22 +443,32 @@ fn handle(hub: &Hub, st: &mut ConnState, out: &mut Outbox, body: Body) -> Result
                         .filter(|t| *t != client_proto::TimeInForce::Unspecified),
                 })
             });
+            let r = match r {
+                Ok(o) => hub.place_order(o).await,
+                Err(e) => Err(e),
+            };
             reply(out, &p.request_id, r)
         }
         Body::CancelOrder(c) => {
-            let r = check_account(hub, st, &c.account_id)
-                .and_then(|()| hub.cancel_order(&c.account_id, &c.target_request_id));
+            let r = match check_account(hub, st, &c.account_id) {
+                Ok(()) => hub.cancel_order(&c.account_id, &c.target_request_id).await,
+                Err(e) => Err(e),
+            };
             reply(out, &c.request_id, r)
         }
         Body::ModifyOrder(m) => {
-            let r = check_account(hub, st, &m.account_id).and_then(|()| {
-                hub.modify_order(
-                    &m.account_id,
-                    &m.target_request_id,
-                    m.qty.and_then(|d| d.to_fixed()),
-                    m.limit_price.and_then(|d| d.to_fixed()),
-                )
-            });
+            let r = match check_account(hub, st, &m.account_id) {
+                Ok(()) => {
+                    hub.modify_order(
+                        &m.account_id,
+                        &m.target_request_id,
+                        m.qty.and_then(|d| d.to_fixed()),
+                        m.limit_price.and_then(|d| d.to_fixed()),
+                    )
+                    .await
+                }
+                Err(e) => Err(e),
+            };
             reply(out, &m.request_id, r)
         }
         Body::SymbolListRequest(r) => out.send(Body::SymbolList(client_proto::SymbolList {

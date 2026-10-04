@@ -187,6 +187,8 @@ message Position {
   // Signed net quantity (positive = long).
   Decimal net_qty = 2;
   Decimal avg_price = 3;
+  // Floating P&L in account currency (added in v1.1).
+  Decimal unrealized_pnl = 4;
 }
 
 message AccountSnapshot {
@@ -196,6 +198,10 @@ message AccountSnapshot {
   Decimal equity = 4;
   Decimal margin_used = 5;
   repeated Position positions = 6;
+  // Added in v1.1: equity - margin_used, and equity / margin_used in percent
+  // (absent without open margin). Also pushed whenever they change.
+  Decimal free_margin = 7;
+  Decimal margin_level = 8;
 }
 
 message PositionUpdate {
@@ -261,6 +267,10 @@ enum ErrorCode {
   UNKNOWN_ORDER = 7;
   UNAVAILABLE = 8;
   INTERNAL = 9;
+  // Added in v1.1: pre-trade margin check failed.
+  INSUFFICIENT_MARGIN = 10;
+  // Added in v1.1: rejected by core risk / validation (see message).
+  ORDER_REJECTED = 11;
 }
 
 message Error {

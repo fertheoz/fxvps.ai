@@ -97,6 +97,31 @@ impl Market {
         self.rebuild();
     }
 
+    /// Control hook (tests, demos): moves an instrument's mid to `mid`
+    /// immediately, e.g. to simulate a price shock. `symbol` matches the
+    /// instrument symbol or security id. Returns false if unknown.
+    pub fn set_mid(&mut self, symbol: &str, mid: Price) -> bool {
+        let Some(st) = self
+            .instruments
+            .iter_mut()
+            .find(|i| i.spec.symbol == symbol || i.spec.security_id == symbol)
+        else {
+            return false;
+        };
+        let floor = st.spec.spread_ticks + self.depth as i64 + 1;
+        st.mid_ticks = (mid.raw() / st.spec.tick_size.raw()).max(floor);
+        self.rebuild();
+        true
+    }
+
+    /// Current mid of an instrument (symbol or security id).
+    pub fn mid(&self, symbol: &str) -> Option<Price> {
+        self.instruments
+            .iter()
+            .find(|i| i.spec.symbol == symbol || i.spec.security_id == symbol)
+            .map(|i| Fixed::from_raw(i.mid_ticks * i.spec.tick_size.raw()))
+    }
+
     pub fn book(&self, security_id: &str) -> Option<&Book> {
         self.books.get(security_id)
     }
@@ -134,5 +159,17 @@ mod tests {
             moved |= *b != first;
         }
         assert!(moved);
+    }
+
+    #[test]
+    fn set_mid_shocks_the_book() {
+        let cfg = SimConfig::for_tests();
+        let mut m = Market::new(&cfg);
+        let target: Price = "1.00000".parse().unwrap();
+        assert!(m.set_mid("4001", target));
+        assert_eq!(m.mid("4001"), Some(target));
+        let b = m.book("4001").unwrap();
+        assert!(b.bids[0].price < target && b.asks[0].price > target);
+        assert!(!m.set_mid("NOPE", target));
     }
 }

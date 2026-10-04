@@ -52,13 +52,17 @@ Timestamps are `uint64` nanoseconds since the UNIX epoch. Symbols are compact (`
      `ModifyOrder{request_id, account_id, target_request_id, qty?, limit_price?}`:
      `Ack{request_id}` means accepted for routing; failures return
      `Error{request_id, code}` (FORBIDDEN, RATE_LIMITED, UNKNOWN_SYMBOL, UNKNOWN_ORDER,
-     BAD_REQUEST, UNAVAILABLE). `request_id` of a PlaceOrder must be unique per account and
+     BAD_REQUEST, UNAVAILABLE, and since v1.1 INSUFFICIENT_MARGIN when the pre-trade margin
+     check fails or ORDER_REJECTED for other risk rejections). `request_id` of a PlaceOrder must be unique per account and
      identifies the order for its whole life (cancel/modify target it).
      Market orders default to IOC; limit orders to GTC.
    - `OrderUpdate` (server): every execution of an order of an authorized account, with
      `client_request_id` = originating PlaceOrder `request_id`. Sent to every connection
      authorized for the account.
-   - `PositionUpdate` (server): net position after each fill.
+   - `PositionUpdate` (server): net position after each fill and (throttled) as prices
+     move; `unrealized_pnl` (v1.1) is in account currency at the account group's prices.
+   - `AccountSnapshot` (server, v1.1): also pushed whenever balance / equity / margin change
+     (`free_margin`, `margin_level` percent). Quotes are the account group's marked-up prices.
    - `Ping{nonce}` → `Pong{nonce}`. Server sends `Heartbeat` every 15 s.
 
 ## Authorization
