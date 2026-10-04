@@ -28,7 +28,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: apps/backoffice/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --ignore-workspace --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint --max-warnings 0
       - run: pnpm test
