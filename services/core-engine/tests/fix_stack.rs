@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use core_engine::api::{CoreApi, CoreEvent, OrderKind, OrderStatus, PlaceOrderRequest};
+use core_engine::api::{CoreApi, CoreEvent, OrderStatus, PlaceOrderRequest};
 use core_engine::stack::{CoreStack, Seed, StackConfig};
 use core_engine::{recover, Settings};
 use domain::Fixed;
@@ -64,15 +64,7 @@ async fn wait_for<T>(
 }
 
 fn market(account: &str, id: &str, side: domain::Side, units: i64) -> PlaceOrderRequest {
-    PlaceOrderRequest {
-        account: account.into(),
-        client_order_id: id.into(),
-        symbol: "EURUSD".into(),
-        side,
-        kind: OrderKind::Market,
-        qty: Fixed::from_int(units),
-        limit_price: None,
-    }
+    PlaceOrderRequest::market(account, id, "EURUSD", side, Fixed::from_int(units))
 }
 
 async fn place_and_fill(core: &dyn CoreApi, req: PlaceOrderRequest) -> Fixed {

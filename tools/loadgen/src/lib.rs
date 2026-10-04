@@ -164,6 +164,7 @@ async fn client(idx: usize, cfg: LoadConfig, deadline: Instant) -> ClientStats {
                     qty: Some(Decimal { value: cfg.order_qty, scale: 0 }),
                     limit_price: None,
                     tif: TimeInForce::Ioc as i32,
+                    ..Default::default()
                 }));
                 pending.insert(id, (Instant::now(), false));
                 st.orders_sent += 1;

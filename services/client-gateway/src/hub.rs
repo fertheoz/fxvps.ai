@@ -6,14 +6,15 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
 use client_proto::{
-    client_symbol, AccountSnapshot, Decimal, ErrorCode, OrderUpdate, Position, PositionUpdate,
-    TimeInForce,
+    client_symbol, AccountInfo, AccountSnapshot, DealUpdate, Decimal, ErrorCode, OrderUpdate,
+    Position, PositionUpdate, TimeInForce,
 };
 use core_engine::api::{
-    AccountView, CoreApi, CoreError, CoreErrorCode, CoreEvent, OrderKind, OrderStatus, OrderView,
-    PlaceOrderRequest, PositionView,
+    AccountView, CoreApi, CoreError, CoreErrorCode, CoreEvent, DealEntry, DealPage, DealQuery,
+    DealView, MarginMode, OrderKind, OrderModify, OrderOrigin, OrderStatus, OrderView,
+    PlaceOrderRequest, PositionView, Protection,
 };
-use domain::{Fixed, OrderType, Side};
+use domain::{Fixed, Side};
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use tokio::sync::broadcast;
 
@@ -58,9 +59,10 @@ pub struct QuoteMsg {
 /// Per-account event fanned out to every connection authorized for `account_id`.
 #[derive(Clone, Debug)]
 pub enum AccountEvent {
-    Order(OrderUpdate),
+    Order(Box<OrderUpdate>),
     Position(PositionUpdate),
     Account(AccountSnapshot),
+    Deal(DealUpdate),
 }
 
 impl AccountEvent {
@@ -69,6 +71,7 @@ impl AccountEvent {
             AccountEvent::Order(o) => &o.account_id,
             AccountEvent::Position(p) => &p.account_id,
             AccountEvent::Account(a) => &a.account_id,
+            AccountEvent::Deal(d) => &d.account_id,
         }
     }
 }
@@ -123,10 +126,69 @@ pub struct NewOrder {
     pub account_id: String,
     pub symbol: String,
     pub side: Side,
-    pub ord_type: OrderType,
+    pub ord_type: OrderKind,
     pub qty: Fixed,
     pub limit_price: Option<Fixed>,
     pub tif: Option<TimeInForce>,
+    pub stop_price: Option<Fixed>,
+    pub sl: Option<Fixed>,
+    pub tp: Option<Fixed>,
+    pub trailing_distance: Option<Fixed>,
+    pub oco_group: Option<u64>,
+    pub expire_at_ns: Option<u64>,
+}
+
+impl NewOrder {
+    /// Market order with no extras (tests, simple callers).
+    pub fn market(
+        request_id: &str,
+        account_id: &str,
+        symbol: &str,
+        side: Side,
+        qty: Fixed,
+    ) -> Self {
+        NewOrder {
+            request_id: request_id.into(),
+            account_id: account_id.into(),
+            symbol: symbol.into(),
+            side,
+            ord_type: OrderKind::Market,
+            qty,
+            limit_price: None,
+            tif: None,
+            stop_price: None,
+            sl: None,
+            tp: None,
+            trailing_distance: None,
+            oco_group: None,
+            expire_at_ns: None,
+        }
+    }
+}
+
+fn order_type(k: OrderKind) -> client_proto::OrderType {
+    use client_proto::OrderType as P;
+    match k {
+        OrderKind::Market => P::Market,
+        OrderKind::Limit => P::Limit,
+        OrderKind::Stop => P::Stop,
+        OrderKind::StopLimit => P::StopLimit,
+    }
+}
+
+fn margin_mode(m: MarginMode) -> client_proto::MarginMode {
+    match m {
+        MarginMode::Netting => client_proto::MarginMode::Netting,
+        MarginMode::Hedging => client_proto::MarginMode::Hedging,
+    }
+}
+
+fn dec(f: Option<Fixed>) -> Option<Decimal> {
+    f.map(Decimal::from)
+}
+
+fn id_str(id: Option<u64>) -> String {
+    id.map(|i| i.to_string()).unwrap_or_default()
 }
 
 fn status(s: OrderStatus) -> client_proto::OrderStatus {
@@ -163,15 +225,77 @@ pub fn order_update(o: &OrderView) -> OrderUpdate {
         last_price: o.last_price.map(Decimal::from),
         text: o.reason.clone().unwrap_or_default(),
         ts_ns: o.ts_ns,
+        order_type: order_type(o.kind) as i32,
+        qty: Some(o.qty.into()),
+        limit_price: dec(o.limit_price),
+        stop_price: dec(o.stop_price),
+        sl: dec(o.sl),
+        tp: dec(o.tp),
+        trailing_distance: dec(o.trailing_distance),
+        oco_group: o.oco_group.unwrap_or(0),
+        expire_at_ns: o.expire_at_ns.unwrap_or(0),
+        position_id: id_str(o.position_id),
+        stop_triggered: o.stop_triggered,
+        close_position_id: id_str(o.close_position_id),
+        created_ns: o.created_ns,
     }
 }
 
 pub fn position(p: &PositionView) -> Position {
+    let qty = if p.net_qty.raw() < 0 {
+        Fixed::ZERO - p.net_qty
+    } else {
+        p.net_qty
+    };
     Position {
         symbol: p.symbol.clone(),
         net_qty: Some(p.net_qty.into()),
         avg_price: Some(p.avg_price.into()),
         unrealized_pnl: Some(p.unrealized_pnl.into()),
+        position_id: p.position_id.to_string(),
+        side: client_proto::Side::from_domain(p.side) as i32,
+        qty: Some(qty.into()),
+        sl: dec(p.sl),
+        tp: dec(p.tp),
+        trailing_distance: dec(p.trailing_distance),
+        open_time_ns: p.open_ts_ns,
+    }
+}
+
+pub fn deal(d: &DealView) -> client_proto::Deal {
+    use client_proto::{DealEntry as E, DealReason as R};
+    client_proto::Deal {
+        deal_id: d.deal_id.to_string(),
+        order_id: d.order_id.to_string(),
+        client_request_id: d.client_order_id.clone(),
+        position_id: d.position_id.to_string(),
+        symbol: d.symbol.clone(),
+        side: client_proto::Side::from_domain(d.side) as i32,
+        entry: match d.entry {
+            DealEntry::In => E::In,
+            DealEntry::Out => E::Out,
+        } as i32,
+        qty: Some(d.qty.into()),
+        price: Some(d.price.into()),
+        realized_pnl: Some(d.pnl.into()),
+        commission: Some(d.commission.into()),
+        ts_ns: d.ts_ns,
+        reason: match d.reason {
+            OrderOrigin::Client => R::Client,
+            OrderOrigin::StopLoss => R::StopLoss,
+            OrderOrigin::TakeProfit => R::TakeProfit,
+            OrderOrigin::StopOut => R::StopOut,
+        } as i32,
+    }
+}
+
+pub fn account_info(a: &AccountView) -> AccountInfo {
+    AccountInfo {
+        account_id: a.account.clone(),
+        currency: a.currency.clone(),
+        margin_mode: margin_mode(a.margin_mode) as i32,
+        leverage: a.leverage,
+        group: a.group.clone(),
     }
 }
 
@@ -185,6 +309,8 @@ pub fn account_snapshot(a: &AccountView) -> AccountSnapshot {
         positions: a.positions.iter().map(position).collect(),
         free_margin: Some(a.free_margin.into()),
         margin_level: a.margin_level_pct.map(Decimal::from),
+        margin_mode: margin_mode(a.margin_mode) as i32,
+        leverage: a.leverage,
     }
 }
 
@@ -329,11 +455,16 @@ impl Hub {
 
     /// Current snapshot (balance, equity, margin, positions) from the core.
     pub async fn account_snapshot(&self, account_id: &str) -> Option<AccountSnapshot> {
+        self.account_state(account_id).await.map(|(_, s)| s)
+    }
+
+    /// Account parameters and snapshot from the core.
+    pub async fn account_state(&self, account_id: &str) -> Option<(AccountInfo, AccountSnapshot)> {
         let core = self.core.as_ref()?;
         core.account_snapshot(account_id)
             .await
             .ok()
-            .map(|a| account_snapshot(&a))
+            .map(|a| (account_info(&a), account_snapshot(&a)))
     }
 
     pub async fn place_order(&self, o: NewOrder) -> Result<(), CmdError> {
@@ -343,27 +474,30 @@ impl Hub {
         if !o.qty.is_positive() {
             return Err(CmdError::new(ErrorCode::BadRequest, "qty must be > 0"));
         }
-        let kind = match o.ord_type {
-            OrderType::Market => OrderKind::Market,
-            OrderType::Limit => {
-                if !o.limit_price.is_some_and(|p| p.is_positive()) {
-                    return Err(CmdError::new(
-                        ErrorCode::BadRequest,
-                        "limit order needs limit_price",
-                    ));
-                }
-                OrderKind::Limit
-            }
-        };
-        // Market orders execute immediately (IOC at the LP); limit orders
-        // rest in the core until triggered (GTC). Other TIFs are not
-        // supported yet.
+        let kind = o.ord_type;
+        let positive = |p: Option<Fixed>| p.is_some_and(|p| p.is_positive());
+        if matches!(kind, OrderKind::Limit | OrderKind::StopLimit) && !positive(o.limit_price) {
+            return Err(CmdError::new(ErrorCode::BadRequest, "limit_price required"));
+        }
+        if matches!(kind, OrderKind::Stop | OrderKind::StopLimit) && !positive(o.stop_price) {
+            return Err(CmdError::new(ErrorCode::BadRequest, "stop_price required"));
+        }
+        // Market orders execute immediately (IOC at the LP); pending orders
+        // rest in the core until triggered: GTC, or GTD with expire_at_ns.
+        let pending = kind != OrderKind::Market;
         if matches!(o.tif, Some(TimeInForce::Fok))
-            || (kind == OrderKind::Limit && matches!(o.tif, Some(TimeInForce::Ioc)))
+            || (pending && matches!(o.tif, Some(TimeInForce::Ioc)))
+            || (!pending && matches!(o.tif, Some(TimeInForce::Gtd)))
         {
             return Err(CmdError::new(
                 ErrorCode::BadRequest,
                 "unsupported time in force",
+            ));
+        }
+        if matches!(o.tif, Some(TimeInForce::Gtd)) && o.expire_at_ns.is_none() {
+            return Err(CmdError::new(
+                ErrorCode::BadRequest,
+                "GTD needs expire_at_ns",
             ));
         }
         let core = self.core.as_ref().ok_or_else(unavailable)?;
@@ -376,6 +510,12 @@ impl Hub {
             kind,
             qty: o.qty,
             limit_price: o.limit_price,
+            stop_price: o.stop_price,
+            sl: o.sl,
+            tp: o.tp,
+            trailing_distance: o.trailing_distance,
+            oco_group: o.oco_group,
+            expire_at_ns: o.expire_at_ns,
         })
         .await?;
         Ok(())
@@ -391,14 +531,59 @@ impl Hub {
         &self,
         account_id: &str,
         target: &str,
-        qty: Option<Fixed>,
-        limit_price: Option<Fixed>,
+        change: OrderModify,
     ) -> Result<(), CmdError> {
         let core = self.core.as_ref().ok_or_else(unavailable)?;
         self.metrics.orders_received.inc();
-        core.modify_order(account_id, target, qty, limit_price)
+        core.modify_order(account_id, target, change).await?;
+        Ok(())
+    }
+
+    pub async fn modify_position(
+        &self,
+        account_id: &str,
+        position_id: &str,
+        protection: Protection,
+    ) -> Result<(), CmdError> {
+        let core = self.core.as_ref().ok_or_else(unavailable)?;
+        let pid = parse_position_id(position_id)?;
+        self.metrics.orders_received.inc();
+        Ok(core.modify_position(account_id, pid, protection).await?)
+    }
+
+    pub async fn close_position(
+        &self,
+        account_id: &str,
+        position_id: &str,
+        qty: Option<Fixed>,
+        request_id: &str,
+    ) -> Result<(), CmdError> {
+        let core = self.core.as_ref().ok_or_else(unavailable)?;
+        let pid = parse_position_id(position_id)?;
+        if qty.is_some_and(|q| !q.is_positive()) {
+            return Err(CmdError::new(ErrorCode::BadRequest, "qty must be > 0"));
+        }
+        self.metrics.orders_received.inc();
+        core.close_position(account_id, pid, qty, request_id)
             .await?;
         Ok(())
+    }
+
+    /// Working orders of an account (OrderUpdate shape).
+    pub async fn orders(&self, account_id: &str) -> Result<Vec<OrderUpdate>, CmdError> {
+        let core = self.core.as_ref().ok_or_else(unavailable)?;
+        Ok(core
+            .orders(account_id)
+            .await?
+            .iter()
+            .map(order_update)
+            .collect())
+    }
+
+    /// One page of deal history.
+    pub async fn deals(&self, account_id: &str, q: DealQuery) -> Result<DealPage, CmdError> {
+        let core = self.core.as_ref().ok_or_else(unavailable)?;
+        Ok(core.deals(account_id, q).await?)
     }
 
     fn on_core_event(&self, ev: &CoreEvent) {
@@ -418,12 +603,16 @@ impl Hub {
                     candles,
                 );
             }
-            CoreEvent::Order(o) => AccountEvent::Order(order_update(o)),
+            CoreEvent::Order(o) => AccountEvent::Order(Box::new(order_update(o))),
             CoreEvent::Position(p) => AccountEvent::Position(PositionUpdate {
                 account_id: p.account.clone(),
                 position: Some(position(p)),
             }),
             CoreEvent::Account(a) => AccountEvent::Account(account_snapshot(a)),
+            CoreEvent::Deal(d) => AccountEvent::Deal(DealUpdate {
+                account_id: d.account.clone(),
+                deal: Some(deal(d)),
+            }),
         };
         let _ = self.accounts.send(Arc::new(ae));
     }
@@ -441,6 +630,11 @@ impl Hub {
             }
         }
     }
+}
+
+fn parse_position_id(s: &str) -> Result<u64, CmdError> {
+    s.parse()
+        .map_err(|_| CmdError::new(ErrorCode::UnknownOrder, "unknown position"))
 }
 
 fn decimals(f: Fixed) -> u32 {
@@ -555,16 +749,7 @@ mod tests {
             vec!["EUR/USD".to_string()],
             None,
         );
-        let o = |sym: &str| NewOrder {
-            request_id: "r".into(),
-            account_id: "A".into(),
-            symbol: sym.into(),
-            side: Side::Buy,
-            ord_type: OrderType::Market,
-            qty: px("1000"),
-            limit_price: None,
-            tif: None,
-        };
+        let o = |sym: &str| NewOrder::market("r", "A", sym, Side::Buy, px("1000"));
         assert_eq!(
             hub.place_order(o("XXXYYY")).await.unwrap_err().0,
             ErrorCode::UnknownSymbol

@@ -1,4 +1,4 @@
-# fxvps.ai client protocol — v1
+# fxvps.ai client protocol — v1 (current revision: v1.2)
 
 Schema: [`proto/fxvps_client_v1.proto`](proto/fxvps_client_v1.proto) (package `fxvps.client.v1`).
 Rust types are generated at build time with `prost-build` using the vendored `protoc`
@@ -64,6 +64,75 @@ Timestamps are `uint64` nanoseconds since the UNIX epoch. Symbols are compact (`
    - `AccountSnapshot` (server, v1.1): also pushed whenever balance / equity / margin change
      (`free_margin`, `margin_level` percent). Quotes are the account group's marked-up prices.
    - `Ping{nonce}` → `Pong{nonce}`. Server sends `Heartbeat` every 15 s.
+
+## v1.2 additions (order types, protection, positions, history)
+
+All additive: `Envelope.version` / `Hello.protocol_version` stay `1`. Servers older than
+v1.2 answer the new requests with `Error{BAD_REQUEST, "unexpected message"}` and never
+send the new fields; clients should treat absent fields as "not supported".
+
+- **Account parameters.** `AuthOk.accounts` lists one `AccountInfo{account_id, currency,
+  margin_mode, leverage, group}` per authorized account (same order as `account_ids`).
+  `AccountSnapshot` also carries `margin_mode` and `leverage`. `margin_mode`:
+  `NETTING` = at most one position per symbol (opposite fills reduce / reverse it);
+  `HEDGING` = every fill opens its own position, several per symbol and side.
+- **Order types.** `OrderType.STOP` (market order once the price reaches `stop_price`:
+  buy stop when ask >= stop, sell stop when bid <= stop) and `STOP_LIMIT` (once the stop
+  trades the order rests as a limit at `limit_price`; `OrderUpdate.stop_triggered`).
+  `LIMIT`/`STOP_LIMIT` need `limit_price`, `STOP`/`STOP_LIMIT` need `stop_price`
+  (else `BAD_REQUEST`). Triggers use the account group's (marked-up) prices.
+- **Protection.** `PlaceOrder.sl` / `tp` / `trailing_distance` (price units, e.g.
+  `0.0020` = 20 pips on EURUSD; rounded to whole points) are attached to the resulting
+  position. SL must be below / TP above the entry for buys (mirrored for sells), else
+  `ORDER_REJECTED`. The trailing stop is server side: once the price has moved
+  `trailing_distance` into profit, the SL follows the closing price at that distance and
+  never moves back. SL / TP / stop-out closes are market orders with server generated
+  `client_request_id`s (`sl-…`, `tp-…`, `so-…`) and `close_position_id` set.
+- **OCO.** `PlaceOrder.oco_group` (client chosen, per account, 0 = none): when one
+  pending order of the group starts executing, the others are cancelled (`CANCELED`).
+- **Expiry.** `PlaceOrder.expire_at_ns` (pending orders; `tif = GTD` requires it, GTC is
+  the default without it) → `OrderUpdate{status: EXPIRED}` at that time.
+  `FOK` is rejected; `IOC` / `GTD` only apply to market / pending orders respectively.
+- **ModifyOrder** modifies a pending order **in place** (same `order_id`, same
+  `target_request_id`): `qty`, `limit_price`, `stop_price`, `sl`, `tp`,
+  `trailing_distance`, `expire_at_ns` / `clear_expiry`. Absent fields keep their value;
+  with `replace_protection = true` the given `sl` / `tp` / `trailing_distance` replace
+  the current ones and absent ones are removed. The full order is re-validated (margin,
+  SL/TP side); a rejected modify leaves the order unchanged. Success: `Ack` +
+  `OrderUpdate{status: NEW}` with the new parameters. (v1.1 servers implemented modify
+  as cancel + re-place.)
+- **OrderUpdate** now carries the order's full parameters: `order_type`, `qty`,
+  `limit_price`, `stop_price`, `sl`, `tp`, `trailing_distance`, `oco_group`,
+  `expire_at_ns`, `created_ns`, `stop_triggered`, `position_id` (position opened /
+  increased) and `close_position_id` (position being closed).
+- **Positions.** `Position.position_id` identifies a position; hedging accounts can hold
+  several per symbol, so clients must key positions by `position_id` (fall back to
+  `symbol` when it is empty, i.e. pre-v1.2 servers). New fields: `side`, `qty`
+  (unsigned), `sl`, `tp`, `trailing_distance`, `open_time_ns`. `net_qty` is the signed
+  quantity of *this* position; a `PositionUpdate` with `net_qty = 0` means the position
+  is closed. A netting position that is reversed is closed (flat update) and a new
+  position id is opened.
+- **ModifyPosition**`{request_id, account_id, position_id, sl?, tp?, trailing_distance?}`
+  sets the position's protection (full replacement: an absent field removes it).
+  `Ack` + `PositionUpdate`; SL/TP on the wrong side of the current closing price →
+  `ORDER_REJECTED`; unknown position → `UNKNOWN_ORDER`.
+- **ClosePosition**`{request_id, account_id, position_id, qty?}` closes the whole
+  position (qty absent) or part of it at market. `request_id` becomes the closing
+  order's `client_request_id` (must be unique like a PlaceOrder's). More than the open
+  (not already closing) quantity → `ORDER_REJECTED`.
+- **OrderListRequest**`{request_id, account_id}` → `OrderList{orders}`: every working
+  (pending) order in `OrderUpdate` shape.
+- **Deals.** Each execution against a position is a `Deal{deal_id, order_id,
+  client_request_id, position_id, symbol, side, entry IN|OUT, qty, price, realized_pnl,
+  commission, ts_ns, reason CLIENT|STOP_LOSS|TAKE_PROFIT|STOP_OUT}` (account currency;
+  commission negative = cost; the fill's commission is booked on its first deal). A
+  netting reversal yields an `OUT` and an `IN` deal. New deals are pushed as
+  `DealUpdate{account_id, deal}`.
+- **DealHistoryRequest**`{request_id, account_id, from_ns?, to_ns?, limit, cursor}` →
+  `DealHistory{deals, next_cursor}`: oldest first, at most `limit` (default 500, max
+  5000). Repeat with `cursor = next_cursor` until it is empty. History comes from the
+  engine's journaled state, so it survives restarts.
+- `OrderList` / `DealHistory` for an account not in the token → `FORBIDDEN`.
 
 ## Authorization
 

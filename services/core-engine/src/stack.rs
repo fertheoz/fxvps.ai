@@ -25,6 +25,9 @@ pub struct Seed {
     pub deposit: Money,
     pub group: GroupConfig,
     pub symbols: Vec<SymbolSpec>,
+    /// Additional groups with their accounts (same deposit), e.g. a
+    /// hedging variant of `group`.
+    pub extra: Vec<(GroupConfig, Vec<(String, u64)>)>,
 }
 
 impl Seed {
@@ -44,7 +47,26 @@ impl Seed {
                 .iter()
                 .filter_map(|i| fx_spec(&i.symbol, i.tick_size))
                 .collect(),
+            extra: Vec::new(),
         }
+    }
+
+    /// Adds `n` hedging accounts `DEMO-H1..n` (engine numbers 101..) in a
+    /// hedging copy of the demo group (`demo-hedge`).
+    pub fn with_hedging(mut self, n: u64) -> Seed {
+        let mut g = self.group.clone();
+        g.name = "demo-hedge".into();
+        g.margin_mode = MarginMode::Hedging;
+        let accounts = (1..=n).map(|i| (format!("DEMO-H{i}"), 100 + i)).collect();
+        self.extra.push((g, accounts));
+        self
+    }
+
+    /// Every seeded (external id, engine number).
+    pub fn all_accounts(&self) -> impl Iterator<Item = &(String, u64)> {
+        self.accounts
+            .iter()
+            .chain(self.extra.iter().flat_map(|(_, a)| a.iter()))
     }
 
     fn commands(&self) -> Vec<Command> {
@@ -55,10 +77,15 @@ impl Seed {
             .map(Command::AddSymbol)
             .collect();
         v.push(Command::SetGroup(self.group.clone()));
-        for (_, no) in &self.accounts {
+        for (g, _) in &self.extra {
+            v.push(Command::SetGroup(g.clone()));
+        }
+        let groups = std::iter::once((&self.group, &self.accounts))
+            .chain(self.extra.iter().map(|(g, a)| (g, a)));
+        for (g, no) in groups.flat_map(|(g, a)| a.iter().map(move |(_, no)| (g, no))) {
             v.push(Command::OpenAccount {
                 account: *no,
-                group: self.group.name.clone(),
+                group: g.name.clone(),
             });
             v.push(Command::Deposit {
                 account: *no,
@@ -157,7 +184,7 @@ impl CoreStack {
         );
         let names = AccountNames::default();
         if let Some(seed) = &cfg.seed {
-            for (n, no) in &seed.accounts {
+            for (n, no) in seed.all_accounts() {
                 names.insert(n, *no);
             }
         }
