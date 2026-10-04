@@ -16,7 +16,7 @@ come from a server-sent events stream instead of polling.
 
 ```sh
 # terminal 1 (repo root): dev auth + demo data + CORS for next dev
-CORE_DATA_DIR=/tmp/core CORE_DEV_AUTH=1 CORE_SEED=1 \
+CORE_DATA_DIR=/tmp/core CORE_DEV_AUTH=1 CORE_DEV_AUTH_ADMIN=1 CORE_SEED=1 \
 CORE_CORS_ORIGINS=http://localhost:3000 cargo run -p core-engine
 # terminal 2 (apps/backoffice)
 NEXT_PUBLIC_API_URL=http://127.0.0.1:8090 pnpm dev
@@ -25,7 +25,9 @@ NEXT_PUBLIC_API_URL=http://127.0.0.1:8090 pnpm dev
 Without a token the UI shows a sign-in screen: paste a JWT from your IdP, or
 (dev builds, or `NEXT_PUBLIC_DEV_AUTH=1`) pick a role and press *Get dev
 token*, which calls `POST /auth/dev-token` (served only with
-`CORE_DEV_AUTH=1`). The role shown in the UI comes from the token; the role
+`CORE_DEV_AUTH=1` on a loopback `CORE_ADMIN_ADDR`, signed with a random
+per-process key; `admin` only with `CORE_DEV_AUTH_ADMIN=1`). The token is kept
+in memory + `sessionStorage` (this tab), never `localStorage`. The role shown in the UI comes from the token; the role
 switcher exists only in mock mode. `pnpm e2e:live` builds the live export into
 `out-live/`, starts core-engine (`cargo run`, or `$CORE_ENGINE_BIN`) with dev
 auth and seeded data and runs `e2e-live/` against it.
@@ -38,9 +40,12 @@ auth and seeded data and runs `e2e-live/` against it.
 - Prices/lots are decimal numbers for display only; the core uses fixed-point.
 - Timestamps: ISO-8601 UTC strings.
 - Auth: bearer JWT (`Authorization: Bearer …`), claims `sub`, `name`, `role`
-  (`admin|dealer|risk|support|readonly`), `exp`. core-engine verifies RS256
-  (`CORE_JWT_RS256_PUBLIC_KEY_FILE`, IdP-issued, MFA enforced by the IdP) or
-  HS256 (`CORE_JWT_HS256_SECRET`). The server derives actor + role from the
+  (`admin|dealer|risk|support|readonly`) or the identity service `roles` array,
+  `exp`, `amr`. Production: identity JWKS (`CORE_JWT_JWKS_URL`, RS256) with
+  `CORE_JWT_ISSUER` / `CORE_JWT_AUDIENCE` checked and `CORE_REQUIRE_MFA=1`
+  (mutating permissions need `amr` ∋ `otp|mfa|hwk`, else 403 `mfa_required`);
+  also `CORE_JWT_JWKS_FILE`, `CORE_JWT_RS256_PUBLIC_KEY_FILE` or HS256
+  (`CORE_JWT_HS256_SECRET`). Leeway 5 s. The server derives actor + role from the
   token and **re-checks RBAC** on every endpoint; client-side guards are UX
   only. CORS origins: `CORE_CORS_ORIGINS`.
 - Errors: `4xx/5xx` with `{ "error": { "code": string, "message": string } }`.
@@ -85,8 +90,9 @@ auth and seeded data and runs `e2e-live/` against it.
 | GET | `/v1/settings` | `getSettings()` | settings.view | `Settings` |
 | PUT | `/v1/settings` | `saveSettings(s)` | settings.edit | `Settings` |
 | GET | `/v1/me` | — | authenticated | `{sub, name, role, permissions}` |
-| GET | `/v1/stream?access_token=` | `subscribe()` | authenticated | SSE: `event: invalidate`, `data: {"topics": [AdminApi method names]}` (`"*"` = everything). Sent on admin mutations and whenever the engine sequence moves (client orders, fills, quotes). The UI invalidates those queries and stops polling while connected |
-| POST | `/auth/dev-token` | — | none; **only with `CORE_DEV_AUTH=1`** (404 otherwise) | `{role, sub?, name?}` → `{token, expiresAt}` (HS256, 12 h) |
+| POST | `/v1/stream/ticket` | `subscribe()` | authenticated | `{ticket, expiresInMs}`: single-use, 30 s; the bearer token never goes into a URL |
+| GET | `/v1/stream?ticket=` | `subscribe()` | ticket (or `Authorization` header) | SSE: `event: invalidate`, `data: {"topics": [AdminApi method names]}` (`"*"` = everything). Sent on admin mutations and whenever the engine sequence moves (client orders, fills, quotes). The UI invalidates those queries and stops polling while connected |
+| POST | `/auth/dev-token` | — | none; **only with `CORE_DEV_AUTH=1`** (404 otherwise) | `{role, name?}` → `{token, expiresAt}` (random dev key, 8 h; `sub` = `dev-<role>`, chosen by the server; `admin` → 403 unless `CORE_DEV_AUTH_ADMIN=1`) |
 
 Legacy engine routes (`/accounts`, `/commands`, ...) require the `admin`
 role; `/health` is public.

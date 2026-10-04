@@ -6,6 +6,10 @@ import { ROLES, type Role } from "./rbac";
  * Bearer token for the HTTP adapter (live core-engine). The server derives the
  * actor and role from the token and re-checks every permission; the decoded
  * claims here are only used to render the UI for that role.
+ *
+ * Storage (finding G6): memory + sessionStorage (this tab only, gone when the
+ * tab closes), never localStorage. A token left in localStorage by an older
+ * build is deleted on first read.
  */
 export interface TokenClaims {
   sub: string;
@@ -47,7 +51,12 @@ export function getToken(): string | null {
   if (!loaded && typeof window !== "undefined") {
     loaded = true;
     try {
-      token = window.localStorage.getItem(KEY);
+      window.localStorage.removeItem(KEY);
+    } catch {
+      /* storage unavailable */
+    }
+    try {
+      token = window.sessionStorage.getItem(KEY);
     } catch {
       /* storage unavailable */
     }
@@ -59,12 +68,18 @@ export function setToken(t: string | null) {
   token = t;
   loaded = true;
   try {
-    if (t) window.localStorage.setItem(KEY, t);
-    else window.localStorage.removeItem(KEY);
+    if (t) window.sessionStorage.setItem(KEY, t);
+    else window.sessionStorage.removeItem(KEY);
   } catch {
-    /* ignore */
+    /* ignore: the token stays in memory only */
   }
   listeners.forEach((l) => l());
+}
+
+/** Test hook: forget the in-memory token so the next read hits storage again. */
+export function resetTokenCacheForTests() {
+  token = null;
+  loaded = false;
 }
 
 export function useToken(): string | null {
@@ -78,12 +93,15 @@ export function useToken(): string | null {
   );
 }
 
-/** `POST /auth/dev-token` (only served by core-engine with CORE_DEV_AUTH=1). */
+/**
+ * `POST /auth/dev-token` (only served by core-engine with CORE_DEV_AUTH=1 on a
+ * loopback address). The server derives `sub` from the role.
+ */
 export async function fetchDevToken(baseUrl: string, role: Role, name?: string, fetchImpl: typeof fetch = fetch): Promise<string> {
   const res = await fetchImpl(`${baseUrl}/auth/dev-token`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ role, name, sub: `dev-${role}` }),
+    body: JSON.stringify({ role, name }),
   });
   if (!res.ok) throw new Error(res.status === 404 ? "Dev auth is disabled on the server (CORE_DEV_AUTH=1)" : `dev-token → ${res.status}`);
   const body = (await res.json()) as { token: string };

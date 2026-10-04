@@ -13,6 +13,8 @@ const env = {
   CORE_DATA_DIR: mkdtempSync(join(tmpdir(), "core-e2e-")),
   CORE_ADMIN_ADDR: addr,
   CORE_DEV_AUTH: "1",
+  // dev admin tokens are opt-in (finding G2)
+  CORE_DEV_AUTH_ADMIN: "1",
   CORE_SEED: "1",
   CORE_CORS_ORIGINS: origin,
   RUST_LOG: process.env.RUST_LOG ?? "info",

@@ -15,7 +15,7 @@ async function devLogin(page: Page, role: string, name: string) {
 async function apiCall(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(
     async ([api, m, p, b]) => {
-      const token = localStorage.getItem("fxvps-bo-token");
+      const token = sessionStorage.getItem("fxvps-bo-token");
       const res = await fetch(`${api}${p}`, {
         method: m as string,
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "idempotency-key": crypto.randomUUID() },
