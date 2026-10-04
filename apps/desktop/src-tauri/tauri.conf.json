@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "fxvps",
+  "version": "0.1.0",
+  "identifier": "ai.fxvps.desktop",
+  "build": {
+    "frontendDist": "../../terminal/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": {
+      "script": "pnpm --dir ../terminal dev --port 5173 --strictPort",
+      "cwd": ".."
+    },
+    "beforeBuildCommand": {
+      "script": "pnpm --dir ../terminal build",
+      "cwd": ".."
+    }
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "fxvps",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 600,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost wss: ws://localhost:*; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:",
+      "capabilities": ["main", "chart-windows"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "category": "Finance",
+    "shortDescription": "fxvps.ai trading terminal",
+    "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY",
+      "endpoints": ["https://releases.fxvps.ai/desktop/{{target}}/{{arch}}/{{current_version}}"],
+      "windows": { "installMode": "passive" }
+    }
+  }
+}
