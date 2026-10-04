@@ -44,13 +44,13 @@ services:
     existingSecret: fix-gateway-lp-credentials   # FIX_GATEWAY_MD_PASSWORD / FIX_GATEWAY_TRADE_PASSWORD
     ingressFrom: []
 
-  client-gateway:         # BEKLEMEDE: services/client-gateway başka dalda
+  client-gateway:
     enabled: false
     image: fxvps-client-gateway
     replicas: 2
     ports: { http: 8080 }
     metricsPort: http
-    probes: { type: http, port: http, liveness: /healthz, readiness: /readyz }
+    probes: { type: http, port: http, liveness: /healthz, readiness: /healthz }
     resources:
       requests: { cpu: 250m, memory: 128Mi }
       limits: { memory: 512Mi }
