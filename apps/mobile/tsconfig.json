@@ -1,0 +1,16 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": ["jest"],
+    "paths": {
+      "@fxvps/trading-core": ["../../packages/trading-core/src/index.ts"],
+      "big.js": ["./node_modules/@types/big.js/index.d.ts"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", "../../packages/trading-core/src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "../../packages/trading-core/src/**/*.test.ts", "../../packages/trading-core/src/test"]
+}

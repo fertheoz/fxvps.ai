@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "chart-windows",
+  "description": "Detached chart windows: read-only core access plus window state; no credential or updater commands.",
+  "windows": ["chart-*"],
+  "platforms": ["linux", "macOS", "windows"],
+  "permissions": ["core:default", "window-state:default", "allow-chart-commands"]
+}
