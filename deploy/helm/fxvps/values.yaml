@@ -10,9 +10,44 @@ serviceMonitor:
 
 networkPolicy:
   enabled: true
+  # Varsayılan: hem Ingress hem Egress reddedilir; aşağıdakiler açıkça izinlidir.
+  # Prometheus (metrik portlarına ingress).
+  prometheus:
+    namespaceSelector: {}
+    podSelector: { app.kubernetes.io/name: prometheus }
+  # DNS (kube-dns / CoreDNS).
+  dns:
+    namespaceSelector: { kubernetes.io/metadata.name: kube-system }
+    podSelector: { k8s-app: kube-dns }
+  # NATS (global.natsUrl), tüm servislere egress.
+  nats:
+    podSelector: { app.kubernetes.io/name: nats }
+    port: 4222
+  # identity servisi (JWKS): egressIdentity: true olan servislere.
+  identity:
+    namespaceSelector: {}
+    podSelector: { app.kubernetes.io/name: identity }
+    port: 8090
 
-# Her servis: enabled, image, replicas, ports, probes, resources, pdb, env, existingSecret.
-# Sırlar burada DEĞİL: existingSecret (External Secrets / SOPS ile oluşturulan Secret) adı verilir.
+# Kimlik doğrulama (G1/G5). Chart'ta DEV anahtarı YOK: client-gateway ve core-engine
+# etkinse jwksUrl + issuer zorunludur (`required`), aksi hâlde şablon üretilmez.
+auth:
+  jwksUrl: ""             # ör. http://identity:8090/.well-known/jwks.json
+  issuer: ""              # identity IDENTITY_ISSUER, ör. https://id.fxvps.ai
+  audience: fxvps         # identity IDENTITY_AUDIENCE
+  requireMfa: true        # core-engine: para/ayar değiştiren izinler için amr MFA
+
+# Pod güvenlik bağlamı: distroless `nonroot` = 65532 (imajlarda USER nonroot:nonroot,
+# sayısal değil → runAsNonRoot doğrulaması için sayısal UID şart). Statik web = 101.
+podSecurity:
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+# Her servis: enabled, image, replicas, ports, probes, resources, pdb, env, existingSecret,
+# ingressFrom, egressTo (chart içi servisler), egressIdentity, egressCIDRs, runAsUser,
+# persistence. Sırlar burada DEĞİL: existingSecret (External Secrets / SOPS ile oluşturulan
+# Secret) adı verilir ve zorunludur (optional: false) — eksikse pod başlamaz.
 services:
   lp-simulator:
     enabled: true
@@ -28,6 +63,7 @@ services:
     env: { RUST_LOG: info }
     existingSecret: ""
     ingressFrom: [fix-gateway]
+    egressTo: []
 
   fix-gateway:
     enabled: true
@@ -43,21 +79,29 @@ services:
     env: { RUST_LOG: info }
     existingSecret: fix-gateway-lp-credentials   # FIX_GATEWAY_MD_PASSWORD / FIX_GATEWAY_TRADE_PASSWORD
     ingressFrom: []
+    egressTo: [lp-simulator]
+    # Gerçek LP: FIX uç noktalarının CIDR'ları, ör. [{ cidr: 203.0.113.10/32, ports: [9880, 9881] }]
+    egressCIDRs: []
 
   client-gateway:
     enabled: false
     image: fxvps-client-gateway
     replicas: 2
-    ports: { http: 8080 }
-    metricsPort: http
+    # /metrics ayrı portta (FXVPS_METRICS_LISTEN); internete açık olan yalnız http.
+    ports: { http: 8080, metrics: 9090 }
+    metricsPort: metrics
     probes: { type: http, port: http, liveness: /healthz, readiness: /healthz }
     resources:
       requests: { cpu: 250m, memory: 128Mi }
       limits: { memory: 512Mi }
     pdb: { enabled: true, minAvailable: 1 }
-    env: { RUST_LOG: info }
+    env:
+      RUST_LOG: info
+      FXVPS_METRICS_LISTEN: "0.0.0.0:9090"
     existingSecret: ""
     ingressFrom: ["*"]
+    egressTo: [core-engine]
+    egressIdentity: true
 
   core-engine:
     enabled: false
@@ -70,9 +114,20 @@ services:
       requests: { cpu: "1", memory: 512Mi }
       limits: { memory: 2Gi }
     pdb: { enabled: true, maxUnavailable: 0 }
-    env: { RUST_LOG: info }
+    env:
+      RUST_LOG: info
+      CORE_ADMIN_ADDR: "0.0.0.0:8080"
+      CORE_DATA_DIR: /home/nonroot/data
     existingSecret: ""
     ingressFrom: [client-gateway]
+    egressTo: [fix-gateway]
+    egressIdentity: true
+    # Defter/journal kalıcı birimde (G11): yeniden başlatmada veri kaybı yok.
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClass: ""
+      mountPath: /home/nonroot/data
 
   terminal:
     enabled: false
@@ -88,6 +143,8 @@ services:
     env: {}
     existingSecret: ""
     ingressFrom: ["*"]
+    egressTo: []
+    runAsUser: 101     # nginx-unprivileged
 
   backoffice:
     enabled: false
@@ -103,3 +160,5 @@ services:
     env: {}
     existingSecret: ""
     ingressFrom: ["*"]
+    egressTo: []
+    runAsUser: 101     # nginx-unprivileged

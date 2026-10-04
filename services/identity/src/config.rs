@@ -33,6 +33,13 @@ pub struct Config {
     pub cookie_secure: bool,
     /// `IDENTITY_TRUST_PROXY`: take the client IP from `X-Forwarded-For`.
     pub trust_proxy: bool,
+    /// `IDENTITY_TRUSTED_PROXY_HOPS` (default 1): number of trusted proxies that
+    /// append to `X-Forwarded-For`; the client IP is that many entries from the
+    /// **right** (left entries are client controlled).
+    pub trusted_proxy_hops: usize,
+    /// `IDENTITY_ADMIN_REQUIRE_MFA` (default true): `/v1/admin/*` with a user
+    /// token needs an MFA `amr` (`otp`/`mfa`/`hwk`); the service token is exempt.
+    pub admin_require_mfa: bool,
     pub access_ttl: Duration,
     pub refresh_ttl: Duration,
     pub verify_ttl: Duration,
@@ -68,6 +75,8 @@ impl Default for Config {
             service_token: None,
             cookie_secure: true,
             trust_proxy: false,
+            trusted_proxy_hops: 1,
+            admin_require_mfa: true,
             access_ttl: Duration::from_secs(300),
             refresh_ttl: Duration::from_secs(30 * 24 * 3600),
             verify_ttl: Duration::from_secs(24 * 3600),
@@ -138,6 +147,16 @@ impl Config {
         }
         if let Some(v) = var("IDENTITY_TRUST_PROXY") {
             c.trust_proxy = matches!(v.as_str(), "1" | "true" | "yes");
+        }
+        if let Some(v) = var("IDENTITY_TRUSTED_PROXY_HOPS") {
+            c.trusted_proxy_hops = v
+                .parse::<usize>()
+                .ok()
+                .filter(|n| *n >= 1)
+                .ok_or("IDENTITY_TRUSTED_PROXY_HOPS must be an integer >= 1")?;
+        }
+        if let Some(v) = var("IDENTITY_ADMIN_REQUIRE_MFA") {
+            c.admin_require_mfa = !matches!(v.as_str(), "0" | "false" | "no");
         }
         c.access_ttl = secs("IDENTITY_ACCESS_TTL_SECS", c.access_ttl)?;
         c.refresh_ttl = secs("IDENTITY_REFRESH_TTL_SECS", c.refresh_ttl)?;

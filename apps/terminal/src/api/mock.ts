@@ -3,6 +3,7 @@ import type {
   Bar,
   Deal,
   Depth,
+  OrderChanges,
   OrderRequest,
   OrderResult,
   PendingOrder,
@@ -98,9 +99,9 @@ export class MockTradingApi implements TradingApi {
       this.orders.set(a.id, []);
       this.deals.set(a.id, []);
     };
-    mk({ id: '100001', name: 'Main', currency: 'USD', balance: 10_000_000, leverage: 100, isDemo: true });
-    mk({ id: '100002', name: 'Scalping', parentId: '100001', currency: 'USD', balance: 1_000_000, leverage: 200, isDemo: true });
-    mk({ id: '100003', name: 'Swing', parentId: '100001', currency: 'USD', balance: 2_500_000, leverage: 30, isDemo: true });
+    mk({ id: '100001', name: 'Main', currency: 'USD', balance: 10_000_000, leverage: 100, isDemo: true, marginMode: 'hedging' });
+    mk({ id: '100002', name: 'Scalping', parentId: '100001', currency: 'USD', balance: 1_000_000, leverage: 200, isDemo: true, marginMode: 'hedging' });
+    mk({ id: '100003', name: 'Swing', parentId: '100001', currency: 'USD', balance: 2_500_000, leverage: 30, isDemo: true, marginMode: 'hedging' });
   }
 
   // ---- lifecycle -------------------------------------------------------
@@ -220,6 +221,8 @@ export class MockTradingApi implements TradingApi {
       limitPrice: req.limitPrice,
       sl: req.sl,
       tp: req.tp,
+      trailing: req.trailing,
+      ocoGroup: req.ocoGroup,
       expiry: req.expiry,
       createdAt: this.now(),
     };
@@ -229,7 +232,7 @@ export class MockTradingApi implements TradingApi {
     return { ok: true, orderId: order.id };
   }
 
-  async modifyPosition(accountId: string, positionId: string, sl?: number, tp?: number): Promise<OrderResult> {
+  async modifyPosition(accountId: string, positionId: string, sl?: number, tp?: number, trailing?: number): Promise<OrderResult> {
     await this.delay();
     const pos = this.positions.get(accountId)?.find((p) => p.id === positionId);
     if (!pos) return this.reject('Position not found');
@@ -238,9 +241,11 @@ export class MockTradingApi implements TradingApi {
     const buy = pos.side === 'buy';
     if (sl !== undefined && (buy ? sl >= cp : sl <= cp)) return this.reject('Invalid SL');
     if (tp !== undefined && (buy ? tp <= cp : tp >= cp)) return this.reject('Invalid TP');
+    if (trailing !== undefined && !(trailing > 0)) return this.reject('Invalid trailing distance');
     pos.sl = sl;
     pos.tp = tp;
-    this.journal('info', `#${pos.id} modified sl: ${sl ?? '-'} tp: ${tp ?? '-'}`);
+    pos.trailing = trailing;
+    this.journal('info', `#${pos.id} modified sl: ${sl ?? '-'} tp: ${tp ?? '-'}${trailing ? ` trailing: ${trailing}` : ''}`);
     this.emitPositions(accountId);
     return { ok: true, positionId };
   }
@@ -256,15 +261,16 @@ export class MockTradingApi implements TradingApi {
     return { ok: true, positionId, price };
   }
 
-  async modifyOrder(
-    accountId: string,
-    orderId: string,
-    changes: Partial<Pick<PendingOrder, 'price' | 'limitPrice' | 'sl' | 'tp' | 'expiry'>>,
-  ): Promise<OrderResult> {
+  async modifyOrder(accountId: string, orderId: string, changes: OrderChanges): Promise<OrderResult> {
     await this.delay();
     const o = this.orders.get(accountId)?.find((x) => x.id === orderId);
     if (!o) return this.reject('Order not found');
+    const spec = this.syms.get(o.symbol)!.spec;
+    const v = changes.volume;
+    if (v !== undefined && (v < spec.minVolume || v > spec.maxVolume || v % spec.volumeStep !== 0)) return this.reject('Invalid volume');
+    if ('price' in changes && !(changes.price! > 0)) return this.reject('Invalid price');
     Object.assign(o, changes);
+    if (o.volume === undefined) o.volume = v ?? spec.minVolume;
     this.emitOrders(accountId);
     return { ok: true, orderId };
   }
@@ -333,7 +339,7 @@ export class MockTradingApi implements TradingApi {
     const orders = this.orders.get(acc.id)!;
     let ordersChanged = false;
     for (const o of [...orders]) {
-      if (!changed.has(o.symbol)) continue;
+      if (!changed.has(o.symbol) || !orders.includes(o)) continue; // gone (OCO sibling)
       if (o.expiry !== undefined && o.expiry <= now) {
         orders.splice(orders.indexOf(o), 1);
         this.journal('info', `#${o.id} expired`);
@@ -366,6 +372,13 @@ export class MockTradingApi implements TradingApi {
       // Limits fill at the better of market and limit price; stops at market.
       const fill = limitLike ? (buy ? Math.min(px, target) : Math.max(px, target)) : px;
       this.openPosition(acc, o, fill, 'order');
+      if (o.ocoGroup) {
+        for (const x of [...orders]) {
+          if (x.ocoGroup !== o.ocoGroup) continue;
+          orders.splice(orders.indexOf(x), 1);
+          this.journal('info', `#${x.id} cancelled (OCO with #${o.id})`);
+        }
+      }
     }
     if (ordersChanged) this.emitOrders(acc.id);
 
@@ -375,6 +388,17 @@ export class MockTradingApi implements TradingApi {
       const q = this.syms.get(p.symbol)!.quote;
       const cp = closePrice(p.side, q);
       const buy = p.side === 'buy';
+      if (p.trailing) {
+        // Server-side style trailing stop: follows once `trailing` in profit, never moves back.
+        const digits = this.syms.get(p.symbol)!.spec.digits;
+        const cand = Number((buy ? cp - p.trailing : cp + p.trailing).toFixed(digits));
+        const inProfit = buy ? cand > p.openPrice : cand < p.openPrice;
+        const better = p.sl === undefined || (buy ? cand > p.sl : cand < p.sl);
+        if (inProfit && better) {
+          p.sl = cand;
+          this.emitPositions(acc.id);
+        }
+      }
       if (p.sl !== undefined && (buy ? cp <= p.sl : cp >= p.sl)) this.closeVolume(p, p.volume, 'sl');
       else if (p.tp !== undefined && (buy ? cp >= p.tp : cp <= p.tp)) this.closeVolume(p, p.volume, 'tp');
     }
@@ -399,7 +423,12 @@ export class MockTradingApi implements TradingApi {
     return profitMinor(st.spec, p.side, p.volume, p.openPrice, closePrice(p.side, st.quote), acc.currency, rates);
   }
 
-  private openPosition(acc: Account, req: Pick<OrderRequest, 'symbol' | 'side' | 'volume' | 'sl' | 'tp'>, price: number, reason: Deal['reason']): Position {
+  private openPosition(
+    acc: Account,
+    req: Pick<OrderRequest, 'symbol' | 'side' | 'volume' | 'sl' | 'tp' | 'trailing'>,
+    price: number,
+    reason: Deal['reason'],
+  ): Position {
     const pos: Position = {
       id: this.id(),
       accountId: acc.id,
@@ -410,6 +439,7 @@ export class MockTradingApi implements TradingApi {
       openTime: this.now(),
       sl: req.sl,
       tp: req.tp,
+      trailing: req.trailing,
       commission: commissionMinor(req.volume),
       swap: 0,
     };

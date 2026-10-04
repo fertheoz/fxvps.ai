@@ -127,6 +127,60 @@ pub struct Order {
     pub working: bool,
     pub reject_reason: Option<String>,
     pub created_ts: u64,
+    /// Who created the order (client or a server-side close).
+    #[serde(default)]
+    pub origin: OrderOrigin,
+}
+
+/// Origin of an order (deal reason in the history).
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+pub enum OrderOrigin {
+    #[default]
+    Client,
+    StopLoss,
+    TakeProfit,
+    StopOut,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum DealEntry {
+    /// Opened / increased a position.
+    In,
+    /// Reduced / closed a position.
+    Out,
+}
+
+/// One execution against a position (history record).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub struct Deal {
+    pub id: u64,
+    pub order_id: OrderId,
+    pub account: AccountNo,
+    pub position_id: PositionId,
+    pub symbol: String,
+    pub side: Side,
+    pub entry: DealEntry,
+    pub volume: Qty,
+    pub price: Price,
+    /// Realized P&L (zero for `In`), account currency.
+    pub pnl: Money,
+    /// Commission charged on this deal (negative = cost), account currency.
+    pub commission: Money,
+    pub ts: u64,
+    pub reason: OrderOrigin,
+}
+
+/// New parameters of a pending order (`Command::ModifyOrder`); every field
+/// is the full new value.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub struct OrderChange {
+    pub volume: Qty,
+    pub limit_price: Option<Price>,
+    pub stop_price: Option<Price>,
+    pub sl: Option<Price>,
+    pub tp: Option<Price>,
+    pub trailing_points: Option<i64>,
+    pub expire_at: Option<u64>,
 }
 
 impl Order {
@@ -223,6 +277,12 @@ pub enum Command {
         account: AccountNo,
         order_id: OrderId,
     },
+    /// Changes a pending order in place (keeps its id).
+    ModifyOrder {
+        account: AccountNo,
+        order_id: OrderId,
+        change: OrderChange,
+    },
     ModifyPosition {
         account: AccountNo,
         position_id: PositionId,
@@ -295,6 +355,12 @@ pub enum Event {
     },
     OrderCancelled {
         order_id: OrderId,
+    },
+    OrderModified {
+        order_id: OrderId,
+    },
+    DealAdded {
+        deal_id: u64,
     },
     OrderExpired {
         order_id: OrderId,

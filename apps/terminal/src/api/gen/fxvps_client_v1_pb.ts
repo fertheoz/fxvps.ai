@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file fxvps_client_v1.proto.
  */
 export const file_fxvps_client_v1: GenFile = /*@__PURE__*/
-  fileDesc("ChVmeHZwc19jbGllbnRfdjEucHJvdG8SD2Z4dnBzLmNsaWVudC52MSInCgdEZWNpbWFsEg0KBXZhbHVlGAEgASgDEg0KBXNjYWxlGAIgASgNItAICghFbnZlbG9wZRIPCgd2ZXJzaW9uGAEgASgNEgsKA3NlcRgCIAEoBBInCgVoZWxsbxgKIAEoCzIWLmZ4dnBzLmNsaWVudC52MS5IZWxsb0gAEiUKBGF1dGgYCyABKAsyFS5meHZwcy5jbGllbnQudjEuQXV0aEgAEioKB2F1dGhfb2sYDCABKAsyFy5meHZwcy5jbGllbnQudjEuQXV0aE9rSAASLwoJc3Vic2NyaWJlGBQgASgLMhouZnh2cHMuY2xpZW50LnYxLlN1YnNjcmliZUgAEjMKC3Vuc3Vic2NyaWJlGBUgASgLMhwuZnh2cHMuY2xpZW50LnYxLlVuc3Vic2NyaWJlSAASMgoLcXVvdGVfYmF0Y2gYFiABKAsyGy5meHZwcy5jbGllbnQudjEuUXVvdGVCYXRjaEgAEjgKDmNhbmRsZV9yZXF1ZXN0GB4gASgLMh4uZnh2cHMuY2xpZW50LnYxLkNhbmRsZVJlcXVlc3RIABI6Cg9jYW5kbGVfcmVzcG9uc2UYHyABKAsyHy5meHZwcy5jbGllbnQudjEuQ2FuZGxlUmVzcG9uc2VIABJBChNzeW1ib2xfbGlzdF9yZXF1ZXN0GCAgASgLMiIuZnh2cHMuY2xpZW50LnYxLlN5bWJvbExpc3RSZXF1ZXN0SAASMgoLc3ltYm9sX2xpc3QYISABKAsyGy5meHZwcy5jbGllbnQudjEuU3ltYm9sTGlzdEgAEjwKEGFjY291bnRfc25hcHNob3QYKCABKAsyIC5meHZwcy5jbGllbnQudjEuQWNjb3VudFNuYXBzaG90SAASOgoPcG9zaXRpb25fdXBkYXRlGCkgASgLMh8uZnh2cHMuY2xpZW50LnYxLlBvc2l0aW9uVXBkYXRlSAASNAoMb3JkZXJfdXBkYXRlGCogASgLMhwuZnh2cHMuY2xpZW50LnYxLk9yZGVyVXBkYXRlSAASMgoLcGxhY2Vfb3JkZXIYMiABKAsyGy5meHZwcy5jbGllbnQudjEuUGxhY2VPcmRlckgAEjQKDGNhbmNlbF9vcmRlchgzIAEoCzIcLmZ4dnBzLmNsaWVudC52MS5DYW5jZWxPcmRlckgAEjQKDG1vZGlmeV9vcmRlchg0IAEoCzIcLmZ4dnBzLmNsaWVudC52MS5Nb2RpZnlPcmRlckgAEiMKA2Fjaxg8IAEoCzIULmZ4dnBzLmNsaWVudC52MS5BY2tIABInCgVlcnJvchg9IAEoCzIWLmZ4dnBzLmNsaWVudC52MS5FcnJvckgAEi8KCWhlYXJ0YmVhdBhGIAEoCzIaLmZ4dnBzLmNsaWVudC52MS5IZWFydGJlYXRIABIlCgRwaW5nGEcgASgLMhUuZnh2cHMuY2xpZW50LnYxLlBpbmdIABIlCgRwb25nGEggASgLMhUuZnh2cHMuY2xpZW50LnYxLlBvbmdIAEIGCgRib2R5IkwKBUhlbGxvEhgKEHByb3RvY29sX3ZlcnNpb24YASABKA0SEwoLY2xpZW50X25hbWUYAiABKAkSFAoMbWF4X3F1b3RlX2h6GAMgASgNIhUKBEF1dGgSDQoFdG9rZW4YASABKAkiRAoGQXV0aE9rEg8KB3N1YmplY3QYASABKAkSEwoLYWNjb3VudF9pZHMYAiADKAkSFAoMZXhwaXJlc19hdF9zGAMgASgEIjAKCVN1YnNjcmliZRISCgpyZXF1ZXN0X2lkGAEgASgJEg8KB3N5bWJvbHMYAiADKAkiMgoLVW5zdWJzY3JpYmUSEgoKcmVxdWVzdF9pZBgBIAEoCRIPCgdzeW1ib2xzGAIgAygJIswBCgVRdW90ZRIOCgZzeW1ib2wYASABKAkSJQoDYmlkGAIgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSJQoDYXNrGAMgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSKgoIYmlkX3NpemUYBCABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIqCghhc2tfc2l6ZRgFIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEg0KBXRzX25zGAYgASgEIjQKClF1b3RlQmF0Y2gSJgoGcXVvdGVzGAEgAygLMhYuZnh2cHMuY2xpZW50LnYxLlF1b3RlIpEBCg1DYW5kbGVSZXF1ZXN0EhIKCnJlcXVlc3RfaWQYASABKAkSDgoGc3ltYm9sGAIgASgJEi0KCXRpbWVmcmFtZRgDIAEoDjIaLmZ4dnBzLmNsaWVudC52MS5UaW1lZnJhbWUSDwoHZnJvbV9ucxgEIAEoBBINCgV0b19ucxgFIAEoBBINCgVsaW1pdBgGIAEoDSLNAQoGQ2FuZGxlEhQKDG9wZW5fdGltZV9ucxgBIAEoBBImCgRvcGVuGAIgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSJgoEaGlnaBgDIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEiUKA2xvdxgEIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEicKBWNsb3NlGAUgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSDQoFdGlja3MYBiABKAQijQEKDkNhbmRsZVJlc3BvbnNlEhIKCnJlcXVlc3RfaWQYASABKAkSDgoGc3ltYm9sGAIgASgJEi0KCXRpbWVmcmFtZRgDIAEoDjIaLmZ4dnBzLmNsaWVudC52MS5UaW1lZnJhbWUSKAoHY2FuZGxlcxgEIAMoCzIXLmZ4dnBzLmNsaWVudC52MS5DYW5kbGUiJwoRU3ltYm9sTGlzdFJlcXVlc3QSEgoKcmVxdWVzdF9pZBgBIAEoCSLTAQoKSW5zdHJ1bWVudBIOCgZzeW1ib2wYASABKAkSDAoEYmFzZRgCIAEoCRINCgVxdW90ZRgDIAEoCRIrCgl0aWNrX3NpemUYBCABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIqCghxdHlfc3RlcBgFIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEg4KBmRpZ2l0cxgGIAEoDRIvCg1jb250cmFjdF9zaXplGAcgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwiUgoKU3ltYm9sTGlzdBISCgpyZXF1ZXN0X2lkGAEgASgJEjAKC2luc3RydW1lbnRzGAIgAygLMhsuZnh2cHMuY2xpZW50LnYxLkluc3RydW1lbnQipAEKCFBvc2l0aW9uEg4KBnN5bWJvbBgBIAEoCRIpCgduZXRfcXR5GAIgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSKwoJYXZnX3ByaWNlGAMgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSMAoOdW5yZWFsaXplZF9wbmwYBCABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbCLIAgoPQWNjb3VudFNuYXBzaG90EhIKCmFjY291bnRfaWQYASABKAkSEAoIY3VycmVuY3kYAiABKAkSKQoHYmFsYW5jZRgDIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEigKBmVxdWl0eRgEIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEi0KC21hcmdpbl91c2VkGAUgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSLAoJcG9zaXRpb25zGAYgAygLMhkuZnh2cHMuY2xpZW50LnYxLlBvc2l0aW9uEi0KC2ZyZWVfbWFyZ2luGAcgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSLgoMbWFyZ2luX2xldmVsGAggASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwiUQoOUG9zaXRpb25VcGRhdGUSEgoKYWNjb3VudF9pZBgBIAEoCRIrCghwb3NpdGlvbhgCIAEoCzIZLmZ4dnBzLmNsaWVudC52MS5Qb3NpdGlvbiKxAwoLT3JkZXJVcGRhdGUSEgoKYWNjb3VudF9pZBgBIAEoCRIZChFjbGllbnRfcmVxdWVzdF9pZBgCIAEoCRIQCghvcmRlcl9pZBgDIAEoCRIOCgZzeW1ib2wYBCABKAkSIwoEc2lkZRgFIAEoDjIVLmZ4dnBzLmNsaWVudC52MS5TaWRlEiwKBnN0YXR1cxgGIAEoDjIcLmZ4dnBzLmNsaWVudC52MS5PcmRlclN0YXR1cxIsCgpmaWxsZWRfcXR5GAcgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSLAoKbGVhdmVzX3F0eRgIIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEisKCWF2Z19wcmljZRgJIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEioKCGxhc3RfcXR5GAogASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSLAoKbGFzdF9wcmljZRgLIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEgwKBHRleHQYDCABKAkSDQoFdHNfbnMYDSABKAQimgIKClBsYWNlT3JkZXISEgoKcmVxdWVzdF9pZBgBIAEoCRISCgphY2NvdW50X2lkGAIgASgJEg4KBnN5bWJvbBgDIAEoCRIjCgRzaWRlGAQgASgOMhUuZnh2cHMuY2xpZW50LnYxLlNpZGUSLgoKb3JkZXJfdHlwZRgFIAEoDjIaLmZ4dnBzLmNsaWVudC52MS5PcmRlclR5cGUSJQoDcXR5GAYgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSLQoLbGltaXRfcHJpY2UYByABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIpCgN0aWYYCCABKA4yHC5meHZwcy5jbGllbnQudjEuVGltZUluRm9yY2UiUAoLQ2FuY2VsT3JkZXISEgoKcmVxdWVzdF9pZBgBIAEoCRISCgphY2NvdW50X2lkGAIgASgJEhkKEXRhcmdldF9yZXF1ZXN0X2lkGAMgASgJIqYBCgtNb2RpZnlPcmRlchISCgpyZXF1ZXN0X2lkGAEgASgJEhIKCmFjY291bnRfaWQYAiABKAkSGQoRdGFyZ2V0X3JlcXVlc3RfaWQYAyABKAkSJQoDcXR5GAQgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSLQoLbGltaXRfcHJpY2UYBSABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbCIZCgNBY2sSEgoKcmVxdWVzdF9pZBgBIAEoCSJWCgVFcnJvchISCgpyZXF1ZXN0X2lkGAEgASgJEigKBGNvZGUYAiABKA4yGi5meHZwcy5jbGllbnQudjEuRXJyb3JDb2RlEg8KB21lc3NhZ2UYAyABKAkiGgoJSGVhcnRiZWF0Eg0KBXRzX25zGAEgASgEIiQKBFBpbmcSDQoFbm9uY2UYASABKAQSDQoFdHNfbnMYAiABKAQiJAoEUG9uZxINCgVub25jZRgBIAEoBBINCgV0c19ucxgCIAEoBCpgCglUaW1lZnJhbWUSGQoVVElNRUZSQU1FX1VOU1BFQ0lGSUVEEAASBgoCTTEQARIGCgJNNRACEgcKA00xNRADEgcKA00zMBAEEgYKAkgxEAUSBgoCSDQQBhIGCgJEMRAHKi8KBFNpZGUSFAoQU0lERV9VTlNQRUNJRklFRBAAEgcKA0JVWRABEggKBFNFTEwQAio+CglPcmRlclR5cGUSGgoWT1JERVJfVFlQRV9VTlNQRUNJRklFRBAAEgoKBk1BUktFVBABEgkKBUxJTUlUEAIqUAoLVGltZUluRm9yY2USHQoZVElNRV9JTl9GT1JDRV9VTlNQRUNJRklFRBAAEgcKA0RBWRABEgcKA0dUQxACEgcKA0lPQxADEgcKA0ZPSxAEKp4BCgtPcmRlclN0YXR1cxIcChhPUkRFUl9TVEFUVVNfVU5TUEVDSUZJRUQQABIPCgtQRU5ESU5HX05FVxABEgcKA05FVxACEhQKEFBBUlRJQUxMWV9GSUxMRUQQAxIKCgZGSUxMRUQQBBIMCghDQU5DRUxFRBAFEgwKCFJFUExBQ0VEEAYSDAoIUkVKRUNURUQQBxILCgdFWFBJUkVEEAgq+gEKCUVycm9yQ29kZRIaChZFUlJPUl9DT0RFX1VOU1BFQ0lGSUVEEAASDwoLQkFEX1JFUVVFU1QQARIXChNVTlNVUFBPUlRFRF9WRVJTSU9OEAISEwoPVU5BVVRIRU5USUNBVEVEEAMSDQoJRk9SQklEREVOEAQSEAoMUkFURV9MSU1JVEVEEAUSEgoOVU5LTk9XTl9TWU1CT0wQBhIRCg1VTktOT1dOX09SREVSEAcSDwoLVU5BVkFJTEFCTEUQCBIMCghJTlRFUk5BTBAJEhcKE0lOU1VGRklDSUVOVF9NQVJHSU4QChISCg5PUkRFUl9SRUpFQ1RFRBALYgZwcm90bzM");
+  fileDesc("ChVmeHZwc19jbGllbnRfdjEucHJvdG8SD2Z4dnBzLmNsaWVudC52MSInCgdEZWNpbWFsEg0KBXZhbHVlGAEgASgDEg0KBXNjYWxlGAIgASgNIugLCghFbnZlbG9wZRIPCgd2ZXJzaW9uGAEgASgNEgsKA3NlcRgCIAEoBBInCgVoZWxsbxgKIAEoCzIWLmZ4dnBzLmNsaWVudC52MS5IZWxsb0gAEiUKBGF1dGgYCyABKAsyFS5meHZwcy5jbGllbnQudjEuQXV0aEgAEioKB2F1dGhfb2sYDCABKAsyFy5meHZwcy5jbGllbnQudjEuQXV0aE9rSAASLwoJc3Vic2NyaWJlGBQgASgLMhouZnh2cHMuY2xpZW50LnYxLlN1YnNjcmliZUgAEjMKC3Vuc3Vic2NyaWJlGBUgASgLMhwuZnh2cHMuY2xpZW50LnYxLlVuc3Vic2NyaWJlSAASMgoLcXVvdGVfYmF0Y2gYFiABKAsyGy5meHZwcy5jbGllbnQudjEuUXVvdGVCYXRjaEgAEjgKDmNhbmRsZV9yZXF1ZXN0GB4gASgLMh4uZnh2cHMuY2xpZW50LnYxLkNhbmRsZVJlcXVlc3RIABI6Cg9jYW5kbGVfcmVzcG9uc2UYHyABKAsyHy5meHZwcy5jbGllbnQudjEuQ2FuZGxlUmVzcG9uc2VIABJBChNzeW1ib2xfbGlzdF9yZXF1ZXN0GCAgASgLMiIuZnh2cHMuY2xpZW50LnYxLlN5bWJvbExpc3RSZXF1ZXN0SAASMgoLc3ltYm9sX2xpc3QYISABKAsyGy5meHZwcy5jbGllbnQudjEuU3ltYm9sTGlzdEgAEjwKEGFjY291bnRfc25hcHNob3QYKCABKAsyIC5meHZwcy5jbGllbnQudjEuQWNjb3VudFNuYXBzaG90SAASOgoPcG9zaXRpb25fdXBkYXRlGCkgASgLMh8uZnh2cHMuY2xpZW50LnYxLlBvc2l0aW9uVXBkYXRlSAASNAoMb3JkZXJfdXBkYXRlGCogASgLMhwuZnh2cHMuY2xpZW50LnYxLk9yZGVyVXBkYXRlSAASMgoLcGxhY2Vfb3JkZXIYMiABKAsyGy5meHZwcy5jbGllbnQudjEuUGxhY2VPcmRlckgAEjQKDGNhbmNlbF9vcmRlchgzIAEoCzIcLmZ4dnBzLmNsaWVudC52MS5DYW5jZWxPcmRlckgAEjQKDG1vZGlmeV9vcmRlchg0IAEoCzIcLmZ4dnBzLmNsaWVudC52MS5Nb2RpZnlPcmRlckgAEjoKD21vZGlmeV9wb3NpdGlvbhg1IAEoCzIfLmZ4dnBzLmNsaWVudC52MS5Nb2RpZnlQb3NpdGlvbkgAEjgKDmNsb3NlX3Bvc2l0aW9uGDYgASgLMh4uZnh2cHMuY2xpZW50LnYxLkNsb3NlUG9zaXRpb25IABI/ChJvcmRlcl9saXN0X3JlcXVlc3QYNyABKAsyIS5meHZwcy5jbGllbnQudjEuT3JkZXJMaXN0UmVxdWVzdEgAEjAKCm9yZGVyX2xpc3QYOCABKAsyGi5meHZwcy5jbGllbnQudjEuT3JkZXJMaXN0SAASQwoUZGVhbF9oaXN0b3J5X3JlcXVlc3QYOSABKAsyIy5meHZwcy5jbGllbnQudjEuRGVhbEhpc3RvcnlSZXF1ZXN0SAASNAoMZGVhbF9oaXN0b3J5GDogASgLMhwuZnh2cHMuY2xpZW50LnYxLkRlYWxIaXN0b3J5SAASMgoLZGVhbF91cGRhdGUYKyABKAsyGy5meHZwcy5jbGllbnQudjEuRGVhbFVwZGF0ZUgAEiMKA2Fjaxg8IAEoCzIULmZ4dnBzLmNsaWVudC52MS5BY2tIABInCgVlcnJvchg9IAEoCzIWLmZ4dnBzLmNsaWVudC52MS5FcnJvckgAEi8KCWhlYXJ0YmVhdBhGIAEoCzIaLmZ4dnBzLmNsaWVudC52MS5IZWFydGJlYXRIABIlCgRwaW5nGEcgASgLMhUuZnh2cHMuY2xpZW50LnYxLlBpbmdIABIlCgRwb25nGEggASgLMhUuZnh2cHMuY2xpZW50LnYxLlBvbmdIAEIGCgRib2R5IkwKBUhlbGxvEhgKEHByb3RvY29sX3ZlcnNpb24YASABKA0SEwoLY2xpZW50X25hbWUYAiABKAkSFAoMbWF4X3F1b3RlX2h6GAMgASgNIhUKBEF1dGgSDQoFdG9rZW4YASABKAkidAoGQXV0aE9rEg8KB3N1YmplY3QYASABKAkSEwoLYWNjb3VudF9pZHMYAiADKAkSFAoMZXhwaXJlc19hdF9zGAMgASgEEi4KCGFjY291bnRzGAQgAygLMhwuZnh2cHMuY2xpZW50LnYxLkFjY291bnRJbmZvIoYBCgtBY2NvdW50SW5mbxISCgphY2NvdW50X2lkGAEgASgJEhAKCGN1cnJlbmN5GAIgASgJEjAKC21hcmdpbl9tb2RlGAMgASgOMhsuZnh2cHMuY2xpZW50LnYxLk1hcmdpbk1vZGUSEAoIbGV2ZXJhZ2UYBCABKA0SDQoFZ3JvdXAYBSABKAkiMAoJU3Vic2NyaWJlEhIKCnJlcXVlc3RfaWQYASABKAkSDwoHc3ltYm9scxgCIAMoCSIyCgtVbnN1YnNjcmliZRISCgpyZXF1ZXN0X2lkGAEgASgJEg8KB3N5bWJvbHMYAiADKAkizAEKBVF1b3RlEg4KBnN5bWJvbBgBIAEoCRIlCgNiaWQYAiABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIlCgNhc2sYAyABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIqCghiaWRfc2l6ZRgEIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEioKCGFza19zaXplGAUgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSDQoFdHNfbnMYBiABKAQiNAoKUXVvdGVCYXRjaBImCgZxdW90ZXMYASADKAsyFi5meHZwcy5jbGllbnQudjEuUXVvdGUikQEKDUNhbmRsZVJlcXVlc3QSEgoKcmVxdWVzdF9pZBgBIAEoCRIOCgZzeW1ib2wYAiABKAkSLQoJdGltZWZyYW1lGAMgASgOMhouZnh2cHMuY2xpZW50LnYxLlRpbWVmcmFtZRIPCgdmcm9tX25zGAQgASgEEg0KBXRvX25zGAUgASgEEg0KBWxpbWl0GAYgASgNIs0BCgZDYW5kbGUSFAoMb3Blbl90aW1lX25zGAEgASgEEiYKBG9wZW4YAiABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBImCgRoaWdoGAMgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSJQoDbG93GAQgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSJwoFY2xvc2UYBSABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBINCgV0aWNrcxgGIAEoBCKNAQoOQ2FuZGxlUmVzcG9uc2USEgoKcmVxdWVzdF9pZBgBIAEoCRIOCgZzeW1ib2wYAiABKAkSLQoJdGltZWZyYW1lGAMgASgOMhouZnh2cHMuY2xpZW50LnYxLlRpbWVmcmFtZRIoCgdjYW5kbGVzGAQgAygLMhcuZnh2cHMuY2xpZW50LnYxLkNhbmRsZSInChFTeW1ib2xMaXN0UmVxdWVzdBISCgpyZXF1ZXN0X2lkGAEgASgJItMBCgpJbnN0cnVtZW50Eg4KBnN5bWJvbBgBIAEoCRIMCgRiYXNlGAIgASgJEg0KBXF1b3RlGAMgASgJEisKCXRpY2tfc2l6ZRgEIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEioKCHF0eV9zdGVwGAUgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSDgoGZGlnaXRzGAYgASgNEi8KDWNvbnRyYWN0X3NpemUYByABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbCJSCgpTeW1ib2xMaXN0EhIKCnJlcXVlc3RfaWQYASABKAkSMAoLaW5zdHJ1bWVudHMYAiADKAsyGy5meHZwcy5jbGllbnQudjEuSW5zdHJ1bWVudCKcAwoIUG9zaXRpb24SDgoGc3ltYm9sGAEgASgJEikKB25ldF9xdHkYAiABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIrCglhdmdfcHJpY2UYAyABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIwCg51bnJlYWxpemVkX3BubBgEIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEhMKC3Bvc2l0aW9uX2lkGAUgASgJEiMKBHNpZGUYBiABKA4yFS5meHZwcy5jbGllbnQudjEuU2lkZRIlCgNxdHkYByABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIkCgJzbBgIIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEiQKAnRwGAkgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSMwoRdHJhaWxpbmdfZGlzdGFuY2UYCiABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIUCgxvcGVuX3RpbWVfbnMYCyABKAQijAMKD0FjY291bnRTbmFwc2hvdBISCgphY2NvdW50X2lkGAEgASgJEhAKCGN1cnJlbmN5GAIgASgJEikKB2JhbGFuY2UYAyABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIoCgZlcXVpdHkYBCABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBItCgttYXJnaW5fdXNlZBgFIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEiwKCXBvc2l0aW9ucxgGIAMoCzIZLmZ4dnBzLmNsaWVudC52MS5Qb3NpdGlvbhItCgtmcmVlX21hcmdpbhgHIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEi4KDG1hcmdpbl9sZXZlbBgIIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEjAKC21hcmdpbl9tb2RlGAkgASgOMhsuZnh2cHMuY2xpZW50LnYxLk1hcmdpbk1vZGUSEAoIbGV2ZXJhZ2UYCiABKA0iUQoOUG9zaXRpb25VcGRhdGUSEgoKYWNjb3VudF9pZBgBIAEoCRIrCghwb3NpdGlvbhgCIAEoCzIZLmZ4dnBzLmNsaWVudC52MS5Qb3NpdGlvbiLrBgoLT3JkZXJVcGRhdGUSEgoKYWNjb3VudF9pZBgBIAEoCRIZChFjbGllbnRfcmVxdWVzdF9pZBgCIAEoCRIQCghvcmRlcl9pZBgDIAEoCRIOCgZzeW1ib2wYBCABKAkSIwoEc2lkZRgFIAEoDjIVLmZ4dnBzLmNsaWVudC52MS5TaWRlEiwKBnN0YXR1cxgGIAEoDjIcLmZ4dnBzLmNsaWVudC52MS5PcmRlclN0YXR1cxIsCgpmaWxsZWRfcXR5GAcgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSLAoKbGVhdmVzX3F0eRgIIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEisKCWF2Z19wcmljZRgJIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEioKCGxhc3RfcXR5GAogASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSLAoKbGFzdF9wcmljZRgLIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEgwKBHRleHQYDCABKAkSDQoFdHNfbnMYDSABKAQSLgoKb3JkZXJfdHlwZRgOIAEoDjIaLmZ4dnBzLmNsaWVudC52MS5PcmRlclR5cGUSJQoDcXR5GA8gASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSLQoLbGltaXRfcHJpY2UYECABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIsCgpzdG9wX3ByaWNlGBEgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSJAoCc2wYEiABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIkCgJ0cBgTIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEjMKEXRyYWlsaW5nX2Rpc3RhbmNlGBQgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSEQoJb2NvX2dyb3VwGBUgASgEEhQKDGV4cGlyZV9hdF9ucxgWIAEoBBITCgtwb3NpdGlvbl9pZBgXIAEoCRIWCg5zdG9wX3RyaWdnZXJlZBgYIAEoCBIZChFjbG9zZV9wb3NpdGlvbl9pZBgZIAEoCRISCgpjcmVhdGVkX25zGBogASgEIvIDCgpQbGFjZU9yZGVyEhIKCnJlcXVlc3RfaWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRIOCgZzeW1ib2wYAyABKAkSIwoEc2lkZRgEIAEoDjIVLmZ4dnBzLmNsaWVudC52MS5TaWRlEi4KCm9yZGVyX3R5cGUYBSABKA4yGi5meHZwcy5jbGllbnQudjEuT3JkZXJUeXBlEiUKA3F0eRgGIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEi0KC2xpbWl0X3ByaWNlGAcgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSKQoDdGlmGAggASgOMhwuZnh2cHMuY2xpZW50LnYxLlRpbWVJbkZvcmNlEiwKCnN0b3BfcHJpY2UYCSABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIkCgJzbBgKIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEiQKAnRwGAsgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSMwoRdHJhaWxpbmdfZGlzdGFuY2UYDCABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIRCglvY29fZ3JvdXAYDSABKAQSFAoMZXhwaXJlX2F0X25zGA4gASgEIlAKC0NhbmNlbE9yZGVyEhIKCnJlcXVlc3RfaWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRIZChF0YXJnZXRfcmVxdWVzdF9pZBgDIAEoCSKdAwoLTW9kaWZ5T3JkZXISEgoKcmVxdWVzdF9pZBgBIAEoCRISCgphY2NvdW50X2lkGAIgASgJEhkKEXRhcmdldF9yZXF1ZXN0X2lkGAMgASgJEiUKA3F0eRgEIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEi0KC2xpbWl0X3ByaWNlGAUgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSLAoKc3RvcF9wcmljZRgGIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEiQKAnNsGAcgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwSJAoCdHAYCCABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIzChF0cmFpbGluZ19kaXN0YW5jZRgJIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEhQKDGV4cGlyZV9hdF9ucxgKIAEoBBIaChJyZXBsYWNlX3Byb3RlY3Rpb24YCyABKAgSFAoMY2xlYXJfZXhwaXJ5GAwgASgIIs4BCg5Nb2RpZnlQb3NpdGlvbhISCgpyZXF1ZXN0X2lkGAEgASgJEhIKCmFjY291bnRfaWQYAiABKAkSEwoLcG9zaXRpb25faWQYAyABKAkSJAoCc2wYBCABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBIkCgJ0cBgFIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEjMKEXRyYWlsaW5nX2Rpc3RhbmNlGAYgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwicwoNQ2xvc2VQb3NpdGlvbhISCgpyZXF1ZXN0X2lkGAEgASgJEhIKCmFjY291bnRfaWQYAiABKAkSEwoLcG9zaXRpb25faWQYAyABKAkSJQoDcXR5GAQgASgLMhguZnh2cHMuY2xpZW50LnYxLkRlY2ltYWwiOgoQT3JkZXJMaXN0UmVxdWVzdBISCgpyZXF1ZXN0X2lkGAEgASgJEhIKCmFjY291bnRfaWQYAiABKAkiYQoJT3JkZXJMaXN0EhIKCnJlcXVlc3RfaWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRIsCgZvcmRlcnMYAyADKAsyHC5meHZwcy5jbGllbnQudjEuT3JkZXJVcGRhdGUiowMKBERlYWwSDwoHZGVhbF9pZBgBIAEoCRIQCghvcmRlcl9pZBgCIAEoCRIZChFjbGllbnRfcmVxdWVzdF9pZBgDIAEoCRITCgtwb3NpdGlvbl9pZBgEIAEoCRIOCgZzeW1ib2wYBSABKAkSIwoEc2lkZRgGIAEoDjIVLmZ4dnBzLmNsaWVudC52MS5TaWRlEikKBWVudHJ5GAcgASgOMhouZnh2cHMuY2xpZW50LnYxLkRlYWxFbnRyeRIlCgNxdHkYCCABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBInCgVwcmljZRgJIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEi4KDHJlYWxpemVkX3BubBgKIAEoCzIYLmZ4dnBzLmNsaWVudC52MS5EZWNpbWFsEiwKCmNvbW1pc3Npb24YCyABKAsyGC5meHZwcy5jbGllbnQudjEuRGVjaW1hbBINCgV0c19ucxgMIAEoBBIrCgZyZWFzb24YDSABKA4yGy5meHZwcy5jbGllbnQudjEuRGVhbFJlYXNvbiJ7ChJEZWFsSGlzdG9yeVJlcXVlc3QSEgoKcmVxdWVzdF9pZBgBIAEoCRISCgphY2NvdW50X2lkGAIgASgJEg8KB2Zyb21fbnMYAyABKAQSDQoFdG9fbnMYBCABKAQSDQoFbGltaXQYBSABKA0SDgoGY3Vyc29yGAYgASgJInAKC0RlYWxIaXN0b3J5EhIKCnJlcXVlc3RfaWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRIkCgVkZWFscxgDIAMoCzIVLmZ4dnBzLmNsaWVudC52MS5EZWFsEhMKC25leHRfY3Vyc29yGAQgASgJIkUKCkRlYWxVcGRhdGUSEgoKYWNjb3VudF9pZBgBIAEoCRIjCgRkZWFsGAIgASgLMhUuZnh2cHMuY2xpZW50LnYxLkRlYWwiGQoDQWNrEhIKCnJlcXVlc3RfaWQYASABKAkiVgoFRXJyb3ISEgoKcmVxdWVzdF9pZBgBIAEoCRIoCgRjb2RlGAIgASgOMhouZnh2cHMuY2xpZW50LnYxLkVycm9yQ29kZRIPCgdtZXNzYWdlGAMgASgJIhoKCUhlYXJ0YmVhdBINCgV0c19ucxgBIAEoBCIkCgRQaW5nEg0KBW5vbmNlGAEgASgEEg0KBXRzX25zGAIgASgEIiQKBFBvbmcSDQoFbm9uY2UYASABKAQSDQoFdHNfbnMYAiABKAQqQwoKTWFyZ2luTW9kZRIbChdNQVJHSU5fTU9ERV9VTlNQRUNJRklFRBAAEgsKB05FVFRJTkcQARILCgdIRURHSU5HEAIqYAoJVGltZWZyYW1lEhkKFVRJTUVGUkFNRV9VTlNQRUNJRklFRBAAEgYKAk0xEAESBgoCTTUQAhIHCgNNMTUQAxIHCgNNMzAQBBIGCgJIMRAFEgYKAkg0EAYSBgoCRDEQByovCgRTaWRlEhQKEFNJREVfVU5TUEVDSUZJRUQQABIHCgNCVVkQARIICgRTRUxMEAIqWAoJT3JkZXJUeXBlEhoKFk9SREVSX1RZUEVfVU5TUEVDSUZJRUQQABIKCgZNQVJLRVQQARIJCgVMSU1JVBACEggKBFNUT1AQAxIOCgpTVE9QX0xJTUlUEAQqWQoLVGltZUluRm9yY2USHQoZVElNRV9JTl9GT1JDRV9VTlNQRUNJRklFRBAAEgcKA0RBWRABEgcKA0dUQxACEgcKA0lPQxADEgcKA0ZPSxAEEgcKA0dURBAFKp4BCgtPcmRlclN0YXR1cxIcChhPUkRFUl9TVEFUVVNfVU5TUEVDSUZJRUQQABIPCgtQRU5ESU5HX05FVxABEgcKA05FVxACEhQKEFBBUlRJQUxMWV9GSUxMRUQQAxIKCgZGSUxMRUQQBBIMCghDQU5DRUxFRBAFEgwKCFJFUExBQ0VEEAYSDAoIUkVKRUNURUQQBxILCgdFWFBJUkVEEAgqOAoJRGVhbEVudHJ5EhoKFkRFQUxfRU5UUllfVU5TUEVDSUZJRUQQABIGCgJJThABEgcKA09VVBACKmMKCkRlYWxSZWFzb24SGwoXREVBTF9SRUFTT05fVU5TUEVDSUZJRUQQABIKCgZDTElFTlQQARINCglTVE9QX0xPU1MQAhIPCgtUQUtFX1BST0ZJVBADEgwKCFNUT1BfT1VUEAQq+gEKCUVycm9yQ29kZRIaChZFUlJPUl9DT0RFX1VOU1BFQ0lGSUVEEAASDwoLQkFEX1JFUVVFU1QQARIXChNVTlNVUFBPUlRFRF9WRVJTSU9OEAISEwoPVU5BVVRIRU5USUNBVEVEEAMSDQoJRk9SQklEREVOEAQSEAoMUkFURV9MSU1JVEVEEAUSEgoOVU5LTk9XTl9TWU1CT0wQBhIRCg1VTktOT1dOX09SREVSEAcSDwoLVU5BVkFJTEFCTEUQCBIMCghJTlRFUk5BTBAJEhcKE0lOU1VGRklDSUVOVF9NQVJHSU4QChISCg5PUkRFUl9SRUpFQ1RFRBALYgZwcm90bzM");
 
 /**
  * Fixed-point decimal: real value = value * 10^-scale.
@@ -161,6 +161,50 @@ export type Envelope = Message<"fxvps.client.v1.Envelope"> & {
     case: "modifyOrder";
   } | {
     /**
+     * Added in v1.2.
+     *
+     * @generated from field: fxvps.client.v1.ModifyPosition modify_position = 53;
+     */
+    value: ModifyPosition;
+    case: "modifyPosition";
+  } | {
+    /**
+     * @generated from field: fxvps.client.v1.ClosePosition close_position = 54;
+     */
+    value: ClosePosition;
+    case: "closePosition";
+  } | {
+    /**
+     * @generated from field: fxvps.client.v1.OrderListRequest order_list_request = 55;
+     */
+    value: OrderListRequest;
+    case: "orderListRequest";
+  } | {
+    /**
+     * @generated from field: fxvps.client.v1.OrderList order_list = 56;
+     */
+    value: OrderList;
+    case: "orderList";
+  } | {
+    /**
+     * @generated from field: fxvps.client.v1.DealHistoryRequest deal_history_request = 57;
+     */
+    value: DealHistoryRequest;
+    case: "dealHistoryRequest";
+  } | {
+    /**
+     * @generated from field: fxvps.client.v1.DealHistory deal_history = 58;
+     */
+    value: DealHistory;
+    case: "dealHistory";
+  } | {
+    /**
+     * @generated from field: fxvps.client.v1.DealUpdate deal_update = 43;
+     */
+    value: DealUpdate;
+    case: "dealUpdate";
+  } | {
+    /**
      * @generated from field: fxvps.client.v1.Ack ack = 60;
      */
     value: Ack;
@@ -267,6 +311,14 @@ export type AuthOk = Message<"fxvps.client.v1.AuthOk"> & {
    * @generated from field: uint64 expires_at_s = 3;
    */
   expiresAtS: bigint;
+
+  /**
+   * Added in v1.2: trading parameters of each authorized account (same order
+   * as account_ids; may be empty on older servers or without a trading core).
+   *
+   * @generated from field: repeated fxvps.client.v1.AccountInfo accounts = 4;
+   */
+  accounts: AccountInfo[];
 };
 
 /**
@@ -275,6 +327,49 @@ export type AuthOk = Message<"fxvps.client.v1.AuthOk"> & {
  */
 export const AuthOkSchema: GenMessage<AuthOk> = /*@__PURE__*/
   messageDesc(file_fxvps_client_v1, 4);
+
+/**
+ * Added in v1.2: static trading parameters of an account.
+ *
+ * @generated from message fxvps.client.v1.AccountInfo
+ */
+export type AccountInfo = Message<"fxvps.client.v1.AccountInfo"> & {
+  /**
+   * @generated from field: string account_id = 1;
+   */
+  accountId: string;
+
+  /**
+   * @generated from field: string currency = 2;
+   */
+  currency: string;
+
+  /**
+   * @generated from field: fxvps.client.v1.MarginMode margin_mode = 3;
+   */
+  marginMode: MarginMode;
+
+  /**
+   * Account leverage, e.g. 30 for 1:30 (symbol caps may be lower).
+   *
+   * @generated from field: uint32 leverage = 4;
+   */
+  leverage: number;
+
+  /**
+   * Trading group (pricing / risk profile).
+   *
+   * @generated from field: string group = 5;
+   */
+  group: string;
+};
+
+/**
+ * Describes the message fxvps.client.v1.AccountInfo.
+ * Use `create(AccountInfoSchema)` to create a new message.
+ */
+export const AccountInfoSchema: GenMessage<AccountInfo> = /*@__PURE__*/
+  messageDesc(file_fxvps_client_v1, 5);
 
 /**
  * @generated from message fxvps.client.v1.Subscribe
@@ -296,7 +391,7 @@ export type Subscribe = Message<"fxvps.client.v1.Subscribe"> & {
  * Use `create(SubscribeSchema)` to create a new message.
  */
 export const SubscribeSchema: GenMessage<Subscribe> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 5);
+  messageDesc(file_fxvps_client_v1, 6);
 
 /**
  * @generated from message fxvps.client.v1.Unsubscribe
@@ -318,7 +413,7 @@ export type Unsubscribe = Message<"fxvps.client.v1.Unsubscribe"> & {
  * Use `create(UnsubscribeSchema)` to create a new message.
  */
 export const UnsubscribeSchema: GenMessage<Unsubscribe> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 6);
+  messageDesc(file_fxvps_client_v1, 7);
 
 /**
  * @generated from message fxvps.client.v1.Quote
@@ -360,7 +455,7 @@ export type Quote = Message<"fxvps.client.v1.Quote"> & {
  * Use `create(QuoteSchema)` to create a new message.
  */
 export const QuoteSchema: GenMessage<Quote> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 7);
+  messageDesc(file_fxvps_client_v1, 8);
 
 /**
  * Coalesced quotes: at most one (latest) quote per symbol.
@@ -379,7 +474,7 @@ export type QuoteBatch = Message<"fxvps.client.v1.QuoteBatch"> & {
  * Use `create(QuoteBatchSchema)` to create a new message.
  */
 export const QuoteBatchSchema: GenMessage<QuoteBatch> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 8);
+  messageDesc(file_fxvps_client_v1, 9);
 
 /**
  * @generated from message fxvps.client.v1.CandleRequest
@@ -425,7 +520,7 @@ export type CandleRequest = Message<"fxvps.client.v1.CandleRequest"> & {
  * Use `create(CandleRequestSchema)` to create a new message.
  */
 export const CandleRequestSchema: GenMessage<CandleRequest> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 9);
+  messageDesc(file_fxvps_client_v1, 10);
 
 /**
  * @generated from message fxvps.client.v1.Candle
@@ -467,7 +562,7 @@ export type Candle = Message<"fxvps.client.v1.Candle"> & {
  * Use `create(CandleSchema)` to create a new message.
  */
 export const CandleSchema: GenMessage<Candle> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 10);
+  messageDesc(file_fxvps_client_v1, 11);
 
 /**
  * @generated from message fxvps.client.v1.CandleResponse
@@ -499,7 +594,7 @@ export type CandleResponse = Message<"fxvps.client.v1.CandleResponse"> & {
  * Use `create(CandleResponseSchema)` to create a new message.
  */
 export const CandleResponseSchema: GenMessage<CandleResponse> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 11);
+  messageDesc(file_fxvps_client_v1, 12);
 
 /**
  * Client -> server: list the instruments this gateway serves (added in v1.1;
@@ -519,7 +614,7 @@ export type SymbolListRequest = Message<"fxvps.client.v1.SymbolListRequest"> & {
  * Use `create(SymbolListRequestSchema)` to create a new message.
  */
 export const SymbolListRequestSchema: GenMessage<SymbolListRequest> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 12);
+  messageDesc(file_fxvps_client_v1, 13);
 
 /**
  * @generated from message fxvps.client.v1.Instrument
@@ -578,7 +673,7 @@ export type Instrument = Message<"fxvps.client.v1.Instrument"> & {
  * Use `create(InstrumentSchema)` to create a new message.
  */
 export const InstrumentSchema: GenMessage<Instrument> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 13);
+  messageDesc(file_fxvps_client_v1, 14);
 
 /**
  * @generated from message fxvps.client.v1.SymbolList
@@ -600,7 +695,7 @@ export type SymbolList = Message<"fxvps.client.v1.SymbolList"> & {
  * Use `create(SymbolListSchema)` to create a new message.
  */
 export const SymbolListSchema: GenMessage<SymbolList> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 14);
+  messageDesc(file_fxvps_client_v1, 15);
 
 /**
  * @generated from message fxvps.client.v1.Position
@@ -612,7 +707,7 @@ export type Position = Message<"fxvps.client.v1.Position"> & {
   symbol: string;
 
   /**
-   * Signed net quantity (positive = long).
+   * Signed quantity of this position (positive = long); 0 = closed.
    *
    * @generated from field: fxvps.client.v1.Decimal net_qty = 2;
    */
@@ -629,6 +724,51 @@ export type Position = Message<"fxvps.client.v1.Position"> & {
    * @generated from field: fxvps.client.v1.Decimal unrealized_pnl = 4;
    */
   unrealizedPnl?: Decimal | undefined;
+
+  /**
+   * Added in v1.2. Server position id; hedging accounts hold several
+   * positions per symbol, netting accounts at most one. Empty on servers
+   * that only report one net position per symbol.
+   *
+   * @generated from field: string position_id = 5;
+   */
+  positionId: string;
+
+  /**
+   * @generated from field: fxvps.client.v1.Side side = 6;
+   */
+  side: Side;
+
+  /**
+   * Unsigned quantity (base units).
+   *
+   * @generated from field: fxvps.client.v1.Decimal qty = 7;
+   */
+  qty?: Decimal | undefined;
+
+  /**
+   * Protective levels (absent = none).
+   *
+   * @generated from field: fxvps.client.v1.Decimal sl = 8;
+   */
+  sl?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal tp = 9;
+   */
+  tp?: Decimal | undefined;
+
+  /**
+   * Server-side trailing stop distance in price units (absent = off).
+   *
+   * @generated from field: fxvps.client.v1.Decimal trailing_distance = 10;
+   */
+  trailingDistance?: Decimal | undefined;
+
+  /**
+   * @generated from field: uint64 open_time_ns = 11;
+   */
+  openTimeNs: bigint;
 };
 
 /**
@@ -636,7 +776,7 @@ export type Position = Message<"fxvps.client.v1.Position"> & {
  * Use `create(PositionSchema)` to create a new message.
  */
 export const PositionSchema: GenMessage<Position> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 15);
+  messageDesc(file_fxvps_client_v1, 16);
 
 /**
  * @generated from message fxvps.client.v1.AccountSnapshot
@@ -684,6 +824,18 @@ export type AccountSnapshot = Message<"fxvps.client.v1.AccountSnapshot"> & {
    * @generated from field: fxvps.client.v1.Decimal margin_level = 8;
    */
   marginLevel?: Decimal | undefined;
+
+  /**
+   * Added in v1.2.
+   *
+   * @generated from field: fxvps.client.v1.MarginMode margin_mode = 9;
+   */
+  marginMode: MarginMode;
+
+  /**
+   * @generated from field: uint32 leverage = 10;
+   */
+  leverage: number;
 };
 
 /**
@@ -691,7 +843,7 @@ export type AccountSnapshot = Message<"fxvps.client.v1.AccountSnapshot"> & {
  * Use `create(AccountSnapshotSchema)` to create a new message.
  */
 export const AccountSnapshotSchema: GenMessage<AccountSnapshot> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 16);
+  messageDesc(file_fxvps_client_v1, 17);
 
 /**
  * @generated from message fxvps.client.v1.PositionUpdate
@@ -713,7 +865,7 @@ export type PositionUpdate = Message<"fxvps.client.v1.PositionUpdate"> & {
  * Use `create(PositionUpdateSchema)` to create a new message.
  */
 export const PositionUpdateSchema: GenMessage<PositionUpdate> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 17);
+  messageDesc(file_fxvps_client_v1, 18);
 
 /**
  * @generated from message fxvps.client.v1.OrderUpdate
@@ -783,6 +935,79 @@ export type OrderUpdate = Message<"fxvps.client.v1.OrderUpdate"> & {
    * @generated from field: uint64 ts_ns = 13;
    */
   tsNs: bigint;
+
+  /**
+   * Added in v1.2: the order's current parameters (also after ModifyOrder).
+   *
+   * @generated from field: fxvps.client.v1.OrderType order_type = 14;
+   */
+  orderType: OrderType;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal qty = 15;
+   */
+  qty?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal limit_price = 16;
+   */
+  limitPrice?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal stop_price = 17;
+   */
+  stopPrice?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal sl = 18;
+   */
+  sl?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal tp = 19;
+   */
+  tp?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal trailing_distance = 20;
+   */
+  trailingDistance?: Decimal | undefined;
+
+  /**
+   * @generated from field: uint64 oco_group = 21;
+   */
+  ocoGroup: bigint;
+
+  /**
+   * @generated from field: uint64 expire_at_ns = 22;
+   */
+  expireAtNs: bigint;
+
+  /**
+   * Position opened / increased / closed by this order (empty if none yet).
+   *
+   * @generated from field: string position_id = 23;
+   */
+  positionId: string;
+
+  /**
+   * Stop-limit: stop has triggered, the order now rests as a limit.
+   *
+   * @generated from field: bool stop_triggered = 24;
+   */
+  stopTriggered: boolean;
+
+  /**
+   * Order closes (part of) this position (ClosePosition, SL/TP, stop-out).
+   *
+   * @generated from field: string close_position_id = 25;
+   */
+  closePositionId: string;
+
+  /**
+   * @generated from field: uint64 created_ns = 26;
+   */
+  createdNs: bigint;
 };
 
 /**
@@ -790,7 +1015,7 @@ export type OrderUpdate = Message<"fxvps.client.v1.OrderUpdate"> & {
  * Use `create(OrderUpdateSchema)` to create a new message.
  */
 export const OrderUpdateSchema: GenMessage<OrderUpdate> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 18);
+  messageDesc(file_fxvps_client_v1, 19);
 
 /**
  * @generated from message fxvps.client.v1.PlaceOrder
@@ -837,6 +1062,48 @@ export type PlaceOrder = Message<"fxvps.client.v1.PlaceOrder"> & {
    * @generated from field: fxvps.client.v1.TimeInForce tif = 8;
    */
   tif: TimeInForce;
+
+  /**
+   * Added in v1.2.
+   * Trigger price of STOP / STOP_LIMIT orders.
+   *
+   * @generated from field: fxvps.client.v1.Decimal stop_price = 9;
+   */
+  stopPrice?: Decimal | undefined;
+
+  /**
+   * Protective levels attached to the resulting position.
+   *
+   * @generated from field: fxvps.client.v1.Decimal sl = 10;
+   */
+  sl?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal tp = 11;
+   */
+  tp?: Decimal | undefined;
+
+  /**
+   * Server-side trailing stop distance (price units) for the position.
+   *
+   * @generated from field: fxvps.client.v1.Decimal trailing_distance = 12;
+   */
+  trailingDistance?: Decimal | undefined;
+
+  /**
+   * One-cancels-other group (client chosen, per account; 0 = none): when one
+   * pending order of the group executes, the others are cancelled.
+   *
+   * @generated from field: uint64 oco_group = 13;
+   */
+  ocoGroup: bigint;
+
+  /**
+   * Expiry of a pending order (ns since epoch; implies GTD; 0 = none).
+   *
+   * @generated from field: uint64 expire_at_ns = 14;
+   */
+  expireAtNs: bigint;
 };
 
 /**
@@ -844,7 +1111,7 @@ export type PlaceOrder = Message<"fxvps.client.v1.PlaceOrder"> & {
  * Use `create(PlaceOrderSchema)` to create a new message.
  */
 export const PlaceOrderSchema: GenMessage<PlaceOrder> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 19);
+  messageDesc(file_fxvps_client_v1, 20);
 
 /**
  * @generated from message fxvps.client.v1.CancelOrder
@@ -873,9 +1140,12 @@ export type CancelOrder = Message<"fxvps.client.v1.CancelOrder"> & {
  * Use `create(CancelOrderSchema)` to create a new message.
  */
 export const CancelOrderSchema: GenMessage<CancelOrder> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 20);
+  messageDesc(file_fxvps_client_v1, 21);
 
 /**
+ * Absent fields keep their value. Pending orders are modified in place (the
+ * order keeps its id and its target_request_id).
+ *
  * @generated from message fxvps.client.v1.ModifyOrder
  */
 export type ModifyOrder = Message<"fxvps.client.v1.ModifyOrder"> & {
@@ -903,6 +1173,48 @@ export type ModifyOrder = Message<"fxvps.client.v1.ModifyOrder"> & {
    * @generated from field: fxvps.client.v1.Decimal limit_price = 5;
    */
   limitPrice?: Decimal | undefined;
+
+  /**
+   * Added in v1.2.
+   *
+   * @generated from field: fxvps.client.v1.Decimal stop_price = 6;
+   */
+  stopPrice?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal sl = 7;
+   */
+  sl?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal tp = 8;
+   */
+  tp?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal trailing_distance = 9;
+   */
+  trailingDistance?: Decimal | undefined;
+
+  /**
+   * @generated from field: uint64 expire_at_ns = 10;
+   */
+  expireAtNs: bigint;
+
+  /**
+   * true: sl / tp / trailing_distance replace the current values and absent
+   * means "remove"; false: absent keeps them.
+   *
+   * @generated from field: bool replace_protection = 11;
+   */
+  replaceProtection: boolean;
+
+  /**
+   * true: remove the expiry (GTC).
+   *
+   * @generated from field: bool clear_expiry = 12;
+   */
+  clearExpiry: boolean;
 };
 
 /**
@@ -910,7 +1222,334 @@ export type ModifyOrder = Message<"fxvps.client.v1.ModifyOrder"> & {
  * Use `create(ModifyOrderSchema)` to create a new message.
  */
 export const ModifyOrderSchema: GenMessage<ModifyOrder> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 21);
+  messageDesc(file_fxvps_client_v1, 22);
+
+/**
+ * Added in v1.2: sets the protection of an open position. Full replacement:
+ * an absent sl / tp / trailing_distance removes it.
+ *
+ * @generated from message fxvps.client.v1.ModifyPosition
+ */
+export type ModifyPosition = Message<"fxvps.client.v1.ModifyPosition"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: string account_id = 2;
+   */
+  accountId: string;
+
+  /**
+   * @generated from field: string position_id = 3;
+   */
+  positionId: string;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal sl = 4;
+   */
+  sl?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal tp = 5;
+   */
+  tp?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal trailing_distance = 6;
+   */
+  trailingDistance?: Decimal | undefined;
+};
+
+/**
+ * Describes the message fxvps.client.v1.ModifyPosition.
+ * Use `create(ModifyPositionSchema)` to create a new message.
+ */
+export const ModifyPositionSchema: GenMessage<ModifyPosition> = /*@__PURE__*/
+  messageDesc(file_fxvps_client_v1, 23);
+
+/**
+ * Added in v1.2: closes a position fully (qty absent) or partially at market.
+ * The closing order's OrderUpdates carry client_request_id = request_id.
+ *
+ * @generated from message fxvps.client.v1.ClosePosition
+ */
+export type ClosePosition = Message<"fxvps.client.v1.ClosePosition"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: string account_id = 2;
+   */
+  accountId: string;
+
+  /**
+   * @generated from field: string position_id = 3;
+   */
+  positionId: string;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal qty = 4;
+   */
+  qty?: Decimal | undefined;
+};
+
+/**
+ * Describes the message fxvps.client.v1.ClosePosition.
+ * Use `create(ClosePositionSchema)` to create a new message.
+ */
+export const ClosePositionSchema: GenMessage<ClosePosition> = /*@__PURE__*/
+  messageDesc(file_fxvps_client_v1, 24);
+
+/**
+ * Added in v1.2: working (pending) orders of an account.
+ *
+ * @generated from message fxvps.client.v1.OrderListRequest
+ */
+export type OrderListRequest = Message<"fxvps.client.v1.OrderListRequest"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: string account_id = 2;
+   */
+  accountId: string;
+};
+
+/**
+ * Describes the message fxvps.client.v1.OrderListRequest.
+ * Use `create(OrderListRequestSchema)` to create a new message.
+ */
+export const OrderListRequestSchema: GenMessage<OrderListRequest> = /*@__PURE__*/
+  messageDesc(file_fxvps_client_v1, 25);
+
+/**
+ * @generated from message fxvps.client.v1.OrderList
+ */
+export type OrderList = Message<"fxvps.client.v1.OrderList"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: string account_id = 2;
+   */
+  accountId: string;
+
+  /**
+   * Current state of every pending order (OrderUpdate shape, status NEW).
+   *
+   * @generated from field: repeated fxvps.client.v1.OrderUpdate orders = 3;
+   */
+  orders: OrderUpdate[];
+};
+
+/**
+ * Describes the message fxvps.client.v1.OrderList.
+ * Use `create(OrderListSchema)` to create a new message.
+ */
+export const OrderListSchema: GenMessage<OrderList> = /*@__PURE__*/
+  messageDesc(file_fxvps_client_v1, 26);
+
+/**
+ * One execution against a position (a fill that reverses a netting position
+ * yields an OUT and an IN deal).
+ *
+ * @generated from message fxvps.client.v1.Deal
+ */
+export type Deal = Message<"fxvps.client.v1.Deal"> & {
+  /**
+   * @generated from field: string deal_id = 1;
+   */
+  dealId: string;
+
+  /**
+   * @generated from field: string order_id = 2;
+   */
+  orderId: string;
+
+  /**
+   * Originating PlaceOrder / ClosePosition request_id (server generated for
+   * SL / TP / stop-out closes).
+   *
+   * @generated from field: string client_request_id = 3;
+   */
+  clientRequestId: string;
+
+  /**
+   * @generated from field: string position_id = 4;
+   */
+  positionId: string;
+
+  /**
+   * @generated from field: string symbol = 5;
+   */
+  symbol: string;
+
+  /**
+   * @generated from field: fxvps.client.v1.Side side = 6;
+   */
+  side: Side;
+
+  /**
+   * @generated from field: fxvps.client.v1.DealEntry entry = 7;
+   */
+  entry: DealEntry;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal qty = 8;
+   */
+  qty?: Decimal | undefined;
+
+  /**
+   * @generated from field: fxvps.client.v1.Decimal price = 9;
+   */
+  price?: Decimal | undefined;
+
+  /**
+   * Realized P&L in account currency (OUT deals; 0 for IN).
+   *
+   * @generated from field: fxvps.client.v1.Decimal realized_pnl = 10;
+   */
+  realizedPnl?: Decimal | undefined;
+
+  /**
+   * Commission charged (negative = cost), account currency.
+   *
+   * @generated from field: fxvps.client.v1.Decimal commission = 11;
+   */
+  commission?: Decimal | undefined;
+
+  /**
+   * @generated from field: uint64 ts_ns = 12;
+   */
+  tsNs: bigint;
+
+  /**
+   * @generated from field: fxvps.client.v1.DealReason reason = 13;
+   */
+  reason: DealReason;
+};
+
+/**
+ * Describes the message fxvps.client.v1.Deal.
+ * Use `create(DealSchema)` to create a new message.
+ */
+export const DealSchema: GenMessage<Deal> = /*@__PURE__*/
+  messageDesc(file_fxvps_client_v1, 27);
+
+/**
+ * Added in v1.2: deal history, oldest first. Paging: pass the previous
+ * response's next_cursor as cursor until it comes back empty.
+ *
+ * @generated from message fxvps.client.v1.DealHistoryRequest
+ */
+export type DealHistoryRequest = Message<"fxvps.client.v1.DealHistoryRequest"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: string account_id = 2;
+   */
+  accountId: string;
+
+  /**
+   * Inclusive time bounds (ns); 0 = unbounded.
+   *
+   * @generated from field: uint64 from_ns = 3;
+   */
+  fromNs: bigint;
+
+  /**
+   * @generated from field: uint64 to_ns = 4;
+   */
+  toNs: bigint;
+
+  /**
+   * Page size; 0 = server default (500), capped at 5000.
+   *
+   * @generated from field: uint32 limit = 5;
+   */
+  limit: number;
+
+  /**
+   * @generated from field: string cursor = 6;
+   */
+  cursor: string;
+};
+
+/**
+ * Describes the message fxvps.client.v1.DealHistoryRequest.
+ * Use `create(DealHistoryRequestSchema)` to create a new message.
+ */
+export const DealHistoryRequestSchema: GenMessage<DealHistoryRequest> = /*@__PURE__*/
+  messageDesc(file_fxvps_client_v1, 28);
+
+/**
+ * @generated from message fxvps.client.v1.DealHistory
+ */
+export type DealHistory = Message<"fxvps.client.v1.DealHistory"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: string account_id = 2;
+   */
+  accountId: string;
+
+  /**
+   * @generated from field: repeated fxvps.client.v1.Deal deals = 3;
+   */
+  deals: Deal[];
+
+  /**
+   * Empty = no more pages.
+   *
+   * @generated from field: string next_cursor = 4;
+   */
+  nextCursor: string;
+};
+
+/**
+ * Describes the message fxvps.client.v1.DealHistory.
+ * Use `create(DealHistorySchema)` to create a new message.
+ */
+export const DealHistorySchema: GenMessage<DealHistory> = /*@__PURE__*/
+  messageDesc(file_fxvps_client_v1, 29);
+
+/**
+ * Added in v1.2 (server): a new deal of an authorized account.
+ *
+ * @generated from message fxvps.client.v1.DealUpdate
+ */
+export type DealUpdate = Message<"fxvps.client.v1.DealUpdate"> & {
+  /**
+   * @generated from field: string account_id = 1;
+   */
+  accountId: string;
+
+  /**
+   * @generated from field: fxvps.client.v1.Deal deal = 2;
+   */
+  deal?: Deal | undefined;
+};
+
+/**
+ * Describes the message fxvps.client.v1.DealUpdate.
+ * Use `create(DealUpdateSchema)` to create a new message.
+ */
+export const DealUpdateSchema: GenMessage<DealUpdate> = /*@__PURE__*/
+  messageDesc(file_fxvps_client_v1, 30);
 
 /**
  * @generated from message fxvps.client.v1.Ack
@@ -927,7 +1566,7 @@ export type Ack = Message<"fxvps.client.v1.Ack"> & {
  * Use `create(AckSchema)` to create a new message.
  */
 export const AckSchema: GenMessage<Ack> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 22);
+  messageDesc(file_fxvps_client_v1, 31);
 
 /**
  * @generated from message fxvps.client.v1.Error
@@ -954,7 +1593,7 @@ export type Error = Message<"fxvps.client.v1.Error"> & {
  * Use `create(ErrorSchema)` to create a new message.
  */
 export const ErrorSchema: GenMessage<Error> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 23);
+  messageDesc(file_fxvps_client_v1, 32);
 
 /**
  * @generated from message fxvps.client.v1.Heartbeat
@@ -971,7 +1610,7 @@ export type Heartbeat = Message<"fxvps.client.v1.Heartbeat"> & {
  * Use `create(HeartbeatSchema)` to create a new message.
  */
 export const HeartbeatSchema: GenMessage<Heartbeat> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 24);
+  messageDesc(file_fxvps_client_v1, 33);
 
 /**
  * @generated from message fxvps.client.v1.Ping
@@ -993,7 +1632,7 @@ export type Ping = Message<"fxvps.client.v1.Ping"> & {
  * Use `create(PingSchema)` to create a new message.
  */
 export const PingSchema: GenMessage<Ping> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 25);
+  messageDesc(file_fxvps_client_v1, 34);
 
 /**
  * @generated from message fxvps.client.v1.Pong
@@ -1015,7 +1654,39 @@ export type Pong = Message<"fxvps.client.v1.Pong"> & {
  * Use `create(PongSchema)` to create a new message.
  */
 export const PongSchema: GenMessage<Pong> = /*@__PURE__*/
-  messageDesc(file_fxvps_client_v1, 26);
+  messageDesc(file_fxvps_client_v1, 35);
+
+/**
+ * Added in v1.2.
+ *
+ * @generated from enum fxvps.client.v1.MarginMode
+ */
+export enum MarginMode {
+  /**
+   * @generated from enum value: MARGIN_MODE_UNSPECIFIED = 0;
+   */
+  MARGIN_MODE_UNSPECIFIED = 0,
+
+  /**
+   * One position per symbol; opposite fills reduce / reverse it.
+   *
+   * @generated from enum value: NETTING = 1;
+   */
+  NETTING = 1,
+
+  /**
+   * Every fill opens its own position (several per symbol, both sides).
+   *
+   * @generated from enum value: HEDGING = 2;
+   */
+  HEDGING = 2,
+}
+
+/**
+ * Describes the enum fxvps.client.v1.MarginMode.
+ */
+export const MarginModeSchema: GenEnum<MarginMode> = /*@__PURE__*/
+  enumDesc(file_fxvps_client_v1, 0);
 
 /**
  * @generated from enum fxvps.client.v1.Timeframe
@@ -1066,7 +1737,7 @@ export enum Timeframe {
  * Describes the enum fxvps.client.v1.Timeframe.
  */
 export const TimeframeSchema: GenEnum<Timeframe> = /*@__PURE__*/
-  enumDesc(file_fxvps_client_v1, 0);
+  enumDesc(file_fxvps_client_v1, 1);
 
 /**
  * @generated from enum fxvps.client.v1.Side
@@ -1092,7 +1763,7 @@ export enum Side {
  * Describes the enum fxvps.client.v1.Side.
  */
 export const SideSchema: GenEnum<Side> = /*@__PURE__*/
-  enumDesc(file_fxvps_client_v1, 1);
+  enumDesc(file_fxvps_client_v1, 2);
 
 /**
  * @generated from enum fxvps.client.v1.OrderType
@@ -1112,13 +1783,27 @@ export enum OrderType {
    * @generated from enum value: LIMIT = 2;
    */
   LIMIT = 2,
+
+  /**
+   * Added in v1.2: triggers a market order once the price reaches stop_price.
+   *
+   * @generated from enum value: STOP = 3;
+   */
+  STOP = 3,
+
+  /**
+   * Added in v1.2: becomes a limit order at limit_price once stop_price trades.
+   *
+   * @generated from enum value: STOP_LIMIT = 4;
+   */
+  STOP_LIMIT = 4,
 }
 
 /**
  * Describes the enum fxvps.client.v1.OrderType.
  */
 export const OrderTypeSchema: GenEnum<OrderType> = /*@__PURE__*/
-  enumDesc(file_fxvps_client_v1, 2);
+  enumDesc(file_fxvps_client_v1, 3);
 
 /**
  * @generated from enum fxvps.client.v1.TimeInForce
@@ -1148,13 +1833,20 @@ export enum TimeInForce {
    * @generated from enum value: FOK = 4;
    */
   FOK = 4,
+
+  /**
+   * Added in v1.2: good till PlaceOrder.expire_at_ns (pending orders only).
+   *
+   * @generated from enum value: GTD = 5;
+   */
+  GTD = 5,
 }
 
 /**
  * Describes the enum fxvps.client.v1.TimeInForce.
  */
 export const TimeInForceSchema: GenEnum<TimeInForce> = /*@__PURE__*/
-  enumDesc(file_fxvps_client_v1, 3);
+  enumDesc(file_fxvps_client_v1, 4);
 
 /**
  * @generated from enum fxvps.client.v1.OrderStatus
@@ -1210,7 +1902,75 @@ export enum OrderStatus {
  * Describes the enum fxvps.client.v1.OrderStatus.
  */
 export const OrderStatusSchema: GenEnum<OrderStatus> = /*@__PURE__*/
-  enumDesc(file_fxvps_client_v1, 4);
+  enumDesc(file_fxvps_client_v1, 5);
+
+/**
+ * Added in v1.2.
+ *
+ * @generated from enum fxvps.client.v1.DealEntry
+ */
+export enum DealEntry {
+  /**
+   * @generated from enum value: DEAL_ENTRY_UNSPECIFIED = 0;
+   */
+  DEAL_ENTRY_UNSPECIFIED = 0,
+
+  /**
+   * Opened / increased a position.
+   *
+   * @generated from enum value: IN = 1;
+   */
+  IN = 1,
+
+  /**
+   * Reduced / closed a position.
+   *
+   * @generated from enum value: OUT = 2;
+   */
+  OUT = 2,
+}
+
+/**
+ * Describes the enum fxvps.client.v1.DealEntry.
+ */
+export const DealEntrySchema: GenEnum<DealEntry> = /*@__PURE__*/
+  enumDesc(file_fxvps_client_v1, 6);
+
+/**
+ * @generated from enum fxvps.client.v1.DealReason
+ */
+export enum DealReason {
+  /**
+   * @generated from enum value: DEAL_REASON_UNSPECIFIED = 0;
+   */
+  DEAL_REASON_UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: CLIENT = 1;
+   */
+  CLIENT = 1,
+
+  /**
+   * @generated from enum value: STOP_LOSS = 2;
+   */
+  STOP_LOSS = 2,
+
+  /**
+   * @generated from enum value: TAKE_PROFIT = 3;
+   */
+  TAKE_PROFIT = 3,
+
+  /**
+   * @generated from enum value: STOP_OUT = 4;
+   */
+  STOP_OUT = 4,
+}
+
+/**
+ * Describes the enum fxvps.client.v1.DealReason.
+ */
+export const DealReasonSchema: GenEnum<DealReason> = /*@__PURE__*/
+  enumDesc(file_fxvps_client_v1, 7);
 
 /**
  * @generated from enum fxvps.client.v1.ErrorCode
@@ -1285,5 +2045,5 @@ export enum ErrorCode {
  * Describes the enum fxvps.client.v1.ErrorCode.
  */
 export const ErrorCodeSchema: GenEnum<ErrorCode> = /*@__PURE__*/
-  enumDesc(file_fxvps_client_v1, 5);
+  enumDesc(file_fxvps_client_v1, 8);
 

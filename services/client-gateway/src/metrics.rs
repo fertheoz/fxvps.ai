@@ -6,6 +6,8 @@ pub struct Metrics {
     registry: Registry,
     pub connections: IntGauge,
     pub auth_failures: IntCounter,
+    pub connections_rejected: IntCounter,
+    pub sessions_expired: IntCounter,
     pub quote_batches_sent: IntCounter,
     pub quotes_sent: IntCounter,
     pub quotes_conflated: IntCounter,
@@ -32,6 +34,16 @@ impl Default for Metrics {
         let r = &registry;
         Metrics {
             connections,
+            connections_rejected: counter(
+                r,
+                "client_gw_connections_rejected_total",
+                "Connections refused by the global / per-IP / per-subject caps",
+            ),
+            sessions_expired: counter(
+                r,
+                "client_gw_sessions_expired_total",
+                "Connections closed because the token expired",
+            ),
             auth_failures: counter(
                 r,
                 "client_gw_auth_failures_total",

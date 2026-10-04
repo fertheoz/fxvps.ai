@@ -22,6 +22,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/auth/dev-token", post(dev_token))
         .route("/v1/me", get(me))
         .route("/v1/stream", get(super::stream::stream))
+        .route("/v1/stream/ticket", post(super::stream::ticket))
         .route("/v1/dashboard", get(dashboard))
         .route("/v1/exposure", get(exposure))
         .route("/v1/accounts", get(list_accounts))
@@ -137,24 +138,36 @@ fn now_ns() -> u64 {
 #[derive(Deserialize)]
 struct DevTokenReq {
     role: String,
-    sub: Option<String>,
     name: Option<String>,
 }
 
-/// `POST /auth/dev-token` — only with `CORE_DEV_AUTH=1` (404 otherwise).
+/// `POST /auth/dev-token` — only with `CORE_DEV_AUTH=1` (404 otherwise), which
+/// the binary accepts only on a loopback bind and without production keys.
+/// Signs with the random dev key; `admin` needs `CORE_DEV_AUTH_ADMIN=1`. The
+/// `sub` is derived from the role by the server (a caller-supplied `sub` is
+/// ignored), so four-eyes cannot be satisfied by choosing two subjects.
 async fn dev_token(State(ctx): State<AdminCtx>, Json(req): Json<DevTokenReq>) -> ApiResult {
     if !ctx.auth.dev_enabled() {
         return Err(ApiError::not_found("dev auth disabled"));
     }
     let role = Role::parse(&req.role).ok_or_else(|| ApiError::bad("unknown role"))?;
+    if !ctx.auth.dev_allows(role) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "dev admin tokens need CORE_DEV_AUTH_ADMIN=1",
+        ));
+    }
     let now = auth::unix_now();
-    let sub = req.sub.unwrap_or_else(|| format!("dev-{}", role.as_str()));
+    let sub = format!("dev-{}", role.as_str());
     let claims = Claims {
         name: Some(req.name.unwrap_or_else(|| sub.clone())),
         sub,
         role,
-        exp: now + 12 * 3600,
+        exp: now + 8 * 3600,
         iat: Some(now),
+        amr: vec!["dev".into(), "mfa".into()],
+        iss: None,
     };
     let token = ctx
         .auth

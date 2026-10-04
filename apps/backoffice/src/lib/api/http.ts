@@ -110,7 +110,18 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
       const open = async () => {
         const token = await getToken();
         if (closed || !token) return;
-        es = new ES(`${base}/v1/stream?access_token=${enc(token)}`);
+        // EventSource cannot send headers: exchange the bearer token (header) for a
+        // short-lived single-use ticket so the token never appears in a URL / log.
+        let ticket: string;
+        try {
+          ticket = (await call<{ ticket: string }>("POST", "/v1/stream/ticket")).ticket;
+        } catch {
+          onStatus?.(false);
+          if (!closed) retry = setTimeout(() => void open(), 3000);
+          return;
+        }
+        if (closed) return;
+        es = new ES(`${base}/v1/stream?ticket=${enc(ticket)}`);
         es.addEventListener("hello", () => onStatus?.(true));
         es.addEventListener("invalidate", (ev) => {
           try {

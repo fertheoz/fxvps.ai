@@ -1,13 +1,19 @@
 import Big from 'big.js';
 import { create, fromBinary, toBinary, type MessageInitShape } from '@bufbuild/protobuf';
 import {
+  DealEntry,
+  DealReason,
   EnvelopeSchema,
   ErrorCode,
+  MarginMode as WireMarginMode,
   OrderStatus,
   OrderType as WireOrderType,
   Side as WireSide,
+  TimeInForce,
   Timeframe as WireTimeframe,
+  type AccountInfo,
   type AccountSnapshot,
+  type Deal as WireDeal,
   type Envelope,
   type Instrument,
   type OrderUpdate,
@@ -22,6 +28,7 @@ import type {
   ConnectionState,
   Deal,
   Depth,
+  OrderChanges,
   OrderRequest,
   OrderResult,
   PendingOrder,
@@ -43,8 +50,9 @@ import type {
  *  - volume: centi-lots <-> base units (volume * contractSize / 100)
  *  - money:  minor units (cents) <-> Decimal major units
  *  - prices: numbers rounded to `digits` <-> Decimal (exact, via big.js)
- * The gateway nets positions per symbol, so there is one Position per
- * (account, symbol) with id `<account>:<symbol>`.
+ * Positions are keyed by the server `position_id` (protocol v1.2; hedging
+ * accounts hold several per symbol). Pre-v1.2 gateways report one net position
+ * per symbol without an id: those get `<account>:<symbol>`.
  */
 
 export const PROTOCOL_VERSION = 1;
@@ -90,6 +98,36 @@ const TF_TO_WIRE: Record<Timeframe, WireTimeframe> = {
   W1: WireTimeframe.D1,
   MN: WireTimeframe.D1,
 };
+
+const WIRE_TYPE: Record<OrderRequest['type'], WireOrderType> = {
+  market: WireOrderType.MARKET,
+  limit: WireOrderType.LIMIT,
+  stop: WireOrderType.STOP,
+  stop_limit: WireOrderType.STOP_LIMIT,
+};
+const FROM_WIRE_TYPE: Partial<Record<WireOrderType, PendingOrder['type']>> = {
+  [WireOrderType.LIMIT]: 'limit',
+  [WireOrderType.STOP]: 'stop',
+  [WireOrderType.STOP_LIMIT]: 'stop_limit',
+};
+const DEAL_REASON: Record<DealReason, Deal['reason']> = {
+  [DealReason.DEAL_REASON_UNSPECIFIED]: 'client',
+  [DealReason.CLIENT]: 'client',
+  [DealReason.STOP_LOSS]: 'sl',
+  [DealReason.TAKE_PROFIT]: 'tp',
+  [DealReason.STOP_OUT]: 'stop_out',
+};
+const HISTORY_PAGE = 1000;
+const HISTORY_MAX_PAGES = 50;
+
+const nsToMs = (ns: bigint): number => Number(ns / 1_000_000n);
+const msToNs = (ms: number): bigint => BigInt(Math.round(ms)) * 1_000_000n;
+/** Money (major units) -> integer minor units. */
+const minor = (d: Parameters<typeof decimalToBig>[0]): number => Number((decimalToBig(d) ?? new Big(0)).times(100).round(0).toFixed(0));
+
+export function marginModeFromWire(m: WireMarginMode): Account['marginMode'] {
+  return m === WireMarginMode.HEDGING ? 'hedging' : m === WireMarginMode.NETTING ? 'netting' : undefined;
+}
 
 const TERMINAL_STATUSES = new Set([OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED]);
 const RESTING_STATUSES = new Set([OrderStatus.PENDING_NEW, OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED, OrderStatus.REPLACED]);
@@ -160,13 +198,16 @@ export class WsTradingApi implements TradingApi {
 
   private accountIds: string[] = [];
   private accounts = new Map<string, Account>();
+  private infos = new Map<string, AccountInfo>();
+  /** Server speaks protocol v1.2 (position ids, deals, native modify). */
+  private v12 = false;
   private snapshotsPending = new Set<string>();
   private resolveSnapshots: () => void = () => undefined;
   private symbols = new Map<string, SymbolSpec>();
   private positions = new Map<string, Map<string, Position>>();
   private orders = new Map<string, Map<string, PendingOrder>>();
-  /** PlaceOrder request_id -> what was asked for (to classify OrderUpdates). */
-  private placed = new Map<string, { type: 'market' | 'limit'; price?: number }>();
+  /** PlaceOrder request_id -> what was asked for (classifies OrderUpdates of pre-v1.2 gateways). */
+  private placed = new Map<string, { type: OrderRequest['type']; price?: number }>();
   private day = new Map<string, { open: number; high: number; low: number }>();
   private dealSeq = 0;
 
@@ -291,9 +332,26 @@ export class WsTradingApi implements TradingApi {
     }
   }
 
-  getHistory(): Promise<Deal[]> {
-    // The gateway has no deal history yet; deals are built from live fills.
-    return Promise.resolve([]);
+  /** Deal history from the server (protocol v1.2), all pages, oldest first. */
+  async getHistory(accountId: string): Promise<Deal[]> {
+    if (!this.v12) return [];
+    const out: Deal[] = [];
+    let cursor = '';
+    try {
+      for (let page = 0; page < HISTORY_MAX_PAGES; page++) {
+        const body = await this.request((requestId) => ({
+          case: 'dealHistoryRequest',
+          value: { requestId, accountId, limit: HISTORY_PAGE, cursor },
+        }));
+        if (body.case !== 'dealHistory') break;
+        for (const d of body.value.deals) out.push(this.dealFromWire(accountId, d));
+        cursor = body.value.nextCursor;
+        if (!cursor) break;
+      }
+    } catch (e) {
+      this.emitJournal('warn', `History unavailable: ${(e as Error).message}`);
+    }
+    return out;
   }
 
   subscribeQuotes(symbols: string[], onQuotes: (quotes: Quote[]) => void): Unsubscribe {
@@ -323,14 +381,19 @@ export class WsTradingApi implements TradingApi {
   }
 
   async placeOrder(req: OrderRequest): Promise<OrderResult> {
-    if (req.type !== 'market' && req.type !== 'limit') return { ok: false, error: `${req.type} orders are not supported by the gateway` };
     const spec = this.symbols.get(req.symbol);
     if (!spec) return { ok: false, error: `Unknown symbol ${req.symbol}` };
-    if (req.type === 'limit' && req.price === undefined) return { ok: false, error: 'Limit price required' };
-    if (req.sl !== undefined || req.tp !== undefined) this.emitJournal('warn', 'SL/TP are not supported by the gateway yet and were ignored');
+    const pending = req.type !== 'market';
+    if (pending && req.price === undefined) return { ok: false, error: 'Price required' };
+    if (req.type === 'stop_limit' && req.limitPrice === undefined) return { ok: false, error: 'Limit price required' };
+    if (!this.v12 && (req.type === 'stop' || req.type === 'stop_limit')) return { ok: false, error: `${req.type} orders need a v1.2 gateway` };
     const requestId = req.clientId ?? randomId();
     this.placed.set(requestId, { type: req.type, price: req.price });
-    const fill = req.type === 'market' ? this.waitFill(requestId) : undefined;
+    const fill = pending ? undefined : this.waitFill(requestId);
+    // Terminal price semantics: `price` = limit price (limit) or stop price (stop, stop-limit).
+    const limit = req.type === 'limit' ? req.price : req.type === 'stop_limit' ? req.limitPrice : undefined;
+    const stop = req.type === 'stop' || req.type === 'stop_limit' ? req.price : undefined;
+    const opt = (v: number | undefined) => (v === undefined ? undefined : toDecimal(v));
     try {
       await this.request(
         () => ({
@@ -340,9 +403,16 @@ export class WsTradingApi implements TradingApi {
             accountId: req.accountId,
             symbol: req.symbol,
             side: req.side === 'buy' ? WireSide.BUY : WireSide.SELL,
-            orderType: req.type === 'market' ? WireOrderType.MARKET : WireOrderType.LIMIT,
-            qty: toDecimal(new Big(req.volume).times(spec.contractSize).div(100)),
-            limitPrice: req.type === 'limit' && req.price !== undefined ? toDecimal(req.price) : undefined,
+            orderType: WIRE_TYPE[req.type],
+            qty: this.volumeToQty(spec, req.volume),
+            limitPrice: opt(limit),
+            stopPrice: opt(stop),
+            sl: opt(req.sl),
+            tp: opt(req.tp),
+            trailingDistance: opt(req.trailing),
+            ocoGroup: pending && req.ocoGroup ? BigInt(req.ocoGroup) : 0n,
+            expireAtNs: pending && req.expiry !== undefined ? msToNs(req.expiry) : 0n,
+            tif: pending && req.expiry !== undefined ? TimeInForce.GTD : TimeInForce.TIME_IN_FORCE_UNSPECIFIED,
           },
         }),
         requestId,
@@ -353,7 +423,11 @@ export class WsTradingApi implements TradingApi {
       return { ok: false, error: (e as Error).message };
     }
     if (!fill) return { ok: true, orderId: requestId };
-    const u = await fill;
+    return this.fillResult(req.accountId, req.symbol, requestId, await fill);
+  }
+
+  /** Market execution outcome from the terminal OrderUpdate (undefined = no report in time). */
+  private fillResult(accountId: string, symbol: string, requestId: string, u: OrderUpdate | undefined, positionId?: string): OrderResult {
     // Accepted but no execution report in time: report acceptance, events will follow.
     if (!u) return { ok: true, orderId: requestId };
     const filled = decimalToBig(u.filledQty);
@@ -362,43 +436,94 @@ export class WsTradingApi implements TradingApi {
       return {
         ok: true,
         orderId: requestId,
-        positionId: this.positionId(req.accountId, req.symbol),
-        price: avg ? Number(avg.toFixed(spec.digits)) : undefined,
+        positionId: positionId ?? (u.positionId || u.closePositionId || this.positionId(accountId, symbol)),
+        price: avg ? Number(avg.toFixed(this.digits(symbol))) : undefined,
       };
     }
     return { ok: false, error: u.text || OrderStatus[u.status] || 'not filled' };
   }
 
-  modifyPosition(): Promise<OrderResult> {
-    return Promise.resolve({ ok: false, error: 'SL/TP are not supported by the gateway yet' });
-  }
-
-  closePosition(accountId: string, positionId: string, volume?: number): Promise<OrderResult> {
+  async modifyPosition(accountId: string, positionId: string, sl?: number, tp?: number, trailing?: number): Promise<OrderResult> {
+    if (!this.v12) return { ok: false, error: 'SL/TP need a v1.2 gateway' };
     const p = this.positions.get(accountId)?.get(positionId);
-    if (!p) return Promise.resolve({ ok: false, error: 'Unknown position' });
-    return this.placeOrder({
-      accountId,
-      symbol: p.symbol,
-      side: p.side === 'buy' ? 'sell' : 'buy',
-      type: 'market',
-      volume: Math.min(volume ?? p.volume, p.volume),
-    });
+    if (!p) return { ok: false, error: 'Unknown position' };
+    try {
+      await this.request((requestId) => ({
+        case: 'modifyPosition',
+        value: {
+          requestId,
+          accountId,
+          positionId,
+          sl: sl === undefined ? undefined : toDecimal(sl),
+          tp: tp === undefined ? undefined : toDecimal(tp),
+          trailingDistance: trailing === undefined ? undefined : toDecimal(trailing),
+        },
+      }));
+      return { ok: true, positionId };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
   }
 
-  async modifyOrder(
-    accountId: string,
-    orderId: string,
-    changes: Partial<Pick<PendingOrder, 'price' | 'limitPrice' | 'sl' | 'tp' | 'expiry'>>,
-  ): Promise<OrderResult> {
-    const price = changes.price;
-    if (price === undefined) return { ok: false, error: 'Only the limit price can be modified' };
+  async closePosition(accountId: string, positionId: string, volume?: number): Promise<OrderResult> {
+    const p = this.positions.get(accountId)?.get(positionId);
+    if (!p) return { ok: false, error: 'Unknown position' };
+    const vol = Math.min(volume ?? p.volume, p.volume);
+    if (!this.v12) {
+      // Pre-v1.2: net positions, closed by an opposite market order.
+      return this.placeOrder({ accountId, symbol: p.symbol, side: p.side === 'buy' ? 'sell' : 'buy', type: 'market', volume: vol });
+    }
+    const spec = this.symbols.get(p.symbol);
+    if (!spec) return { ok: false, error: `Unknown symbol ${p.symbol}` };
+    const requestId = randomId();
+    const fill = this.waitFill(requestId);
+    try {
+      await this.request(
+        () => ({
+          case: 'closePosition',
+          value: { requestId, accountId, positionId, qty: vol >= p.volume ? undefined : this.volumeToQty(spec, vol) },
+        }),
+        requestId,
+      );
+    } catch (e) {
+      this.cancelFillWait(requestId);
+      return { ok: false, error: (e as Error).message };
+    }
+    return this.fillResult(accountId, p.symbol, requestId, await fill, positionId);
+  }
+
+  async modifyOrder(accountId: string, orderId: string, changes: OrderChanges): Promise<OrderResult> {
+    const o = this.orders.get(accountId)?.get(orderId);
+    if (!o) return { ok: false, error: 'Unknown order' };
+    const spec = this.symbols.get(o.symbol);
+    if (!spec) return { ok: false, error: `Unknown symbol ${o.symbol}` };
+    if (!this.v12 && Object.keys(changes).some((k) => k !== 'price' && k !== 'volume')) {
+      return { ok: false, error: 'Only price and volume can be modified on this gateway' };
+    }
+    // `price` is the limit price of limits and the stop price of stops / stop-limits.
+    const limit = o.type === 'limit' ? changes.price : o.type === 'stop_limit' ? changes.limitPrice : undefined;
+    const stop = o.type !== 'limit' ? changes.price : undefined;
+    const prot = 'sl' in changes || 'tp' in changes || 'trailing' in changes;
+    const merged = { sl: o.sl, tp: o.tp, trailing: o.trailing, ...changes };
+    const opt = (v: number | undefined) => (v === undefined ? undefined : toDecimal(v));
     try {
       await this.request((requestId) => ({
         case: 'modifyOrder',
-        value: { requestId, accountId, targetRequestId: orderId, limitPrice: toDecimal(price) },
+        value: {
+          requestId,
+          accountId,
+          targetRequestId: orderId,
+          qty: changes.volume === undefined ? undefined : this.volumeToQty(spec, changes.volume),
+          limitPrice: opt(limit),
+          stopPrice: opt(stop),
+          replaceProtection: prot,
+          sl: prot ? opt(merged.sl) : undefined,
+          tp: prot ? opt(merged.tp) : undefined,
+          trailingDistance: prot ? opt(merged.trailing) : undefined,
+          expireAtNs: changes.expiry !== undefined ? msToNs(changes.expiry) : 0n,
+          clearExpiry: 'expiry' in changes && changes.expiry === undefined,
+        },
       }));
-      const placed = this.placed.get(orderId);
-      if (placed) placed.price = price;
       return { ok: true, orderId };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
@@ -439,6 +564,24 @@ export class WsTradingApi implements TradingApi {
     if (a.case === 'error') throw new Error(errorText(a.value.code, a.value.message));
     if (a.case !== 'authOk') throw new Error('unexpected handshake reply');
     await snapshots;
+    if (this.v12) await Promise.all(this.accountIds.map((id) => this.loadOrders(id)));
+  }
+
+  /** Working orders from the server (authoritative after a (re)connect). */
+  private async loadOrders(accountId: string): Promise<void> {
+    try {
+      const body = await this.request((requestId) => ({ case: 'orderListRequest', value: { requestId, accountId } }));
+      if (body.case !== 'orderList') return;
+      const book = new Map<string, PendingOrder>();
+      for (const u of body.value.orders) {
+        const o = this.pendingFromUpdate(u);
+        if (o) book.set(o.id, o);
+      }
+      this.orders.set(accountId, book);
+      this.emit({ type: 'orders', accountId, orders: [...book.values()] });
+    } catch (e) {
+      this.emitJournal('warn', `Order list unavailable: ${(e as Error).message}`);
+    }
   }
 
   private awaitBody(pred: (b: InBody) => boolean): Promise<InBody> {
@@ -556,6 +699,8 @@ export class WsTradingApi implements TradingApi {
     const b = env.body;
     if (b.case === 'authOk') {
       this.accountIds = b.value.accountIds;
+      this.v12 = b.value.accounts.length > 0;
+      this.infos = new Map(b.value.accounts.map((i) => [i.accountId, i]));
       this.snapshotsPending = new Set(this.accountIds);
       if (!this.snapshotsPending.size) this.resolveSnapshots();
     } else if (b.case === 'error' && !b.value.requestId) {
@@ -571,6 +716,8 @@ export class WsTradingApi implements TradingApi {
       case 'ack':
       case 'symbolList':
       case 'candleResponse':
+      case 'orderList':
+      case 'dealHistory':
         this.settle(b.value.requestId, b);
         return;
       case 'error': {
@@ -598,6 +745,9 @@ export class WsTradingApi implements TradingApi {
       case 'orderUpdate':
         this.onOrderUpdate(b.value);
         return;
+      case 'dealUpdate':
+        if (b.value.deal) this.emit({ type: 'deal', deal: this.dealFromWire(b.value.accountId, b.value.deal) });
+        return;
       case 'pong': {
         const sent = this.pingSent.get(b.value.nonce);
         if (sent !== undefined) {
@@ -623,6 +773,32 @@ export class WsTradingApi implements TradingApi {
   // ---- state mapping ------------------------------------------------------
   private digits(symbol: string): number {
     return this.symbols.get(symbol)?.digits ?? 5;
+  }
+
+  private volumeToQty(spec: SymbolSpec, volume: number) {
+    return toDecimal(new Big(volume).times(spec.contractSize).div(100));
+  }
+
+  private price(symbol: string, d: Parameters<typeof decimalToBig>[0]): number | undefined {
+    const v = decimalToBig(d);
+    return v ? Number(v.toFixed(this.digits(symbol))) : undefined;
+  }
+
+  private dealFromWire(accountId: string, d: WireDeal): Deal {
+    return {
+      id: d.dealId,
+      accountId,
+      positionId: d.positionId,
+      symbol: d.symbol,
+      side: d.side === WireSide.SELL ? 'sell' : 'buy',
+      entry: d.entry === DealEntry.OUT ? 'out' : 'in',
+      volume: this.qtyToVolume(d.symbol, decimalToBig(d.qty) ?? new Big(0)),
+      price: this.price(d.symbol, d.price) ?? 0,
+      time: d.tsNs ? nsToMs(d.tsNs) : Date.now(),
+      profit: minor(d.realizedPnl),
+      commission: minor(d.commission),
+      reason: DEAL_REASON[d.reason as DealReason] ?? 'client',
+    };
   }
 
   private qtyToVolume(symbol: string, qty: Big): number {
@@ -670,13 +846,15 @@ export class WsTradingApi implements TradingApi {
 
   private onSnapshot(s: AccountSnapshot): void {
     const balance = Number((decimalToBig(s.balance) ?? new Big(0)).times(100).round(0).toFixed(0));
+    const info = this.infos.get(s.accountId);
     const account: Account = {
       id: s.accountId,
       name: s.accountId,
-      currency: s.currency || 'USD',
+      currency: s.currency || info?.currency || 'USD',
       balance,
-      leverage: 100,
+      leverage: s.leverage || info?.leverage || 100,
       isDemo: /demo/i.test(s.accountId),
+      marginMode: marginModeFromWire(s.marginMode) ?? marginModeFromWire(info?.marginMode ?? WireMarginMode.MARGIN_MODE_UNSPECIFIED),
     };
     const known = this.accounts.has(s.accountId);
     this.accounts.set(s.accountId, account);
@@ -694,7 +872,7 @@ export class WsTradingApi implements TradingApi {
       m = new Map();
       this.positions.set(accountId, m);
     }
-    const id = this.positionId(accountId, p.symbol);
+    const id = p.positionId || this.positionId(accountId, p.symbol);
     const net = decimalToBig(p.netQty) ?? new Big(0);
     if (net.eq(0)) {
       m.delete(id);
@@ -707,9 +885,12 @@ export class WsTradingApi implements TradingApi {
       accountId,
       symbol: p.symbol,
       side,
-      volume: this.qtyToVolume(p.symbol, net.abs()),
-      openPrice: Number((decimalToBig(p.avgPrice) ?? new Big(0)).toFixed(this.digits(p.symbol))),
-      openTime: prev && prev.side === side ? prev.openTime : Date.now(),
+      volume: this.qtyToVolume(p.symbol, decimalToBig(p.qty) ?? net.abs()),
+      openPrice: this.price(p.symbol, p.avgPrice) ?? 0,
+      openTime: p.openTimeNs ? nsToMs(p.openTimeNs) : prev && prev.side === side ? prev.openTime : Date.now(),
+      sl: this.price(p.symbol, p.sl),
+      tp: this.price(p.symbol, p.tp),
+      trailing: decimalToBig(p.trailingDistance)?.toNumber(),
       commission: 0,
       swap: 0,
     });
@@ -719,12 +900,41 @@ export class WsTradingApi implements TradingApi {
     this.emit({ type: 'positions', accountId, positions: [...(this.positions.get(accountId)?.values() ?? [])] });
   }
 
-  private onOrderUpdate(u: OrderUpdate): void {
+  /** Pending-order view of an OrderUpdate, or undefined if it is not resting. */
+  private pendingFromUpdate(u: OrderUpdate): PendingOrder | undefined {
     const placed = this.placed.get(u.clientRequestId);
+    const type = FROM_WIRE_TYPE[u.orderType] ?? (placed && placed.type !== 'market' ? placed.type : undefined);
+    const leaves = decimalToBig(u.leavesQty);
+    if (!type || !RESTING_STATUSES.has(u.status) || !leaves || !leaves.gt(0)) return undefined;
+    const prev = this.orders.get(u.accountId)?.get(u.clientRequestId);
+    const limit = this.price(u.symbol, u.limitPrice);
+    const stop = this.price(u.symbol, u.stopPrice);
+    const price = type === 'limit' ? limit : stop;
+    return {
+      id: u.clientRequestId,
+      accountId: u.accountId,
+      symbol: u.symbol,
+      side: u.side === WireSide.SELL ? 'sell' : 'buy',
+      type,
+      volume: this.qtyToVolume(u.symbol, leaves),
+      price: price ?? placed?.price ?? prev?.price ?? 0,
+      limitPrice: type === 'stop_limit' ? limit : undefined,
+      sl: this.price(u.symbol, u.sl),
+      tp: this.price(u.symbol, u.tp),
+      trailing: decimalToBig(u.trailingDistance)?.toNumber(),
+      ocoGroup: u.ocoGroup ? Number(u.ocoGroup) : undefined,
+      expiry: u.expireAtNs ? nsToMs(u.expireAtNs) : undefined,
+      createdAt: u.createdNs ? nsToMs(u.createdNs) : (prev?.createdAt ?? Date.now()),
+      triggered: u.stopTriggered || undefined,
+    };
+  }
+
+  private onOrderUpdate(u: OrderUpdate): void {
     const side = u.side === WireSide.SELL ? 'sell' : 'buy';
     const lastQty = decimalToBig(u.lastQty);
     const lastPx = decimalToBig(u.lastPrice);
-    if (lastQty && lastPx && lastQty.gt(0)) {
+    // v1.2 gateways push real deals (DealUpdate, with P&L); older ones only fills.
+    if (!this.v12 && lastQty && lastPx && lastQty.gt(0)) {
       this.emit({
         type: 'deal',
         deal: {
@@ -736,37 +946,28 @@ export class WsTradingApi implements TradingApi {
           entry: 'in',
           volume: this.qtyToVolume(u.symbol, lastQty),
           price: Number(lastPx.toFixed(this.digits(u.symbol))),
-          time: u.tsNs ? Number(u.tsNs / 1_000_000n) : Date.now(),
+          time: u.tsNs ? nsToMs(u.tsNs) : Date.now(),
           profit: 0,
           commission: 0,
           reason: 'client',
         },
       });
     }
-    // Resting limit orders are shown as pending orders, keyed by PlaceOrder request_id.
+    // Resting orders are shown as pending orders, keyed by PlaceOrder request_id.
     let book = this.orders.get(u.accountId);
     if (!book) {
       book = new Map();
       this.orders.set(u.accountId, book);
     }
-    const leaves = decimalToBig(u.leavesQty);
-    if (placed?.type === 'limit' && RESTING_STATUSES.has(u.status) && leaves && leaves.gt(0)) {
-      const prev = book.get(u.clientRequestId);
-      book.set(u.clientRequestId, {
-        id: u.clientRequestId,
-        accountId: u.accountId,
-        symbol: u.symbol,
-        side,
-        type: 'limit',
-        volume: this.qtyToVolume(u.symbol, leaves),
-        price: placed.price ?? prev?.price ?? 0,
-        createdAt: prev?.createdAt ?? Date.now(),
-      });
+    const pending = this.pendingFromUpdate(u);
+    if (pending) {
+      book.set(u.clientRequestId, pending);
       this.emit({ type: 'orders', accountId: u.accountId, orders: [...book.values()] });
     } else if (book.delete(u.clientRequestId)) {
       this.emit({ type: 'orders', accountId: u.accountId, orders: [...book.values()] });
     }
     if (u.status === OrderStatus.REJECTED) this.emitJournal('error', `Order ${u.clientRequestId} rejected: ${u.text}`);
+    if (u.status === OrderStatus.EXPIRED) this.emitJournal('info', `Order ${u.clientRequestId} expired`);
     if (TERMINAL_STATUSES.has(u.status)) {
       this.placed.delete(u.clientRequestId);
       const w = this.fillWaiters.get(u.clientRequestId);

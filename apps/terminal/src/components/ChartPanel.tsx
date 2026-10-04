@@ -20,6 +20,7 @@ import { applyTick } from '../lib/bars';
 import { bollinger, ema, rsi, sma } from '../lib/indicators';
 import { formatPrice, lotsToVolume, volumeToLots } from '../lib/money';
 import { isTauri, openChartWindow } from '../native';
+import { dragProtection, hitLine } from '../lib/chartDrag';
 
 type Line = ISeriesApi<'Line'>;
 
@@ -70,6 +71,9 @@ export function ChartPanel({ index, detached = false }: { index: number; detache
   const indRef = useRef<IndicatorSeries>({});
   const barsRef = useRef<Bar[]>([]);
   const linesRef = useRef<IPriceLine[]>([]);
+  /** Draggable SL/TP lines of open positions. */
+  const protRef = useRef<{ line: IPriceLine; positionId: string; kind: 'sl' | 'tp' }[]>([]);
+  const dragRef = useRef<{ line: IPriceLine; positionId: string; kind: 'sl' | 'tp'; price: number } | null>(null);
   const [loadedKey, setLoadedKey] = useState('');
   const [lotsText, setLotsText] = useState(volumeToLots(oneClickVolume));
   const [busy, setBusy] = useState(false);
@@ -228,6 +232,7 @@ export function ChartPanel({ index, detached = false }: { index: number; detache
     if (!series || !spec) return;
     for (const l of linesRef.current) series.removePriceLine(l);
     linesRef.current = [];
+    protRef.current = [];
     const up = cssVar('--up');
     const down = cssVar('--down');
     const add = (price: number, color: string, title: string, style = LineStyle.Solid) =>
@@ -235,8 +240,14 @@ export function ChartPanel({ index, detached = false }: { index: number; detache
     for (const p of positions) {
       if (p.symbol !== spec.name) continue;
       add(p.openPrice, p.side === 'buy' ? up : down, `${p.side.toUpperCase()} ${volumeToLots(p.volume)}`);
-      if (p.sl !== undefined) add(p.sl, down, `SL #${p.id}`, LineStyle.Dashed);
-      if (p.tp !== undefined) add(p.tp, up, `TP #${p.id}`, LineStyle.Dashed);
+      if (p.sl !== undefined) {
+        add(p.sl, down, `SL #${p.id}`, LineStyle.Dashed);
+        protRef.current.push({ line: linesRef.current[linesRef.current.length - 1]!, positionId: p.id, kind: 'sl' });
+      }
+      if (p.tp !== undefined) {
+        add(p.tp, up, `TP #${p.id}`, LineStyle.Dashed);
+        protRef.current.push({ line: linesRef.current[linesRef.current.length - 1]!, positionId: p.id, kind: 'tp' });
+      }
     }
     for (const o of orders) {
       if (o.symbol !== spec.name) continue;
@@ -244,6 +255,70 @@ export function ChartPanel({ index, detached = false }: { index: number; detache
       if (o.limitPrice !== undefined) add(o.limitPrice, '#f59e0b', `LMT #${o.id}`, LineStyle.SparseDotted);
     }
   }, [positions, orders, spec, loading, theme]);
+
+  // Drag SL/TP lines -> modifyPosition (server-side protection).
+  const lineAt = (clientY: number) => {
+    const series = candleRef.current;
+    const el = host.current;
+    if (!series || !el) return undefined;
+    const y = clientY - el.getBoundingClientRect().top;
+    const lines = protRef.current.flatMap((l) => {
+      const c = series.priceToCoordinate(l.line.options().price);
+      return c === null ? [] : [{ ...l, y: c }];
+    });
+    return hitLine(lines, y);
+  };
+  const onPointerDown = (e: React.MouseEvent) => {
+    const hit = lineAt(e.clientY);
+    if (!hit || !spec) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const chart = chartRef.current;
+    chart?.applyOptions({ handleScroll: false, handleScale: false });
+    dragRef.current = { line: hit.line, positionId: hit.positionId, kind: hit.kind, price: hit.line.options().price };
+    const move = (ev: MouseEvent) => {
+      const d = dragRef.current;
+      const el = host.current;
+      if (!d || !el || !candleRef.current) return;
+      const p = candleRef.current.coordinateToPrice(ev.clientY - el.getBoundingClientRect().top);
+      if (p === null) return;
+      d.price = p;
+      d.line.applyOptions({ price: p, title: `${d.kind.toUpperCase()} #${d.positionId} ${formatPrice(p, spec.digits)}` });
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      chart?.applyOptions({ handleScroll: true, handleScale: true });
+      const d = dragRef.current;
+      dragRef.current = null;
+      if (!d) return;
+      const st = useTerminal.getState();
+      const acc = st.activeAccountId;
+      const pos = acc ? (st.positions[acc] ?? []).find((x) => x.id === d.positionId) : undefined;
+      const q = st.quotes[spec.name];
+      const prot = pos && q ? dragProtection(pos, d.kind, d.price, spec.digits, q) : undefined;
+      const restore = () => d.line.applyOptions({ price: pos?.[d.kind] ?? d.price, title: `${d.kind.toUpperCase()} #${d.positionId}` });
+      if (!acc || !pos || !prot) {
+        restore();
+        if (pos) st.toast('error', t('toast.rejected', { error: `invalid ${d.kind.toUpperCase()}` }));
+        return;
+      }
+      void getApi()
+        .modifyPosition(acc, pos.id, prot.sl, prot.tp, prot.trailing)
+        .then((r) => {
+          if (!r.ok) {
+            restore();
+            st.toast('error', t('toast.rejected', { error: r.error }));
+          }
+        });
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+  const onHover = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (dragRef.current) return;
+    e.currentTarget.style.cursor = lineAt(e.clientY) ? 'ns-resize' : '';
+  };
 
   if (!slot) return null;
 
@@ -299,7 +374,7 @@ export function ChartPanel({ index, detached = false }: { index: number; detache
         )}
       </div>
       <div className="relative flex-1 min-h-0">
-        <div ref={host} className="absolute inset-0" />
+        <div ref={host} className="absolute inset-0" onMouseDownCapture={onPointerDown} onMouseMove={onHover} data-testid={`chart-canvas-${index}`} />
         {loading && <div className="absolute inset-0 grid place-items-center text-muted">{t('chart.loading')}</div>}
         {spec && quote && (
           <div className="absolute top-2 left-2 z-10 flex items-stretch rounded-md overflow-hidden shadow-lg border border-line text-[12px] select-none" data-testid={`oneclick-${index}`}>

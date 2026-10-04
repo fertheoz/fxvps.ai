@@ -3,13 +3,13 @@ import type { Deal, PendingOrder, Position } from '../api/types';
 import { useRates, useT } from '../hooks';
 import { getApi } from '../store/api';
 import { selectActiveAccount, selectHistory, selectOrders, selectPositions, useTerminal, type ToolboxTab } from '../store/terminal';
-import { closePrice, formatMoney, formatPrice, lotsToVolume, positionProfit, volumeToLots } from '../lib/money';
+import { closePrice, distanceToPips, formatMoney, formatPrice, lotsToVolume, pipsToDistance, positionProfit, volumeToLots } from '../lib/money';
 import { formatTimeShort as formatTime, parseDecimal } from '../lib/format';
 import { VirtualTable } from './VirtualTable';
 
 const TABS: ToolboxTab[] = ['positions', 'orders', 'history', 'journal'];
-const POS_COLS = '48px 104px 60px 36px 44px 68px 68px 68px 68px 48px 72px minmax(250px,1fr)';
-const ORD_COLS = '48px 104px 60px 104px 44px 140px 68px 68px 68px 104px minmax(70px,1fr)';
+const POS_COLS = '48px 104px 60px 36px 44px 68px 68px 68px 40px 68px 48px 72px minmax(250px,1fr)';
+const ORD_COLS = '48px 104px 60px 104px 44px 140px 68px 68px 68px 104px minmax(110px,1fr)';
 const HIST_COLS = '48px 104px 60px 36px 36px 44px 80px 64px 80px 70px';
 const JOUR_COLS = '140px 60px 1fr';
 
@@ -29,6 +29,7 @@ const PositionRow = memo(function PositionRow({ p }: { p: Position }) {
   const [edit, setEdit] = useState(false);
   const [sl, setSl] = useState(p.sl !== undefined ? String(p.sl) : '');
   const [tp, setTp] = useState(p.tp !== undefined ? String(p.tp) : '');
+  const [trail, setTrail] = useState('');
   const [partial, setPartial] = useState(volumeToLots(Math.max(spec?.volumeStep ?? 1, Math.floor(p.volume / 2))));
   if (!spec || !q || !account) return null;
   let profit = 0;
@@ -40,8 +41,15 @@ const PositionRow = memo(function PositionRow({ p }: { p: Position }) {
   const report = (r: { ok: boolean; error?: string; price?: number }) =>
     r.ok ? toast('ok', t('toast.closed', { id: p.id, price: r.price ?? '' })) : toast('error', t('toast.rejected', { error: r.error ?? '' }));
   const close = async (volume?: number) => report(await getApi().closePosition(account.id, p.id, volume));
+  const startEdit = () => {
+    setSl(p.sl !== undefined ? String(p.sl) : '');
+    setTp(p.tp !== undefined ? String(p.tp) : '');
+    setTrail(p.trailing !== undefined ? String(distanceToPips(p.trailing, spec)) : '');
+    setEdit(true);
+  };
   const save = async () => {
-    const r = await getApi().modifyPosition(account.id, p.id, parseDecimal(sl), parseDecimal(tp));
+    const tr = parseDecimal(trail);
+    const r = await getApi().modifyPosition(account.id, p.id, parseDecimal(sl), parseDecimal(tp), tr ? pipsToDistance(tr, spec) : undefined);
     if (r.ok) setEdit(false);
     else toast('error', t('toast.rejected', { error: r.error }));
   };
@@ -56,13 +64,15 @@ const PositionRow = memo(function PositionRow({ p }: { p: Position }) {
       <span className="num">{formatPrice(p.openPrice, spec.digits)}</span>
       {edit ? (
         <>
-          <input className={inp} value={sl} onChange={(e) => setSl(e.target.value)} aria-label={t('tb.sl')} />
-          <input className={inp} value={tp} onChange={(e) => setTp(e.target.value)} aria-label={t('tb.tp')} />
+          <input className={inp} value={sl} onChange={(e) => setSl(e.target.value)} aria-label={t('tb.sl')} data-testid={`sl-input-${p.id}`} />
+          <input className={inp} value={tp} onChange={(e) => setTp(e.target.value)} aria-label={t('tb.tp')} data-testid={`tp-input-${p.id}`} />
+          <input className={inp} value={trail} onChange={(e) => setTrail(e.target.value)} aria-label={t('tb.trailing')} />
         </>
       ) : (
         <>
-          <span className="num">{p.sl !== undefined ? formatPrice(p.sl, spec.digits) : '—'}</span>
-          <span className="num">{p.tp !== undefined ? formatPrice(p.tp, spec.digits) : '—'}</span>
+          <span className="num" data-testid={`sl-${p.id}`}>{p.sl !== undefined ? formatPrice(p.sl, spec.digits) : '—'}</span>
+          <span className="num" data-testid={`tp-${p.id}`}>{p.tp !== undefined ? formatPrice(p.tp, spec.digits) : '—'}</span>
+          <span className="num text-muted">{p.trailing !== undefined ? distanceToPips(p.trailing, spec) : '—'}</span>
         </>
       )}
       <span className="num">{formatPrice(closePrice(p.side, q), spec.digits)}</span>
@@ -71,14 +81,15 @@ const PositionRow = memo(function PositionRow({ p }: { p: Position }) {
       <span className="flex gap-1 justify-end">
         {edit ? (
           <>
-            <button className="px-1.5 rounded bg-accent text-white" onClick={() => void save()}>{t('tb.save')}</button>
+            <button className="px-1.5 rounded bg-accent text-white" onClick={() => void save()} data-testid={`save-${p.id}`}>{t('tb.save')}</button>
             <button className="px-1.5 rounded border border-line" onClick={() => setEdit(false)}>{t('tb.cancel')}</button>
           </>
         ) : (
-          <button className="px-1.5 rounded border border-line" onClick={() => setEdit(true)}>{t('tb.modify')}</button>
+          <button className="px-1.5 rounded border border-line" onClick={startEdit} data-testid={`modify-${p.id}`}>{t('tb.modify')}</button>
         )}
-        <input className="num w-12 bg-panel-2 border border-line rounded px-1" value={partial} onChange={(e) => setPartial(e.target.value)} aria-label={t('tb.closePartial')} />
+        <input className="num w-12 bg-panel-2 border border-line rounded px-1" value={partial} onChange={(e) => setPartial(e.target.value)} aria-label={t('tb.closePartial')} data-testid={`partial-input-${p.id}`} />
         <button
+          data-testid={`partial-${p.id}`}
           className="px-1.5 rounded border border-line"
           onClick={() => {
             const v = lotsToVolume(partial);
@@ -110,7 +121,7 @@ function Positions() {
         <>
           <span>{t('tb.id')}</span><span>{t('tb.time')}</span><span>{t('tb.symbol')}</span><span>{t('tb.type')}</span>
           <span>{t('tb.volume')}</span><span>{t('tb.openPrice')}</span><span>{t('tb.sl')}</span><span>{t('tb.tp')}</span>
-          <span>{t('tb.current')}</span><span>{t('tb.commission')}</span><span className="text-right">{t('tb.profit')}</span><span />
+          <span>{t('tb.trailing')}</span><span>{t('tb.current')}</span><span>{t('tb.commission')}</span><span className="text-right">{t('tb.profit')}</span><span />
         </>
       }
     />
@@ -122,21 +133,73 @@ function OrderRow({ o }: { o: PendingOrder }) {
   const spec = useTerminal((s) => s.symbols[o.symbol]);
   const q = useTerminal((s) => s.quotes[o.symbol]);
   const accountId = useTerminal((s) => s.activeAccountId);
+  const toast = useTerminal((s) => s.toast);
+  const [edit, setEdit] = useState(false);
+  const [price, setPrice] = useState('');
+  const [limit, setLimit] = useState('');
+  const [lots, setLots] = useState('');
+  const [sl, setSl] = useState('');
+  const [tp, setTp] = useState('');
   if (!spec || !accountId) return null;
+  const startEdit = () => {
+    setPrice(String(o.price));
+    setLimit(o.limitPrice !== undefined ? String(o.limitPrice) : '');
+    setLots(volumeToLots(o.volume));
+    setSl(o.sl !== undefined ? String(o.sl) : '');
+    setTp(o.tp !== undefined ? String(o.tp) : '');
+    setEdit(true);
+  };
+  const save = async () => {
+    const volume = lotsToVolume(lots);
+    const r = await getApi().modifyOrder(accountId, o.id, {
+      price: parseDecimal(price),
+      ...(o.type === 'stop_limit' ? { limitPrice: parseDecimal(limit) } : {}),
+      ...(volume !== null ? { volume } : {}),
+      sl: parseDecimal(sl),
+      tp: parseDecimal(tp),
+    });
+    if (r.ok) setEdit(false);
+    else toast('error', t('toast.rejected', { error: r.error }));
+  };
+  const inp = 'num w-full bg-panel-2 border border-line rounded px-1';
   return (
     <>
       <span className="num">{o.id}</span>
       <span className="num text-muted">{formatTime(o.createdAt)}</span>
       <span className="font-medium">{o.symbol}</span>
       <span className={sideCls(o.side)}>{o.side} {o.type.replace('_', ' ')}{o.triggered ? ' ✓' : ''}</span>
-      <span className="num">{volumeToLots(o.volume)}</span>
-      <span className="num">{formatPrice(o.price, spec.digits)}{o.limitPrice !== undefined ? ` / ${formatPrice(o.limitPrice, spec.digits)}` : ''}</span>
-      <span className="num">{o.sl !== undefined ? formatPrice(o.sl, spec.digits) : '—'}</span>
-      <span className="num">{o.tp !== undefined ? formatPrice(o.tp, spec.digits) : '—'}</span>
+      {edit ? (
+        <>
+          <input className={inp} value={lots} onChange={(e) => setLots(e.target.value)} aria-label={t('tb.volume')} data-testid={`order-volume-${o.id}`} />
+          <span className="flex gap-0.5">
+            <input className={inp} value={price} onChange={(e) => setPrice(e.target.value)} aria-label={t('tb.price')} data-testid={`order-price-${o.id}`} />
+            {o.type === 'stop_limit' && <input className={inp} value={limit} onChange={(e) => setLimit(e.target.value)} aria-label={t('ticket.limitPrice')} />}
+          </span>
+          <input className={inp} value={sl} onChange={(e) => setSl(e.target.value)} aria-label={t('tb.sl')} />
+          <input className={inp} value={tp} onChange={(e) => setTp(e.target.value)} aria-label={t('tb.tp')} />
+        </>
+      ) : (
+        <>
+          <span className="num">{volumeToLots(o.volume)}</span>
+          <span className="num" data-testid={`order-px-${o.id}`}>{formatPrice(o.price, spec.digits)}{o.limitPrice !== undefined ? ` / ${formatPrice(o.limitPrice, spec.digits)}` : ''}</span>
+          <span className="num">{o.sl !== undefined ? formatPrice(o.sl, spec.digits) : '—'}</span>
+          <span className="num">{o.tp !== undefined ? formatPrice(o.tp, spec.digits) : '—'}</span>
+        </>
+      )}
       <span className="num">{q ? formatPrice(o.side === 'buy' ? q.ask : q.bid, spec.digits) : '—'}</span>
       <span className="num text-muted">{o.expiry ? formatTime(o.expiry) : 'GTC'}</span>
-      <span className="flex justify-end">
-        <button className="px-1.5 rounded border border-line" onClick={() => void getApi().cancelOrder(accountId, o.id)}>{t('tb.cancel')}</button>
+      <span className="flex gap-1 justify-end">
+        {edit ? (
+          <>
+            <button className="px-1.5 rounded bg-accent text-white" onClick={() => void save()} data-testid={`order-save-${o.id}`}>{t('tb.save')}</button>
+            <button className="px-1.5 rounded border border-line" onClick={() => setEdit(false)}>{t('tb.cancel')}</button>
+          </>
+        ) : (
+          <>
+            <button className="px-1.5 rounded border border-line" onClick={startEdit} data-testid={`order-edit-${o.id}`}>{t('tb.edit')}</button>
+            <button className="px-1.5 rounded border border-line" onClick={() => void getApi().cancelOrder(accountId, o.id)} data-testid={`order-cancel-${o.id}`}>{t('tb.cancel')}</button>
+          </>
+        )}
       </span>
     </>
   );
@@ -170,6 +233,11 @@ function History() {
   const symbols = useTerminal((s) => s.symbols);
   const rows = useMemo(() => [...deals].reverse(), [deals]);
   const total = useMemo(() => deals.reduce((a, d) => a + d.profit + d.commission, 0), [deals]);
+  const accountId = useTerminal((s) => s.activeAccountId);
+  const setHistory = useTerminal((s) => s.setHistory);
+  const refresh = async () => {
+    if (accountId) setHistory(accountId, await getApi().getHistory(accountId));
+  };
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 min-h-0">
@@ -181,11 +249,11 @@ function History() {
           empty={t('tb.empty')}
           renderRow={(d) => (
             <>
-              <span className="num">{d.positionId}</span>
+              <span className="num" data-testid={`deal-pos-${d.positionId}`}>{d.positionId}</span>
               <span className="num text-muted">{formatTime(d.time)}</span>
               <span className="font-medium">{d.symbol}</span>
               <span className={sideCls(d.side)}>{d.side}</span>
-              <span>{d.entry}</span>
+              <span data-testid={`deal-entry-${d.entry}`}>{d.entry}</span>
               <span className="num">{volumeToLots(d.volume)}</span>
               <span className="num">{formatPrice(d.price, symbols[d.symbol]?.digits ?? 5)}</span>
               <span className="num text-muted">{formatMoney(d.commission)}</span>
@@ -203,6 +271,9 @@ function History() {
         />
       </div>
       <div className="flex justify-end gap-2 px-3 h-6 items-center border-t border-line">
+        <button className="mr-auto text-muted hover:text-fg" onClick={() => void refresh()} data-testid="history-refresh">
+          {t('tb.historyRefresh')}
+        </button>
         <span className="text-muted">{t('tb.total')}</span>
         <Pnl v={total} />
       </div>

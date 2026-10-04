@@ -10,6 +10,7 @@ import {
   marginMinor,
   pipValue,
   priceFromPips,
+  pipsToDistance,
   profitMinor,
   toMinor,
   units,
@@ -45,6 +46,7 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
   const [slText, setSlText] = useState('');
   const [tpText, setTpText] = useState('');
   const [expiryText, setExpiryText] = useState('');
+  const [trailText, setTrailText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [touched, setTouched] = useState(false);
 
@@ -109,6 +111,7 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
 
   if (!spec) return null;
 
+  const trailPips = parseDecimal(trailText);
   const errFor = (field: string) => (touched ? derived?.errors.find((e) => e.field === field) : undefined);
   const stepLots = (dir: 1 | -1) => {
     const v = volume ?? spec.minVolume;
@@ -133,6 +136,7 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
         limitPrice: type === 'stop_limit' ? input.limitPrice : undefined,
         sl: input.sl,
         tp: input.tp,
+        trailing: trailPips !== undefined && trailPips > 0 ? pipsToDistance(trailPips, spec) : undefined,
         expiry: input.expiry,
       });
       if (r.ok) {
@@ -262,6 +266,19 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
           </label>
         </div>
       </div>
+
+      <label>
+        <span className={label}>{t('ticket.trailing')}</span>
+        <input
+          className={field}
+          value={trailText}
+          onChange={(e) => setTrailText(e.target.value)}
+          inputMode="decimal"
+          placeholder={t('ticket.trailingOff')}
+          aria-label={t('ticket.trailing')}
+          data-testid="ticket-trailing"
+        />
+      </label>
 
       {type !== 'market' && (
         <label>

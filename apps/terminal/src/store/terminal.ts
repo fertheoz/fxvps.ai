@@ -169,6 +169,7 @@ export const useTerminal = create<TerminalState>()(
             return;
           case 'deal': {
             const h = get().history;
+            if ((h[e.deal.accountId] ?? []).some((d) => d.id === e.deal.id)) return;
             set({ history: { ...h, [e.deal.accountId]: [...(h[e.deal.accountId] ?? []), e.deal] } });
             return;
           }

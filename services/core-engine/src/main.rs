@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         settings.snapshot_every = n;
     }
-    let auth = Authenticator::from_env(flag("CORE_DEV_AUTH")).map_err(|e| e.0)?;
+    let auth = Authenticator::from_env(flag("CORE_DEV_AUTH"), &addr).map_err(|e| e.0)?;
     let (handle, join) = spawn(settings)?;
     if flag("CORE_SEED") && admin::seed::seed_if_empty(&handle).await? {
         tracing::info!("seeded demo data");

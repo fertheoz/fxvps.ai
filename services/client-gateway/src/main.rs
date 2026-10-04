@@ -46,7 +46,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(l) = listen {
         cfg.listen = l;
     }
+    cfg.apply_env()?;
     let auth = Authenticator::from_env()?;
+    auth.enforce_dev_key_policy(demo)?;
     if auth.dev_key {
         tracing::warn!(
             "using the built-in DEVELOPMENT JWT key; set FXVPS_JWT_HS256_SECRET or FXVPS_JWT_JWKS_FILE outside local dev"
@@ -89,10 +91,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t = issue_hs256(
             DEV_HS256_SECRET.as_bytes(),
             "demo-user",
-            &["DEMO-1"],
+            &["DEMO-1", "DEMO-H1"],
             24 * 3600,
         );
-        tracing::info!("demo token (account DEMO-1, dev key): {t}");
+        tracing::info!("demo token (accounts DEMO-1, DEMO-H1, dev key): {t}");
         println!("FXVPS_DEMO_TOKEN={t}");
     }
     tokio::select! {

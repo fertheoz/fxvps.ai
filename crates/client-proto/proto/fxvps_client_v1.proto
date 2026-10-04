@@ -34,6 +34,14 @@ message Envelope {
     PlaceOrder place_order = 50;
     CancelOrder cancel_order = 51;
     ModifyOrder modify_order = 52;
+    // Added in v1.2.
+    ModifyPosition modify_position = 53;
+    ClosePosition close_position = 54;
+    OrderListRequest order_list_request = 55;
+    OrderList order_list = 56;
+    DealHistoryRequest deal_history_request = 57;
+    DealHistory deal_history = 58;
+    DealUpdate deal_update = 43;
     Ack ack = 60;
     Error error = 61;
     Heartbeat heartbeat = 70;
@@ -59,6 +67,29 @@ message AuthOk {
   string subject = 1;
   repeated string account_ids = 2;
   uint64 expires_at_s = 3;
+  // Added in v1.2: trading parameters of each authorized account (same order
+  // as account_ids; may be empty on older servers or without a trading core).
+  repeated AccountInfo accounts = 4;
+}
+
+// Added in v1.2.
+enum MarginMode {
+  MARGIN_MODE_UNSPECIFIED = 0;
+  // One position per symbol; opposite fills reduce / reverse it.
+  NETTING = 1;
+  // Every fill opens its own position (several per symbol, both sides).
+  HEDGING = 2;
+}
+
+// Added in v1.2: static trading parameters of an account.
+message AccountInfo {
+  string account_id = 1;
+  string currency = 2;
+  MarginMode margin_mode = 3;
+  // Account leverage, e.g. 30 for 1:30 (symbol caps may be lower).
+  uint32 leverage = 4;
+  // Trading group (pricing / risk profile).
+  string group = 5;
 }
 
 message Subscribe {
@@ -160,6 +191,10 @@ enum OrderType {
   ORDER_TYPE_UNSPECIFIED = 0;
   MARKET = 1;
   LIMIT = 2;
+  // Added in v1.2: triggers a market order once the price reaches stop_price.
+  STOP = 3;
+  // Added in v1.2: becomes a limit order at limit_price once stop_price trades.
+  STOP_LIMIT = 4;
 }
 
 enum TimeInForce {
@@ -168,6 +203,8 @@ enum TimeInForce {
   GTC = 2;
   IOC = 3;
   FOK = 4;
+  // Added in v1.2: good till PlaceOrder.expire_at_ns (pending orders only).
+  GTD = 5;
 }
 
 enum OrderStatus {
@@ -184,11 +221,24 @@ enum OrderStatus {
 
 message Position {
   string symbol = 1;
-  // Signed net quantity (positive = long).
+  // Signed quantity of this position (positive = long); 0 = closed.
   Decimal net_qty = 2;
   Decimal avg_price = 3;
   // Floating P&L in account currency (added in v1.1).
   Decimal unrealized_pnl = 4;
+  // Added in v1.2. Server position id; hedging accounts hold several
+  // positions per symbol, netting accounts at most one. Empty on servers
+  // that only report one net position per symbol.
+  string position_id = 5;
+  Side side = 6;
+  // Unsigned quantity (base units).
+  Decimal qty = 7;
+  // Protective levels (absent = none).
+  Decimal sl = 8;
+  Decimal tp = 9;
+  // Server-side trailing stop distance in price units (absent = off).
+  Decimal trailing_distance = 10;
+  uint64 open_time_ns = 11;
 }
 
 message AccountSnapshot {
@@ -202,6 +252,9 @@ message AccountSnapshot {
   // (absent without open margin). Also pushed whenever they change.
   Decimal free_margin = 7;
   Decimal margin_level = 8;
+  // Added in v1.2.
+  MarginMode margin_mode = 9;
+  uint32 leverage = 10;
 }
 
 message PositionUpdate {
@@ -223,6 +276,23 @@ message OrderUpdate {
   Decimal last_price = 11;
   string text = 12;
   uint64 ts_ns = 13;
+  // Added in v1.2: the order's current parameters (also after ModifyOrder).
+  OrderType order_type = 14;
+  Decimal qty = 15;
+  Decimal limit_price = 16;
+  Decimal stop_price = 17;
+  Decimal sl = 18;
+  Decimal tp = 19;
+  Decimal trailing_distance = 20;
+  uint64 oco_group = 21;
+  uint64 expire_at_ns = 22;
+  // Position opened / increased / closed by this order (empty if none yet).
+  string position_id = 23;
+  // Stop-limit: stop has triggered, the order now rests as a limit.
+  bool stop_triggered = 24;
+  // Order closes (part of) this position (ClosePosition, SL/TP, stop-out).
+  string close_position_id = 25;
+  uint64 created_ns = 26;
 }
 
 message PlaceOrder {
@@ -235,6 +305,19 @@ message PlaceOrder {
   Decimal qty = 6;
   Decimal limit_price = 7;
   TimeInForce tif = 8;
+  // Added in v1.2.
+  // Trigger price of STOP / STOP_LIMIT orders.
+  Decimal stop_price = 9;
+  // Protective levels attached to the resulting position.
+  Decimal sl = 10;
+  Decimal tp = 11;
+  // Server-side trailing stop distance (price units) for the position.
+  Decimal trailing_distance = 12;
+  // One-cancels-other group (client chosen, per account; 0 = none): when one
+  // pending order of the group executes, the others are cancelled.
+  uint64 oco_group = 13;
+  // Expiry of a pending order (ns since epoch; implies GTD; 0 = none).
+  uint64 expire_at_ns = 14;
 }
 
 message CancelOrder {
@@ -244,12 +327,124 @@ message CancelOrder {
   string target_request_id = 3;
 }
 
+// Absent fields keep their value. Pending orders are modified in place (the
+// order keeps its id and its target_request_id).
 message ModifyOrder {
   string request_id = 1;
   string account_id = 2;
   string target_request_id = 3;
   Decimal qty = 4;
   Decimal limit_price = 5;
+  // Added in v1.2.
+  Decimal stop_price = 6;
+  Decimal sl = 7;
+  Decimal tp = 8;
+  Decimal trailing_distance = 9;
+  uint64 expire_at_ns = 10;
+  // true: sl / tp / trailing_distance replace the current values and absent
+  // means "remove"; false: absent keeps them.
+  bool replace_protection = 11;
+  // true: remove the expiry (GTC).
+  bool clear_expiry = 12;
+}
+
+// Added in v1.2: sets the protection of an open position. Full replacement:
+// an absent sl / tp / trailing_distance removes it.
+message ModifyPosition {
+  string request_id = 1;
+  string account_id = 2;
+  string position_id = 3;
+  Decimal sl = 4;
+  Decimal tp = 5;
+  Decimal trailing_distance = 6;
+}
+
+// Added in v1.2: closes a position fully (qty absent) or partially at market.
+// The closing order's OrderUpdates carry client_request_id = request_id.
+message ClosePosition {
+  string request_id = 1;
+  string account_id = 2;
+  string position_id = 3;
+  Decimal qty = 4;
+}
+
+// Added in v1.2: working (pending) orders of an account.
+message OrderListRequest {
+  string request_id = 1;
+  string account_id = 2;
+}
+
+message OrderList {
+  string request_id = 1;
+  string account_id = 2;
+  // Current state of every pending order (OrderUpdate shape, status NEW).
+  repeated OrderUpdate orders = 3;
+}
+
+// Added in v1.2.
+enum DealEntry {
+  DEAL_ENTRY_UNSPECIFIED = 0;
+  // Opened / increased a position.
+  IN = 1;
+  // Reduced / closed a position.
+  OUT = 2;
+}
+
+enum DealReason {
+  DEAL_REASON_UNSPECIFIED = 0;
+  CLIENT = 1;
+  STOP_LOSS = 2;
+  TAKE_PROFIT = 3;
+  STOP_OUT = 4;
+}
+
+// One execution against a position (a fill that reverses a netting position
+// yields an OUT and an IN deal).
+message Deal {
+  string deal_id = 1;
+  string order_id = 2;
+  // Originating PlaceOrder / ClosePosition request_id (server generated for
+  // SL / TP / stop-out closes).
+  string client_request_id = 3;
+  string position_id = 4;
+  string symbol = 5;
+  Side side = 6;
+  DealEntry entry = 7;
+  Decimal qty = 8;
+  Decimal price = 9;
+  // Realized P&L in account currency (OUT deals; 0 for IN).
+  Decimal realized_pnl = 10;
+  // Commission charged (negative = cost), account currency.
+  Decimal commission = 11;
+  uint64 ts_ns = 12;
+  DealReason reason = 13;
+}
+
+// Added in v1.2: deal history, oldest first. Paging: pass the previous
+// response's next_cursor as cursor until it comes back empty.
+message DealHistoryRequest {
+  string request_id = 1;
+  string account_id = 2;
+  // Inclusive time bounds (ns); 0 = unbounded.
+  uint64 from_ns = 3;
+  uint64 to_ns = 4;
+  // Page size; 0 = server default (500), capped at 5000.
+  uint32 limit = 5;
+  string cursor = 6;
+}
+
+message DealHistory {
+  string request_id = 1;
+  string account_id = 2;
+  repeated Deal deals = 3;
+  // Empty = no more pages.
+  string next_cursor = 4;
+}
+
+// Added in v1.2 (server): a new deal of an authorized account.
+message DealUpdate {
+  string account_id = 1;
+  Deal deal = 2;
 }
 
 message Ack {
