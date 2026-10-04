@@ -1,0 +1,43 @@
+# fix-gateway configuration — defaults target the local lp-simulator.
+# Passwords may be overridden with FIX_GATEWAY_MD_PASSWORD / FIX_GATEWAY_TRADE_PASSWORD;
+# never commit real LP credentials.
+lp = "LMAX"
+heartbeat_secs = 30
+market_depth = 5
+reconnect_delay_ms = 1000
+# store_dir = "var/fix-store"   # persistent seq store; omit for in-memory
+
+[md]
+addr = "127.0.0.1:9880"
+sender_comp_id = "FXVPS-MD"
+target_comp_id = "LMXBDM"
+username = "demo"
+password = "demo"
+reset_on_logon = true
+
+[trade]
+addr = "127.0.0.1:9881"
+sender_comp_id = "FXVPS-TRD"
+target_comp_id = "LMXBD"
+username = "demo"
+password = "demo"
+reset_on_logon = true
+
+[[instruments]]
+symbol = "EUR/USD"
+security_id = "4001"
+tick_size = "0.00001"
+
+[[instruments]]
+symbol = "GBP/USD"
+security_id = "4002"
+tick_size = "0.00001"
+
+[[instruments]]
+symbol = "USD/JPY"
+security_id = "4004"
+tick_size = "0.001"
+
+# [nats]                      # requires --features nats
+# url = "nats://127.0.0.1:4222"
+# subject_prefix = "fxvps.lp.lmax"
