@@ -30,13 +30,20 @@ On startup the service prints `FXVPS_IDENTITY_URL=http://<addr>` (scripts / e2e)
 | `IDENTITY_BOOTSTRAP_ADMINS` | — | emails that get the `admin` role on registration |
 | `IDENTITY_COOKIE_SECURE` | `true` | `Secure` flag on the refresh cookie |
 | `IDENTITY_TRUST_PROXY` | `false` | client IP from `X-Forwarded-For` (behind a trusted proxy only) |
+| `IDENTITY_TRUSTED_PROXY_HOPS` | 1 | trusted proxies appending to `X-Forwarded-For`; the client IP is taken that many entries from the right |
+| `IDENTITY_ADMIN_REQUIRE_MFA` | `true` | `/v1/admin/*` with a user token requires an MFA login (`amr`); the service token is exempt |
 | `IDENTITY_ACCESS_TTL_SECS` / `IDENTITY_REFRESH_TTL_SECS` | 300 / 30 d | token lifetimes |
 | `IDENTITY_IP_REQUESTS_PER_MINUTE` | 60 | per-IP limit on the auth endpoints |
+| `IDENTITY_SMTP_URL` | — | SMTP mailer (`smtps://user:pass@host:465`, `smtp://host:587?tls=required`); required with `DATABASE_URL` |
+| `IDENTITY_MAIL_FROM` | — | sender mailbox, required with `IDENTITY_SMTP_URL` |
+| `IDENTITY_DEV_MAILER` | — | `1` allows the log mailer even with `DATABASE_URL` (non-production only) |
 | `IDENTITY_DEV_MAIL_FILE` | — | dev mailer also appends each mail as a JSON line (e2e tests) |
 
 No secret has a default and none is committed. Email delivery goes through the
-`Mailer` trait; the shipped `LogMailer` only logs (development). A production
-mailer (SMTP / provider API) plugs in at `main.rs`.
+`Mailer` trait: `SmtpMailer` (lettre, `IDENTITY_SMTP_URL`) in production; the
+development `LogMailer` logs only recipient and subject (links go to
+`IDENTITY_DEV_MAIL_FILE` if set) and is refused when `DATABASE_URL` is set unless
+`IDENTITY_DEV_MAILER=1`.
 
 ## Tokens
 

@@ -104,19 +104,34 @@ type ApiResult<T> = Result<T, ApiError>;
 
 // ---------------------------------------------------------------- extractors
 
-/// Client IP: the socket peer, or the first `X-Forwarded-For` hop when
-/// `IDENTITY_TRUST_PROXY` is set.
+/// Client IP: the socket peer, or (with `IDENTITY_TRUST_PROXY`) the
+/// `X-Forwarded-For` entry added by the outermost trusted proxy.
 #[derive(Clone, Debug)]
 pub struct ClientIp(pub Option<String>);
 
+/// The client address in `X-Forwarded-For` behind `hops` trusted proxies: each
+/// proxy appends the address it received the request from, so the entry `hops`
+/// positions from the right is the one written by the outermost trusted proxy.
+/// Entries further left are client controlled and ignored. `None` when the
+/// header is shorter than `hops` or the entry is not an IP address.
+pub fn forwarded_client_ip(xff: &str, hops: usize) -> Option<String> {
+    let parts: Vec<&str> = xff.split(',').map(str::trim).collect();
+    let i = parts.len().checked_sub(hops.max(1))?;
+    parts[i]
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .map(|ip| ip.to_string())
+}
+
 fn client_ip(app: &App, headers: &HeaderMap, ext: &axum::http::Extensions) -> Option<String> {
     if app.cfg.trust_proxy {
-        if let Some(ip) = headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
-        {
-            return Some(ip.trim().to_string());
+        let xff: Vec<&str> = headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        if let Some(ip) = forwarded_client_ip(&xff.join(","), app.cfg.trusted_proxy_hops) {
+            return Some(ip);
         }
     }
     ext.get::<ConnectInfo<SocketAddr>>()
@@ -165,11 +180,21 @@ impl FromRequestParts<Arc<App>> for Admin {
             }
         }
         let c = app.verify_access(t).ok_or_else(ApiError::unauthorized)?;
-        if c.roles.iter().any(|r| r == "admin") {
-            Ok(Admin { actor: c.sub })
-        } else {
-            Err(ApiError::forbidden())
+        if !c.roles.iter().any(|r| r == "admin") {
+            return Err(ApiError::forbidden());
         }
+        let mfa = c
+            .amr
+            .iter()
+            .any(|m| matches!(m.as_str(), "otp" | "mfa" | "hwk"));
+        if app.cfg.admin_require_mfa && !mfa {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "mfa_required",
+                "admin endpoints require a multi-factor login",
+            ));
+        }
+        Ok(Admin { actor: c.sub })
     }
 }
 
@@ -207,12 +232,9 @@ pub fn router(app: Arc<App>) -> Router {
             app.clone(),
             rate_limit,
         ));
-    Router::new()
-        .route("/healthz", get(|| async { "ok" }))
-        .route("/.well-known/jwks.json", get(jwks))
-        .route("/.well-known/openid-configuration", get(discovery))
-        .route("/v1/me", get(me))
-        .route("/v1/accounts", get(my_accounts))
+    // Authenticated routes that change security state or are worth guessing
+    // (TOTP codes, admin): same per-IP limiter as the login routes.
+    let sensitive = Router::new()
         .route("/v1/sessions/revoke-all", post(revoke_all))
         .route("/v1/2fa/totp/enroll", post(totp_enroll))
         .route("/v1/2fa/totp/confirm", post(totp_confirm))
@@ -228,13 +250,32 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/admin/accounts/unlink", post(admin_unlink))
         .route("/v1/admin/audit", get(admin_audit))
         .route("/v1/admin/keys/rotate", post(admin_rotate_keys))
+        .layer(axum::middleware::from_fn_with_state(
+            app.clone(),
+            rate_limit,
+        ));
+    Router::new()
+        .route("/healthz", get(|| async { "ok" }))
+        .route("/.well-known/jwks.json", get(jwks))
+        .route("/.well-known/openid-configuration", get(discovery))
+        .route("/v1/me", get(me))
+        .route("/v1/accounts", get(my_accounts))
+        .merge(sensitive)
         .merge(limited)
         .layer(cors)
         .with_state(app)
 }
 
+/// Keyed limiter entries above which idle keys are pruned (bounded memory
+/// against spoofed / many client addresses).
+const LIMITER_PRUNE_AT: usize = 10_000;
+
 async fn rate_limit(State(app): State<Arc<App>>, req: Request, next: Next) -> Response {
     let ip = client_ip(&app, req.headers(), req.extensions()).unwrap_or_else(|| "unknown".into());
+    if app.ip_limiter.len() > LIMITER_PRUNE_AT {
+        app.ip_limiter.retain_recent();
+        app.ip_limiter.shrink_to_fit();
+    }
     if app.ip_limiter.check_key(&ip).is_err() {
         app.audit(None, "rate_limited", Some(&ip), req.uri().path())
             .await;
@@ -1090,8 +1131,13 @@ async fn totp_confirm(
         .as_deref()
         .and_then(|s| crypto::totp(s, &u.email))
         .ok_or_else(|| ApiError::bad("not_enrolling", "start enrollment first"))?;
-    let step = crypto::totp_check(&totp, &r.code, now() as u64, u.totp_last_step)
-        .ok_or_else(|| ApiError::bad("invalid_code", "invalid code"))?;
+    if let Some(e) = locked(&u, now()) {
+        return Err(e);
+    }
+    let Some(step) = crypto::totp_check(&totp, &r.code, now() as u64, u.totp_last_step) else {
+        register_failure(&app, &mut u, ip.as_deref(), "totp confirm").await?;
+        return Err(ApiError::bad("invalid_code", "invalid code"));
+    };
     let codes: Vec<String> = (0..10).map(|_| crypto::recovery_code()).collect();
     u.recovery_codes = codes.iter().map(|c| sha256_hex(c)).collect();
     u.totp_enabled = true;
@@ -1119,8 +1165,14 @@ async fn totp_disable(
         .filter(|_| u.totp_enabled)
         .and_then(|s| crypto::totp(s, &u.email))
         .ok_or_else(|| ApiError::bad("totp_disabled", "TOTP is not enabled"))?;
-    crypto::totp_check(&totp, &r.code, now() as u64, u.totp_last_step)
-        .ok_or_else(|| ApiError::bad("invalid_code", "invalid code"))?;
+    if let Some(e) = locked(&u, now()) {
+        return Err(e);
+    }
+    if crypto::totp_check(&totp, &r.code, now() as u64, u.totp_last_step).is_none() {
+        register_failure(&app, &mut u, ip.as_deref(), "totp disable").await?;
+        return Err(ApiError::bad("invalid_code", "invalid code"));
+    }
+    u.failed_logins = 0;
     u.totp_enabled = false;
     u.totp_secret = None;
     u.recovery_codes.clear();
@@ -1512,4 +1564,25 @@ async fn admin_rotate_keys(
     )
     .await;
     Ok(Json(json!({ "kid": kid })))
+}
+
+#[cfg(test)]
+mod xff_tests {
+    use super::forwarded_client_ip as f;
+
+    #[test]
+    fn rightmost_trusted_hop_wins() {
+        // client spoofs "1.1.1.1"; the trusted proxy appended the real peer.
+        assert_eq!(f("1.1.1.1, 203.0.113.7", 1).as_deref(), Some("203.0.113.7"));
+        assert_eq!(f("203.0.113.7", 1).as_deref(), Some("203.0.113.7"));
+        // two trusted proxies (CDN + ingress)
+        assert_eq!(
+            f("6.6.6.6, 203.0.113.7, 10.0.0.2", 2).as_deref(),
+            Some("203.0.113.7")
+        );
+        // shorter than the configured hops / garbage: no forwarded IP
+        assert_eq!(f("203.0.113.7", 2), None);
+        assert_eq!(f("1.1.1.1, not-an-ip", 1), None);
+        assert_eq!(f("::1", 1).as_deref(), Some("::1"));
+    }
 }
