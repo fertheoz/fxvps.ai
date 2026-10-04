@@ -82,7 +82,10 @@ fn samples() -> Vec<Envelope> {
                 symbol: "EURUSD".into(),
                 net_qty: d("-1000"),
                 avg_price: d("1.085"),
+                unrealized_pnl: d("-3.2"),
             }],
+            free_margin: d("99000"),
+            margin_level: d("2500"),
         }),
         Body::PositionUpdate(PositionUpdate {
             account_id: "A1".into(),
