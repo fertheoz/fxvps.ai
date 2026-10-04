@@ -95,4 +95,44 @@ describe('MockTradingApi', () => {
     api.tick(['EURUSD']);
     expect(got).toEqual(['EURUSD', 'EURUSD']);
   });
+
+  it('parity with the gateway: trailing stop, OCO groups, in-place order modify', async () => {
+    const { api, events, positions } = setup();
+    api.setMid('EURUSD', 1.1);
+    const r = await api.placeOrder({ accountId: '100001', symbol: 'EURUSD', side: 'buy', type: 'market', volume: 10, trailing: 0.001 });
+    if (!r.ok) throw new Error(r.error);
+    expect(positions()[0]!.trailing).toBe(0.001);
+    api.setMid('EURUSD', 1.103);
+    const sl = positions()[0]!.sl!;
+    expect(sl).toBeGreaterThan(1.1);
+    api.setMid('EURUSD', 1.1025); // never moves back
+    expect(positions()[0]!.sl).toBe(sl);
+    api.setMid('EURUSD', 1.1);
+    expect(positions()).toHaveLength(0);
+    expect(events.some((e) => e.type === 'deal' && e.deal.reason === 'sl')).toBe(true);
+
+    const a = await api.placeOrder({ accountId: '100001', symbol: 'EURUSD', side: 'buy', type: 'stop', volume: 10, price: 1.102, ocoGroup: 9 });
+    const b = await api.placeOrder({ accountId: '100001', symbol: 'EURUSD', side: 'buy', type: 'limit', volume: 10, price: 1.09, ocoGroup: 9 });
+    if (!a.ok || !b.ok) throw new Error('place');
+    expect(await api.modifyOrder('100001', b.orderId!, { volume: 20, price: 1.091, sl: 1.08 })).toMatchObject({ ok: true });
+    let orders = [...events].reverse().find((e) => e.type === 'orders');
+    expect(orders).toMatchObject({ orders: [{ id: a.orderId }, { id: b.orderId, volume: 20, price: 1.091, sl: 1.08 }] });
+    expect((await api.modifyOrder('100001', b.orderId!, { volume: 7 })).ok).toBe(false);
+    api.setMid('EURUSD', 1.103);
+    orders = [...events].reverse().find((e) => e.type === 'orders');
+    expect(orders).toMatchObject({ orders: [] });
+    expect(positions()).toHaveLength(1);
+  });
+
+  it('modifyPosition sets and clears the trailing distance', async () => {
+    const { api, positions } = setup();
+    const r = await api.placeOrder({ accountId: '100001', symbol: 'EURUSD', side: 'sell', type: 'market', volume: 10 });
+    if (!r.ok) throw new Error(r.error);
+    expect((await api.modifyPosition('100001', r.positionId!, undefined, undefined, 0.002)).ok).toBe(true);
+    expect(positions()[0]!.trailing).toBe(0.002);
+    expect((await api.modifyPosition('100001', r.positionId!, undefined, undefined, -1)).ok).toBe(false);
+    await api.modifyPosition('100001', r.positionId!);
+    expect(positions()[0]!.trailing).toBeUndefined();
+    expect((await api.getAccounts())[0]!.marginMode).toBe('hedging');
+  });
 });

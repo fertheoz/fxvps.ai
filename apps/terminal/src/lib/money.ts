@@ -207,3 +207,13 @@ export function computeAccountMetrics(
 export function commissionMinor(volume: number, perLotMinor = 350): number {
   return -Math.ceil((volume * perLotMinor) / CENTILOTS_PER_LOT);
 }
+
+/** Trailing distance: pips -> price units (exact, rounded to the symbol digits). */
+export function pipsToDistance(pips: number | string, spec: SymbolSpec): number {
+  return Number(big(pips).times(spec.pipSize).toFixed(spec.digits));
+}
+
+/** Trailing distance: price units -> pips (for display). */
+export function distanceToPips(distance: number, spec: SymbolSpec): number {
+  return Number(big(distance).div(spec.pipSize).round(1).toFixed());
+}

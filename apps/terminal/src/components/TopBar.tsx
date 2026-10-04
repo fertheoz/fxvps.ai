@@ -63,6 +63,7 @@ export function TopBar() {
             <option key={a.id} value={a.id}>
               {a.parentId ? '↳ ' : ''}
               {a.id} · {a.name} · 1:{a.leverage}
+              {a.marginMode ? ` · ${t(a.marginMode === 'hedging' ? 'top.hedging' : 'top.netting')}` : ''}
               {a.parentId ? ` (${t('top.sub')})` : ''}
             </option>
           ))}
