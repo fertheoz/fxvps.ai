@@ -20,8 +20,8 @@ hangi commit, hangi test, ne kaldı. Durum: **Düzeltildi** / **Kısmi** / **Ert
 | G10 | Orta | Kısmi (identity chart'ta yok) | `738f5f3` (metrik portu: `7509689`) |
 | G11 | Orta | Düzeltildi (Deployment + PVC; StatefulSet değil) | `738f5f3` |
 | G12 | Orta | Düzeltildi | `4a1383e` |
-| G13 | Düşük | Kısmi (terminal meta CSP yok) | `3e41eab` |
-| G14 | Düşük | Kısmi (ayrıcalıklı roller için 60 sn TTL; bootstrap CLI'ya taşınmadı) | `fix/security-remainder` |
+| G13 | Düşük | Tamam (nginx başlıkları + terminal derleme CSP meta) | `3e41eab` |
+| G14 | Düşük | Tamam (60 sn TTL; `identity grant-admin` CLI, DATABASE_URL ile env bootstrap reddi) | `fix/security-remainder` |
 | G15 | Düşük | Düzeltildi (`*` yalnız `CORE_DEV_AUTH=1` ile) | `fix/security-remainder` |
 | G16 | Düşük | Düzeltildi | `7f3142b` |
 | G17 | Bilgi | Tamam (çalışma zamanı imajları digest; SBOM + provenance + cosign keyless) | `fix/g17` |
@@ -153,12 +153,12 @@ hangi commit, hangi test, ne kaldı. Durum: **Düzeltildi** / **Kısmi** / **Ert
 
 ### G13 — statik web başlıkları
 - G6'daki nginx başlık dosyası (CSP `frame-ancestors`, HSTS, `Permissions-Policy`, her `location`).
-- **Kalan:** terminal için sayfa CSP'si (`script-src`/`connect-src`) eklenmedi; e2e'nin yerel
-  gateway/identity adresleriyle birlikte tasarlanmalı.
+- Terminal: `vite.config.ts` içindeki `fxvps-csp` eklentisi yalnız derlemede CSP meta ekler
+  (`script-src 'self'`; `connect-src` https/wss + yerel e2e için loopback http/ws).
 
 ### Ertelenenler
-- **G14** (erişim jetonu 5 dk durumsuz, bootstrap admin kayıtta): değişiklik yok. Öneri: admin
-  rolleri için ≤ 60 sn TTL, bootstrap'ı tek seferlik CLI'ya taşımak.
+- **G14** tamamlandı: ayrıcalıklı roller 60 sn TTL; `IDENTITY_BOOTSTRAP_ADMINS` yalnız bellek
+  deposunda (DATABASE_URL ile başlatma reddedilir); üretimde `identity grant-admin <email>`.
 - **G15** (`CORE_CORS_ORIGINS=*`): değişiklik yok. Öneri: `CORE_DEV_AUTH` dışında `*`'ı reddet.
 - **G17** tamamlandı: distroless/nginx çalışma zamanı imajları digest ile sabit (Dependabot docker); yayında SBOM, `provenance: mode=max` ve cosign keyless imza. Doğrulama: `cosign verify ghcr.io/fertheoz/fxvps-<svc>@<digest> --certificate-identity-regexp "^https://github.com/fertheoz/fxvps.ai/" --certificate-oidc-issuer https://token.actions.githubusercontent.com`. Derleme imajları (cargo-chef, node) sabitlenmedi.
 - **G2 derleme özelliği:** dev-auth `--features dev-auth` arkasına alınmadı; bunun yerine çalışma

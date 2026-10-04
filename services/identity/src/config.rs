@@ -168,6 +168,13 @@ impl Config {
         if c.service_token.as_ref().is_some_and(|t| t.len() < 32) {
             return Err("IDENTITY_SERVICE_TOKEN must be at least 32 characters".into());
         }
+        if c.database_url.is_some() && !c.bootstrap_admins.is_empty() {
+            return Err(
+                "IDENTITY_BOOTSTRAP_ADMINS is development-only (rejected with DATABASE_URL); \
+                 grant admin once with `identity grant-admin <email>`"
+                    .into(),
+            );
+        }
         Ok(c)
     }
 }

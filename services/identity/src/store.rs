@@ -413,3 +413,48 @@ impl Store for MemoryStore {
             .collect())
     }
 }
+
+/// Adds the `admin` role to an existing user (one-time bootstrap, G14).
+/// Returns `Ok(false)` when the user already had it.
+pub async fn grant_admin(store: &dyn Store, email: &str) -> Result<bool, String> {
+    let email = email.trim().to_lowercase();
+    let mut u = store
+        .user_by_email(&email)
+        .await
+        .map_err(|e| format!("{e:?}"))?
+        .ok_or_else(|| format!("no user with email {email}"))?;
+    if u.roles.iter().any(|r| r == "admin") {
+        return Ok(false);
+    }
+    u.roles.push("admin".into());
+    store.update_user(&u).await.map_err(|e| format!("{e:?}"))?;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod grant_admin_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn grants_once() {
+        let s = MemoryStore::new();
+        let u = User {
+            id: "u1".into(),
+            email: "a@b.c".into(),
+            password_hash: String::new(),
+            email_verified: true,
+            roles: vec!["trader".into()],
+            totp_secret: None,
+            totp_enabled: false,
+            totp_last_step: 0,
+            recovery_codes: vec![],
+            failed_logins: 0,
+            locked_until: 0,
+            created_at: 0,
+        };
+        s.create_user(&u).await.unwrap();
+        assert_eq!(grant_admin(&s, " A@B.c ").await, Ok(true));
+        assert_eq!(grant_admin(&s, "a@b.c").await, Ok(false));
+        assert!(grant_admin(&s, "x@y.z").await.is_err());
+    }
+}
