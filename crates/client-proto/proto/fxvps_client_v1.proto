@@ -26,6 +26,8 @@ message Envelope {
     QuoteBatch quote_batch = 22;
     CandleRequest candle_request = 30;
     CandleResponse candle_response = 31;
+    SymbolListRequest symbol_list_request = 32;
+    SymbolList symbol_list = 33;
     AccountSnapshot account_snapshot = 40;
     PositionUpdate position_update = 41;
     OrderUpdate order_update = 42;
@@ -119,6 +121,33 @@ message CandleResponse {
   string symbol = 2;
   Timeframe timeframe = 3;
   repeated Candle candles = 4;
+}
+
+// Client -> server: list the instruments this gateway serves (added in v1.1;
+// older servers answer Error{BAD_REQUEST}).
+message SymbolListRequest {
+  string request_id = 1;
+}
+
+message Instrument {
+  // Client symbol, e.g. EURUSD.
+  string symbol = 1;
+  // Base / quote currency (or asset) codes, e.g. EUR / USD.
+  string base = 2;
+  string quote = 3;
+  // Minimum price increment.
+  Decimal tick_size = 4;
+  // Minimum quantity increment (in base units).
+  Decimal qty_step = 5;
+  // Number of price decimals implied by tick_size.
+  uint32 digits = 6;
+  // Base units per 1.00 lot (e.g. 100000 for FX majors).
+  Decimal contract_size = 7;
+}
+
+message SymbolList {
+  string request_id = 1;
+  repeated Instrument instruments = 2;
 }
 
 enum Side {

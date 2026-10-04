@@ -122,6 +122,8 @@ pub struct Hub {
     candles: Mutex<CandleStore>,
     /// Client symbol -> internal (LP) symbol.
     symbols: BTreeMap<String, String>,
+    /// Client symbol -> instrument spec (for `SymbolList`).
+    specs: BTreeMap<String, client_proto::Instrument>,
     orders_tx: Option<mpsc::Sender<OrderCommand>>,
     orders: Mutex<OrderBook>,
     positions: Mutex<HashMap<String, BTreeMap<String, Pos>>>,
@@ -165,13 +167,19 @@ impl Hub {
         let (accounts, _) = broadcast::channel(4096);
         let rate = NonZeroU32::new(cfg.orders_per_second).unwrap_or(NonZeroU32::MIN);
         let burst = NonZeroU32::new(cfg.order_burst).unwrap_or(NonZeroU32::MIN);
+        let symbols: BTreeMap<String, String> = symbols
+            .into_iter()
+            .map(|s| (client_symbol(&s), s))
+            .collect();
+        let specs = symbols
+            .iter()
+            .map(|(c, i)| (c.clone(), instrument_spec(i, None, None)))
+            .collect();
         Arc::new(Hub {
+            specs,
             candles: Mutex::new(CandleStore::new(cfg.candle_capacity)),
             limiter: RateLimiter::keyed(Quota::per_second(rate).allow_burst(burst)),
-            symbols: symbols
-                .into_iter()
-                .map(|s| (client_symbol(&s), s))
-                .collect(),
+            symbols,
             orders_tx,
             orders: Mutex::default(),
             positions: Mutex::default(),
@@ -183,6 +191,36 @@ impl Hub {
             auth,
             cfg,
         })
+    }
+
+    /// Like [`Hub::new`], but with full instrument specs (tick size, qty step) so
+    /// `SymbolList` can describe them.
+    pub fn with_instruments(
+        cfg: ClientGatewayConfig,
+        auth: Authenticator,
+        instruments: &[domain::Instrument],
+        orders_tx: Option<mpsc::Sender<OrderCommand>>,
+    ) -> Arc<Self> {
+        let mut hub = Hub::new(
+            cfg,
+            auth,
+            instruments.iter().map(|i| i.symbol.clone()),
+            orders_tx,
+        );
+        if let Some(h) = Arc::get_mut(&mut hub) {
+            for i in instruments {
+                h.specs.insert(
+                    client_symbol(&i.symbol),
+                    instrument_spec(&i.symbol, Some(i.tick_size), Some(i.qty_step)),
+                );
+            }
+        }
+        hub
+    }
+
+    /// Instrument specs of every served symbol, sorted by client symbol.
+    pub fn instruments(&self) -> Vec<client_proto::Instrument> {
+        self.specs.values().cloned().collect()
     }
 
     pub fn subscribe_quotes(&self) -> broadcast::Receiver<Arc<ClientQuote>> {
@@ -517,6 +555,51 @@ impl Hub {
     }
 }
 
+/// Number of decimals needed to represent `f` exactly.
+fn decimals(f: Fixed) -> u32 {
+    let mut raw = f.raw();
+    if raw == 0 {
+        return 0;
+    }
+    let mut d = domain::fixed::SCALE_DIGITS;
+    while d > 0 && raw % 10 == 0 {
+        raw /= 10;
+        d -= 1;
+    }
+    d
+}
+
+/// Builds a client instrument spec from an internal symbol (`EUR/USD` or `EURUSD`).
+fn instrument_spec(
+    internal: &str,
+    tick_size: Option<Fixed>,
+    qty_step: Option<Fixed>,
+) -> client_proto::Instrument {
+    let sym = client_symbol(internal);
+    let (base, quote) = match internal.split_once('/') {
+        Some((b, q)) => (b.to_string(), q.to_string()),
+        None if sym.len() == 6 => (sym[..3].to_string(), sym[3..].to_string()),
+        None => (sym.clone(), String::new()),
+    };
+    // FX convention: 1 lot = 100,000 units of base. Metals/others are configured
+    // per venue later; the default keeps the field present for clients.
+    let contract = match base.as_str() {
+        "XAU" => Fixed::from_int(100),
+        "XAG" => Fixed::from_int(5_000),
+        _ if base.len() == 3 && quote.len() == 3 => Fixed::from_int(100_000),
+        _ => Fixed::from_int(1),
+    };
+    client_proto::Instrument {
+        symbol: sym,
+        digits: tick_size.map(decimals).unwrap_or(0),
+        tick_size: tick_size.map(Decimal::from),
+        qty_step: qty_step.map(Decimal::from),
+        contract_size: Some(contract.into()),
+        base,
+        quote,
+    }
+}
+
 fn poisoned() -> CmdError {
     CmdError::new(ErrorCode::Internal, "internal state error")
 }
@@ -559,6 +642,43 @@ mod tests {
         );
         p.apply(px("50"), px("1.0"));
         assert_eq!(p, Pos::default());
+    }
+
+    #[test]
+    fn instrument_specs() {
+        let inst = domain::Instrument {
+            symbol: "USD/JPY".into(),
+            security_id: "4004".into(),
+            tick_size: px("0.001"),
+            qty_step: px("1000"),
+        };
+        let hub = Hub::with_instruments(
+            ClientGatewayConfig::default(),
+            Authenticator::hs256(b"k"),
+            &[inst],
+            None,
+        );
+        let l = hub.instruments();
+        assert_eq!(l.len(), 1);
+        let i = &l[0];
+        assert_eq!(
+            (i.symbol.as_str(), i.base.as_str(), i.quote.as_str()),
+            ("USDJPY", "USD", "JPY")
+        );
+        assert_eq!(i.digits, 3);
+        assert_eq!(i.tick_size, Some(px("0.001").into()));
+        assert_eq!(i.qty_step, Some(px("1000").into()));
+        assert_eq!(i.contract_size, Some(px("100000").into()));
+        // Plain constructor: specs without tick data.
+        let h2 = Hub::new(
+            ClientGatewayConfig::default(),
+            Authenticator::hs256(b"k"),
+            vec!["EUR/USD".to_string()],
+            None,
+        );
+        assert_eq!(h2.instruments()[0].tick_size, None);
+        assert_eq!(decimals(px("0.00001")), 5);
+        assert_eq!(decimals(px("1")), 0);
     }
 
     #[test]

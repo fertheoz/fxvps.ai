@@ -36,6 +36,21 @@ fn samples() -> Vec<Envelope> {
                 ts_ns: 1_700_000_000_000_000_000,
             }],
         }),
+        Body::SymbolListRequest(SymbolListRequest {
+            request_id: "l1".into(),
+        }),
+        Body::SymbolList(SymbolList {
+            request_id: "l1".into(),
+            instruments: vec![Instrument {
+                symbol: "EURUSD".into(),
+                base: "EUR".into(),
+                quote: "USD".into(),
+                tick_size: d("0.00001"),
+                qty_step: d("1000"),
+                digits: 5,
+                contract_size: d("100000"),
+            }],
+        }),
         Body::CandleRequest(CandleRequest {
             request_id: "c1".into(),
             symbol: "EURUSD".into(),

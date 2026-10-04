@@ -2,8 +2,8 @@
 
 React 19 + TypeScript (strict) + Vite web trading terminal — an MT5/cTrader
 hybrid. Runs fully standalone in the browser against an in-browser mock
-backend; a WebSocket adapter for the future gateway is stubbed
-(see [PROTOCOL.md](./PROTOCOL.md)).
+backend, or live against `services/client-gateway` over the binary protobuf
+protocol (see [PROTOCOL.md](./PROTOCOL.md)).
 
 ![screenshot](./docs/screenshot.png)
 
@@ -13,7 +13,11 @@ backend; a WebSocket adapter for the future gateway is stubbed
 cd apps/terminal
 pnpm install
 pnpm dev            # http://localhost:5173  (mock backend)
-# gateway adapter:  http://localhost:5173/?api=ws&url=wss://host/ws
+
+# live gateway (from the repo root): prints FXVPS_WS_URL=... and FXVPS_DEMO_TOKEN=...
+cargo run -p client-gateway -- --demo --listen 127.0.0.1:8080
+# then open http://localhost:5173/?api=ws&url=ws://127.0.0.1:8080/ws&token=<FXVPS_DEMO_TOKEN>
+# or use the "Gateway" button in the top bar (stored per tab in sessionStorage)
 ```
 
 | Script | What |
@@ -23,6 +27,8 @@ pnpm dev            # http://localhost:5173  (mock backend)
 | `pnpm test` | Vitest + Testing Library (money/P&L/margin math, validation, mock engine, store, ticket) |
 | `pnpm build` | Production build to `dist/` |
 | `pnpm e2e` | Playwright smoke test (Chromium; set `PLAYWRIGHT_BROWSERS_PATH` if browsers are pre-installed) |
+| `pnpm e2e:live` | Playwright against a real `client-gateway --demo` (needs cargo; builds/starts it) |
+| `pnpm proto:gen` | Regenerates `src/api/gen` from `crates/client-proto/proto` (buf + protoc-gen-es) |
 | `pnpm screenshot` | Regenerates `docs/screenshot.png` (needs `pnpm preview` running) |
 
 ## Features
@@ -68,7 +74,7 @@ Defined once in `src/shortcuts.ts` (also shown in-app with `?`).
 src/
   api/types.ts      TradingApi interface + domain types (the schema)
   api/mock.ts       MockTradingApi: random walk, matching, SL/TP, stop-out, sub-accounts
-  api/ws.ts         WsTradingApi: WebSocket adapter stub (PROTOCOL.md)
+  api/ws.ts         WsTradingApi: client-gateway adapter (protobuf, gen/)
   lib/money.ts      decimal-safe math (big.js): P/L, margin, pip value, conversion
   lib/validation.ts order ticket validation
   lib/indicators.ts SMA / EMA / Bollinger / RSI

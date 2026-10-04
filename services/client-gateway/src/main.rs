@@ -57,13 +57,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         hub
     } else if let Some(p) = fix_cfg {
         let gw_cfg = fix_gateway::GatewayConfig::load(p)?;
-        let symbols: Vec<String> = gw_cfg
-            .instruments
-            .iter()
-            .map(|i| i.symbol.clone())
-            .collect();
+        let instruments = gw_cfg.instruments.clone();
         let gw = fix_gateway::start(gw_cfg)?;
-        let hub = Hub::new(cfg, auth, symbols, Some(gw.orders()));
+        let hub = Hub::with_instruments(cfg, auth, &instruments, Some(gw.orders()));
         tokio::spawn(hub.clone().run_bridge(gw.subscribe()));
         fix_handle = Some(gw);
         hub
@@ -73,6 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     tracing::info!(%addr, "client-gateway listening (ws://{addr}/ws, /healthz, /metrics)");
+    // Machine-readable line for scripts/tests (e.g. with `--listen 127.0.0.1:0`).
+    println!("FXVPS_WS_URL=ws://{addr}/ws");
     if demo && dev_key {
         // Dev key only: a convenience token for local clients.
         let t = issue_hs256(
@@ -82,6 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             24 * 3600,
         );
         tracing::info!("demo token (account DEMO-1, dev key): {t}");
+        println!("FXVPS_DEMO_TOKEN={t}");
     }
     tokio::select! {
         r = client_gateway::serve(hub, listener) => r?,

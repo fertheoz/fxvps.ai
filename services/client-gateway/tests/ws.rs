@@ -406,3 +406,40 @@ async fn candles_history_and_http_endpoints() {
     assert!(m.contains("client_gw_connections 1"), "{m}");
     drop(c);
 }
+
+#[tokio::test]
+async fn symbol_list_describes_instruments() {
+    let inst = domain::Instrument {
+        symbol: "EUR/USD".into(),
+        security_id: "4001".into(),
+        tick_size: "0.00001".parse().unwrap(),
+        qty_step: "1000".parse().unwrap(),
+    };
+    let h = Hub::with_instruments(
+        ClientGatewayConfig::default(),
+        Authenticator::hs256(KEY),
+        &[inst],
+        None,
+    );
+    let addr = server(h).await;
+    let mut c = Client::login(&addr, &["A1"], 0).await;
+    c.send(Body::SymbolListRequest(SymbolListRequest {
+        request_id: "sl1".into(),
+    }))
+    .await;
+    let l = c
+        .until(|b| match b {
+            Body::SymbolList(l) => Some(l),
+            _ => None,
+        })
+        .await;
+    assert_eq!(l.request_id, "sl1");
+    assert_eq!(l.instruments.len(), 1);
+    let i = &l.instruments[0];
+    assert_eq!(i.symbol, "EURUSD");
+    assert_eq!(i.digits, 5);
+    assert_eq!(
+        i.tick_size.and_then(|d| d.to_fixed()),
+        Some("0.00001".parse::<Fixed>().unwrap())
+    );
+}

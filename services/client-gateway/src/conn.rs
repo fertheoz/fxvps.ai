@@ -450,6 +450,10 @@ fn handle(hub: &Hub, st: &mut ConnState, out: &mut Outbox, body: Body) -> Result
             });
             reply(out, &m.request_id, r)
         }
+        Body::SymbolListRequest(r) => out.send(Body::SymbolList(client_proto::SymbolList {
+            request_id: r.request_id,
+            instruments: hub.instruments(),
+        })),
         Body::Ping(p) => out.send(Body::Pong(Pong {
             nonce: p.nonce,
             ts_ns: domain::now_ns(),
