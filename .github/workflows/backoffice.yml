@@ -1,0 +1,47 @@
+name: backoffice
+
+on:
+  push:
+    branches: [main]
+    paths: ["apps/backoffice/**", ".github/workflows/backoffice.yml"]
+  pull_request:
+    paths: ["apps/backoffice/**", ".github/workflows/backoffice.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backoffice-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/backoffice
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/backoffice/pnpm-lock.yaml
+      - run: pnpm install --ignore-workspace --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint --max-warnings 0
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e
+        env:
+          CI: "true"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backoffice-e2e
+          path: |
+            apps/backoffice/docs/screenshot.png
+            apps/backoffice/test-results/
+          if-no-files-found: ignore

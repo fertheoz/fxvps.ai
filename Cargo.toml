@@ -11,6 +11,8 @@ members = [
     "crates/risk",
     "crates/oms",
     "services/core-engine",
+    "crates/client-proto",
+    "services/client-gateway",
 ]
 
 [workspace.package]
@@ -30,6 +32,7 @@ money = { path = "crates/money" }
 ledger = { path = "crates/ledger" }
 risk = { path = "crates/risk" }
 oms = { path = "crates/oms" }
+client-proto = { path = "crates/client-proto" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "fs", "signal"] }
 thiserror = "2"
