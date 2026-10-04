@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Main terminal window: app commands, notifications, window state. No fs/shell/http access.",
+  "windows": ["main"],
+  "platforms": ["linux", "macOS", "windows"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-title",
+    "notification:default",
+    "window-state:default",
+    "updater:default",
+    "allow-app-commands"
+  ]
+}

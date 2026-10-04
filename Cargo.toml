@@ -14,6 +14,8 @@ members = [
     "crates/client-proto",
     "services/client-gateway",
 ]
+# Tauri shell needs GTK/WebKit system libs; built by .github/workflows/desktop.yml.
+exclude = ["apps/desktop/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -33,6 +35,7 @@ ledger = { path = "crates/ledger" }
 risk = { path = "crates/risk" }
 oms = { path = "crates/oms" }
 client-proto = { path = "crates/client-proto" }
+core-engine = { path = "services/core-engine" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "fs", "signal"] }
 thiserror = "2"

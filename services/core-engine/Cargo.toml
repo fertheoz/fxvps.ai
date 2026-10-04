@@ -7,6 +7,9 @@ publish.workspace = true
 version.workspace = true
 
 [dependencies]
+domain.workspace = true
+fix-gateway.workspace = true
+thiserror.workspace = true
 money.workspace = true
 ledger.workspace = true
 risk.workspace = true
@@ -22,6 +25,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 [dev-dependencies]
+lp-simulator.workspace = true
 tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

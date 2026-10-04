@@ -1,0 +1,85 @@
+name: desktop
+
+on:
+  push:
+    branches: [main]
+    paths: ['apps/desktop/**', 'apps/terminal/**', '.github/workflows/desktop.yml']
+  pull_request:
+    paths: ['apps/desktop/**', 'apps/terminal/**', '.github/workflows/desktop.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LINUX_DEPS: >-
+    libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+    libxdo-dev libssl-dev libdbus-1-dev pkg-config build-essential
+
+jobs:
+  rust-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux system deps
+        run: sudo apt-get update && sudo apt-get install -y $LINUX_DEPS
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - run: cargo fmt --check
+      # generate_context! needs frontendDist to exist; an empty dir is enough for checks.
+      - run: mkdir -p ../../terminal/dist
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  build:
+    needs: rust-checks
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y $LINUX_DEPS
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - name: Install terminal deps (frontend built by beforeBuildCommand)
+        working-directory: apps/terminal
+        run: pnpm install --ignore-workspace --frozen-lockfile
+      - name: Install desktop deps (tauri cli)
+        working-directory: apps/desktop
+        run: pnpm install --ignore-workspace --frozen-lockfile
+      # Unsigned debug build, no installers: no signing keys or updater keys needed.
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: --debug --no-bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fxvps-desktop-${{ matrix.os }}
+          path: |
+            apps/desktop/src-tauri/target/debug/fxvps-desktop
+            apps/desktop/src-tauri/target/debug/fxvps-desktop.exe
+          if-no-files-found: ignore
+          retention-days: 7

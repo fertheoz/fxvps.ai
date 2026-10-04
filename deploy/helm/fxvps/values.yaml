@@ -59,13 +59,13 @@ services:
     existingSecret: ""
     ingressFrom: ["*"]
 
-  core-engine:            # BEKLEMEDE: services/core-engine başka dalda
+  core-engine:
     enabled: false
     image: fxvps-core-engine
     replicas: 1           # single-writer
     ports: { http: 8080 }
     metricsPort: http
-    probes: { type: http, port: http, liveness: /healthz, readiness: /readyz }
+    probes: { type: http, port: http, liveness: /health, readiness: /health }
     resources:
       requests: { cpu: "1", memory: 512Mi }
       limits: { memory: 2Gi }

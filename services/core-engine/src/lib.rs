@@ -3,6 +3,15 @@
 //! with sequence number and timestamp, appended to a JSON-lines journal and
 //! then applied. Startup restores the latest snapshot and replays the
 //! journal tail. A small axum admin API exposes accounts and positions.
+//!
+//! Integration pieces:
+//! - [`api`]: the [`api::CoreApi`] boundary used by client-gateway, with an
+//!   in-process implementation ([`api::InProcessCore`]). A NATS-backed
+//!   implementation is a follow-up.
+//! - [`lp_fix`]: [`lp_fix::FixLpRouter`] (oms `LpRouter` over fix-gateway) and
+//!   the bridge feeding LP quotes and executions back as journaled commands.
+//! - [`output`]: turns engine events into account-level [`api::CoreEvent`]s.
+//! - [`stack`]: starts fix-gateway + engine + bridge in-process (demo/dev).
 
 pub mod admin;
 
@@ -19,15 +28,40 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use tokio::sync::oneshot;
+
+pub mod api;
+pub mod lp_fix;
+pub mod output;
+pub mod stack;
 
 pub type Query = Box<dyn FnOnce(&Engine) -> Value + Send>;
 
 pub enum Request {
     Cmd(Command, oneshot::Sender<Vec<Event>>),
     Query(Query, oneshot::Sender<Value>),
+    /// Typed read; the closure delivers its own result.
+    Read(Box<dyn FnOnce(&Engine) + Send>),
     Shutdown,
+}
+
+/// Commands produced outside the writer in reaction to router calls (e.g.
+/// an LP order that could not be sent); applied right after the command that
+/// caused them, so they are journaled like everything else.
+pub type LpFeedback = Arc<Mutex<VecDeque<Command>>>;
+
+/// How A-book orders reach a liquidity provider.
+pub enum LpMode {
+    /// Fill immediately at the current LP quote (journaled simulator).
+    Simulated,
+    /// Real router (e.g. [`lp_fix::FixLpRouter`]); fills arrive later as
+    /// `Command::LpFill` / `Command::LpReject`.
+    External {
+        router: Box<dyn oms::LpRouter>,
+        feedback: LpFeedback,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +96,19 @@ impl EngineHandle {
     pub async fn command(&self, cmd: Command) -> Result<Vec<Event>, String> {
         let (t, r) = oneshot::channel();
         self.send(Request::Cmd(cmd, t)).await?;
+        r.await.map_err(|e| e.to_string())
+    }
+
+    /// Runs `f` on the writer thread and returns its typed result.
+    pub async fn read<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Engine) -> T + Send + 'static,
+    ) -> Result<T, String> {
+        let (t, r) = oneshot::channel();
+        self.send(Request::Read(Box::new(move |e| {
+            let _ = t.send(f(e));
+        })))
+        .await?;
         r.await.map_err(|e| e.to_string())
     }
 
@@ -157,8 +204,14 @@ struct Writer {
     last_ts: u64,
     journal: File,
     settings: Settings,
-    router: RecordingRouter,
+    lp: WriterLp,
     since_snapshot: u64,
+    publisher: Option<output::Publisher>,
+}
+
+enum WriterLp {
+    Simulated(RecordingRouter),
+    External(LpFeedback),
 }
 
 impl Writer {
@@ -198,10 +251,16 @@ impl Writer {
     /// Commands caused by the previous one (simulated LP fills).
     fn internal_commands(&mut self) -> VecDeque<Command> {
         let mut q = VecDeque::new();
-        for r in self.router.take() {
-            if !self.settings.simulate_lp {
-                continue;
+        let router = match &self.lp {
+            WriterLp::Simulated(r) => r,
+            WriterLp::External(fb) => {
+                if let Ok(mut fb) = fb.lock() {
+                    q.extend(fb.drain(..));
+                }
+                return q;
             }
+        };
+        for r in router.take() {
             let quote = self.engine.snapshot_quote(&r.symbol);
             match quote {
                 Some(qt) => q.push_back(Command::LpFill {
@@ -226,8 +285,22 @@ impl Writer {
                     let mut events = Vec::new();
                     let mut queue = VecDeque::from([cmd]);
                     while let Some(c) = queue.pop_front() {
+                        let quote_sym = match &c {
+                            Command::Quote { symbol, .. } => Some(symbol.clone()),
+                            _ => None,
+                        };
                         match self.apply(c) {
-                            Ok(ev) => events.extend(ev),
+                            Ok(ev) => {
+                                if let Some(p) = &mut self.publisher {
+                                    p.publish(
+                                        &self.engine,
+                                        quote_sym.as_deref(),
+                                        &ev,
+                                        self.last_ts,
+                                    );
+                                }
+                                events.extend(ev)
+                            }
                             Err(e) => {
                                 tracing::error!("journal write failed: {e}");
                                 events.push(Event::CommandRejected {
@@ -243,6 +316,7 @@ impl Writer {
                 Request::Query(f, reply) => {
                     let _ = reply.send(f(&self.engine));
                 }
+                Request::Read(f) => f(&self.engine),
                 Request::Shutdown => break,
             }
         }
@@ -252,11 +326,40 @@ impl Writer {
     }
 }
 
-/// Recovers state and starts the single writer thread.
+/// Recovers state and starts the single writer thread. A-book orders are
+/// filled by the journaled simulator when `settings.simulate_lp`, otherwise
+/// they are dropped (no LP attached).
 pub fn spawn(settings: Settings) -> std::io::Result<(EngineHandle, JoinHandle<()>)> {
+    let lp = if settings.simulate_lp {
+        LpMode::Simulated
+    } else {
+        LpMode::External {
+            router: Box::new(NullRouter),
+            feedback: LpFeedback::default(),
+        }
+    };
+    spawn_with(settings, lp, None)
+}
+
+/// Like [`spawn`] with an explicit LP mode and an optional account-event
+/// publisher (see [`output::Publisher`]).
+pub fn spawn_with(
+    settings: Settings,
+    lp: LpMode,
+    publisher: Option<output::Publisher>,
+) -> std::io::Result<(EngineHandle, JoinHandle<()>)> {
     let (mut engine, seq) = recover(&settings)?;
-    let router = RecordingRouter::default();
-    engine.set_router(Box::new(router.clone()));
+    let lp = match lp {
+        LpMode::Simulated => {
+            let router = RecordingRouter::default();
+            engine.set_router(Box::new(router.clone()));
+            WriterLp::Simulated(router)
+        }
+        LpMode::External { router, feedback } => {
+            engine.set_router(router);
+            WriterLp::External(feedback)
+        }
+    };
     let journal = OpenOptions::new()
         .create(true)
         .append(true)
@@ -268,8 +371,9 @@ pub fn spawn(settings: Settings) -> std::io::Result<(EngineHandle, JoinHandle<()
         last_ts: 0,
         journal,
         settings,
-        router,
+        lp,
         since_snapshot: 0,
+        publisher,
     };
     let join = std::thread::Builder::new()
         .name("core-engine-writer".into())
