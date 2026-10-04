@@ -13,7 +13,7 @@ import type {
   SymbolSpec,
   Timeframe,
   TradingEvent,
-} from '../api/types';
+} from '@fxvps/trading-core';
 import type { Lang } from '../i18n';
 
 export type Theme = 'dark' | 'light';

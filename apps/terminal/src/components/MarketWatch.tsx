@@ -2,7 +2,7 @@ import { memo, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useT } from '../hooks';
 import { useTerminal } from '../store/terminal';
-import { big, formatPrice, spreadPoints } from '../lib/money';
+import { big, formatPrice, spreadPoints } from '@fxvps/trading-core';
 
 const Row = memo(function Row({ symbol }: { symbol: string }) {
   const q = useTerminal((s) => s.quotes[symbol]);

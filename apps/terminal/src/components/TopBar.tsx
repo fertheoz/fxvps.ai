@@ -1,7 +1,7 @@
 import { useMetrics, useT } from '../hooks';
 import { useTerminal } from '../store/terminal';
-import { formatMoney } from '../lib/money';
-import type { ConnectionState } from '../api/types';
+import { formatMoney } from '@fxvps/trading-core';
+import type { ConnectionState } from '@fxvps/trading-core';
 import { useState } from 'react';
 import { isGatewayApi } from '../store/api';
 import { loadGateway } from '../store/connection';

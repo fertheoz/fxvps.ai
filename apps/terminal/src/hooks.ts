@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { useTerminal, selectActiveAccount, selectPositions } from './store/terminal';
 import { translate, type MessageKey } from './i18n';
-import { buildRates, computeAccountMetrics, type AccountMetrics, type Rates } from './lib/money';
+import { buildRates, computeAccountMetrics, type AccountMetrics, type Rates } from '@fxvps/trading-core';
 
 export function useT() {
   const lang = useTerminal((s) => s.lang);

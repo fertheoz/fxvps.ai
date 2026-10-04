@@ -93,7 +93,11 @@ export interface Account {
   /** e.g. 100 for 1:100. */
   leverage: number;
   isDemo: boolean;
+  /** Netting: one position per symbol; hedging: several (both sides). */
+  marginMode?: MarginMode;
 }
+
+export type MarginMode = 'netting' | 'hedging';
 
 export interface Position {
   id: string;
@@ -105,6 +109,8 @@ export interface Position {
   openTime: number;
   sl?: number;
   tp?: number;
+  /** Server-side trailing stop distance in price units. */
+  trailing?: number;
   /** Minor units, negative = cost. */
   commission: number;
   swap: number;
@@ -123,6 +129,10 @@ export interface PendingOrder {
   limitPrice?: number;
   sl?: number;
   tp?: number;
+  /** Trailing stop distance (price units) for the resulting position. */
+  trailing?: number;
+  /** One-cancels-other group. */
+  ocoGroup?: number;
   /** Unix ms, undefined = GTC. */
   expiry?: number;
   createdAt: number;
@@ -156,10 +166,16 @@ export interface OrderRequest {
   limitPrice?: number;
   sl?: number;
   tp?: number;
+  /** Trailing stop distance in price units. */
+  trailing?: number;
+  /** One-cancels-other group (pending orders). */
+  ocoGroup?: number;
   expiry?: number;
   /** Client-generated id for idempotency. */
   clientId?: string;
 }
+
+export type OrderChanges = Partial<Pick<PendingOrder, 'volume' | 'price' | 'limitPrice' | 'sl' | 'tp' | 'trailing' | 'expiry'>>;
 
 export type OrderResult =
   | { ok: true; positionId?: string; orderId?: string; price?: number }
@@ -198,8 +214,10 @@ export interface TradingApi {
   subscribeDepth(symbol: string, onDepth: (depth: Depth) => void): Unsubscribe;
   onEvent(listener: (event: TradingEvent) => void): Unsubscribe;
   placeOrder(req: OrderRequest): Promise<OrderResult>;
-  modifyPosition(accountId: string, positionId: string, sl?: number, tp?: number): Promise<OrderResult>;
+  /** Sets SL / TP / trailing distance (full replacement: undefined = none). */
+  modifyPosition(accountId: string, positionId: string, sl?: number, tp?: number, trailing?: number): Promise<OrderResult>;
   closePosition(accountId: string, positionId: string, volume?: number): Promise<OrderResult>;
-  modifyOrder(accountId: string, orderId: string, changes: Partial<Pick<PendingOrder, 'price' | 'limitPrice' | 'sl' | 'tp' | 'expiry'>>): Promise<OrderResult>;
+  /** Changes a pending order in place; keys present with `undefined` remove sl/tp/trailing/expiry. */
+  modifyOrder(accountId: string, orderId: string, changes: OrderChanges): Promise<OrderResult>;
   cancelOrder(accountId: string, orderId: string): Promise<OrderResult>;
 }

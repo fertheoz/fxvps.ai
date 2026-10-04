@@ -1,4 +1,4 @@
-import { TIMEFRAMES, type Timeframe } from '../api/types';
+import { TIMEFRAMES, type Timeframe } from '@fxvps/trading-core';
 
 export interface ChartView {
   symbol: string;

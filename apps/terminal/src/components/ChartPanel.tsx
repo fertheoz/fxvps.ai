@@ -12,13 +12,13 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import { TIMEFRAMES, TIMEFRAME_SECONDS, type Bar } from '../api/types';
+import { TIMEFRAMES, TIMEFRAME_SECONDS, type Bar } from '@fxvps/trading-core';
 import { getApi, trade } from '../store/api';
 import { selectOrders, selectPositions, useTerminal, type Indicators } from '../store/terminal';
 import { useT } from '../hooks';
-import { applyTick } from '../lib/bars';
-import { bollinger, ema, rsi, sma } from '../lib/indicators';
-import { formatPrice, lotsToVolume, volumeToLots } from '../lib/money';
+import { applyTick } from '@fxvps/trading-core';
+import { bollinger, ema, rsi, sma } from '@fxvps/trading-core';
+import { formatPrice, lotsToVolume, volumeToLots } from '@fxvps/trading-core';
 import { isTauri, openChartWindow } from '../native';
 import { dragProtection, hitLine } from '../lib/chartDrag';
 

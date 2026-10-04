@@ -1,5 +1,5 @@
-import type { Quote, SymbolSpec } from '../api/types';
-import { MOCK_SYMBOLS, toSpec } from '../api/symbols';
+import type { Quote, SymbolSpec } from '@fxvps/trading-core';
+import { MOCK_SYMBOLS, toSpec } from '@fxvps/trading-core';
 
 export const specs: Record<string, SymbolSpec> = Object.fromEntries(MOCK_SYMBOLS.map((s) => [s.name, toSpec(s)]));
 

@@ -13,7 +13,7 @@ import {
   TimeInForce,
   type Envelope,
 } from './gen/fxvps_client_v1_pb';
-import type { Quote, TradingEvent } from './types';
+import type { Quote, TradingEvent } from '@fxvps/trading-core';
 import { WsTradingApi } from './ws';
 
 type Body = MessageInitShape<typeof EnvelopeSchema>['body'];

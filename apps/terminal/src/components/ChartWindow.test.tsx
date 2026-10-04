@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { MockTradingApi } from '../api/mock';
+import { MockTradingApi } from '@fxvps/trading-core';
 import { useTerminal } from '../store/terminal';
 import { prepareChartWindow } from '../native';
 import { ChartWindow } from './ChartWindow';
