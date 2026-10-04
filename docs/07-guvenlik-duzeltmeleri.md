@@ -21,8 +21,8 @@ hangi commit, hangi test, ne kaldı. Durum: **Düzeltildi** / **Kısmi** / **Ert
 | G11 | Orta | Düzeltildi (Deployment + PVC; StatefulSet değil) | `738f5f3` |
 | G12 | Orta | Düzeltildi | `4a1383e` |
 | G13 | Düşük | Kısmi (terminal meta CSP yok) | `3e41eab` |
-| G14 | Düşük | Ertelendi | — |
-| G15 | Düşük | Ertelendi | — |
+| G14 | Düşük | Kısmi (ayrıcalıklı roller için 60 sn TTL; bootstrap CLI'ya taşınmadı) | `fix/security-remainder` |
+| G15 | Düşük | Düzeltildi (`*` yalnız `CORE_DEV_AUTH=1` ile) | `fix/security-remainder` |
 | G16 | Düşük | Düzeltildi | `7f3142b` |
 | G17 | Bilgi | Ertelendi | — |
 

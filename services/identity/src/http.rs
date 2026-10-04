@@ -353,6 +353,20 @@ fn cookie(app: &App, value: &str, max_age: u64) -> HeaderValue {
     .unwrap_or_else(|_| HeaderValue::from_static(""))
 }
 
+/// Privileged roles get a shorter-lived access token (G14): a leaked admin
+/// token is useful for at most `PRIVILEGED_ACCESS_TTL_SECS`.
+const PRIVILEGED_ACCESS_TTL_SECS: u64 = 60;
+const PRIVILEGED_ROLES: &[&str] = &["admin", "dealer", "risk", "support"];
+
+fn access_ttl_for(app: &App, roles: &[String]) -> u64 {
+    let base = app.cfg.access_ttl.as_secs();
+    if roles.iter().any(|r| PRIVILEGED_ROLES.contains(&r.as_str())) {
+        base.min(PRIVILEGED_ACCESS_TTL_SECS)
+    } else {
+        base
+    }
+}
+
 async fn access_token(
     app: &App,
     user: &User,
@@ -365,7 +379,7 @@ async fn access_token(
         iss: app.cfg.issuer.clone(),
         aud: app.cfg.audience.clone(),
         sub: user.id.clone(),
-        exp: iat + app.cfg.access_ttl.as_secs(),
+        exp: iat + access_ttl_for(app, &user.roles),
         iat,
         jti: random_id(),
         sid: sid.into(),
@@ -397,7 +411,7 @@ fn token_response(
     let body = TokenResponse {
         access_token: access,
         token_type: "Bearer",
-        expires_in: app.cfg.access_ttl.as_secs(),
+        expires_in: access_ttl_for(app, &user.roles),
         refresh_token: (mode == SessionMode::Bearer).then(|| refresh.clone()),
         refresh_expires_in: rt,
         accounts,
