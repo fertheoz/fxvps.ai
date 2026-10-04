@@ -59,7 +59,7 @@ pub struct QuoteMsg {
 /// Per-account event fanned out to every connection authorized for `account_id`.
 #[derive(Clone, Debug)]
 pub enum AccountEvent {
-    Order(OrderUpdate),
+    Order(Box<OrderUpdate>),
     Position(PositionUpdate),
     Account(AccountSnapshot),
     Deal(DealUpdate),
@@ -597,7 +597,7 @@ impl Hub {
                     candles,
                 );
             }
-            CoreEvent::Order(o) => AccountEvent::Order(order_update(o)),
+            CoreEvent::Order(o) => AccountEvent::Order(Box::new(order_update(o))),
             CoreEvent::Position(p) => AccountEvent::Position(PositionUpdate {
                 account_id: p.account.clone(),
                 position: Some(position(p)),

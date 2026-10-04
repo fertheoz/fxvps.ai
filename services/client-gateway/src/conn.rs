@@ -302,7 +302,7 @@ async fn session(
             ev = accounts.recv() => match ev {
                 Ok(ev) => if state.claims.may_access(ev.account_id()) {
                     let body = match &*ev {
-                        AccountEvent::Order(o) => Body::OrderUpdate(o.clone()),
+                        AccountEvent::Order(o) => Body::OrderUpdate((**o).clone()),
                         AccountEvent::Position(p) => Body::PositionUpdate(p.clone()),
                         AccountEvent::Account(a) => Body::AccountSnapshot(a.clone()),
                         AccountEvent::Deal(d) => Body::DealUpdate(d.clone()),

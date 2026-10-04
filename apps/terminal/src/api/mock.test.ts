@@ -117,7 +117,8 @@ describe('MockTradingApi', () => {
     expect(await api.modifyOrder('100001', b.orderId!, { volume: 20, price: 1.091, sl: 1.08 })).toMatchObject({ ok: true });
     let orders = [...events].reverse().find((e) => e.type === 'orders');
     expect(orders).toMatchObject({ orders: [{ id: a.orderId }, { id: b.orderId, volume: 20, price: 1.091, sl: 1.08 }] });
-    expect((await api.modifyOrder('100001', b.orderId!, { volume: 7 })).ok).toBe(false);
+    expect((await api.modifyOrder('100001', b.orderId!, { volume: 0 })).ok).toBe(false);
+    expect((await api.modifyOrder('100001', b.orderId!, { volume: 10_000_000 })).ok).toBe(false);
     api.setMid('EURUSD', 1.103);
     orders = [...events].reverse().find((e) => e.type === 'orders');
     expect(orders).toMatchObject({ orders: [] });

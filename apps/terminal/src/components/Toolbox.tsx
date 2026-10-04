@@ -249,11 +249,11 @@ function History() {
           empty={t('tb.empty')}
           renderRow={(d) => (
             <>
-              <span className="num">{d.positionId}</span>
+              <span className="num" data-testid={`deal-pos-${d.positionId}`}>{d.positionId}</span>
               <span className="num text-muted">{formatTime(d.time)}</span>
               <span className="font-medium">{d.symbol}</span>
               <span className={sideCls(d.side)}>{d.side}</span>
-              <span>{d.entry}</span>
+              <span data-testid={`deal-entry-${d.entry}`}>{d.entry}</span>
               <span className="num">{volumeToLots(d.volume)}</span>
               <span className="num">{formatPrice(d.price, symbols[d.symbol]?.digits ?? 5)}</span>
               <span className="num text-muted">{formatMoney(d.commission)}</span>
