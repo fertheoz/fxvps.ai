@@ -11,5 +11,5 @@
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "playwright.config.ts", "playwright.live.config.ts", "e2e", "e2e-live", "eslint.config.js"]
+  "include": ["vite.config.ts", "playwright.config.ts", "playwright.live.config.ts", "playwright.identity.config.ts", "e2e", "e2e-live", "e2e-identity", "eslint.config.js"]
 }

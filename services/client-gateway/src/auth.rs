@@ -1,10 +1,20 @@
 //! JWT bearer authentication.
 //!
 //! Key sources, in order of precedence (see [`Authenticator::from_env`]):
-//! 1. `FXVPS_JWT_JWKS_FILE` — JWKS JSON (RS256 / ES256 keys selected by `kid`),
-//! 2. `FXVPS_JWT_RS256_PUBLIC_KEY_FILE` — PEM public key,
-//! 3. `FXVPS_JWT_HS256_SECRET` — shared secret,
-//! 4. otherwise the **development-only** [`DEV_HS256_SECRET`] (logged as a warning).
+//! 1. `FXVPS_JWT_JWKS_URL` — JWKS fetched over HTTP(S) from the identity service
+//!    (`/.well-known/jwks.json`), cached and refreshed every
+//!    `FXVPS_JWT_JWKS_REFRESH_SECS` (default 300) and on an unknown `kid`
+//!    (key rotation), at most once per `FXVPS_JWT_JWKS_MIN_REFRESH_SECS` (default 10),
+//! 2. `FXVPS_JWT_JWKS_FILE` — JWKS JSON (RS256 / ES256 keys selected by `kid`),
+//! 3. `FXVPS_JWT_RS256_PUBLIC_KEY_FILE` — PEM public key,
+//! 4. `FXVPS_JWT_HS256_SECRET` — shared secret,
+//! 5. otherwise the **development-only** [`DEV_HS256_SECRET`] (logged as a warning).
+//!
+//! `FXVPS_JWT_ISSUER` / `FXVPS_JWT_AUDIENCE`, when set, make `iss` / `aud`
+//! mandatory and checked (always set them with the identity service).
+
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header};
@@ -21,6 +31,12 @@ pub struct Claims {
     pub exp: u64,
     #[serde(default)]
     pub accounts: Vec<String>,
+    /// Platform roles (identity service): client, admin, dealer, risk, support, readonly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<String>,
+    /// Authentication methods (RFC 8176), e.g. `pwd`, `otp`, `mfa`, `hwk`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub amr: Vec<String>,
 }
 
 impl Claims {
@@ -37,6 +53,8 @@ pub enum AuthError {
     NoKey { alg: Algorithm, kid: Option<String> },
     #[error("key config: {0}")]
     Config(String),
+    #[error("jwks fetch: {0}")]
+    Fetch(String),
 }
 
 struct Key {
@@ -45,91 +63,271 @@ struct Key {
     key: DecodingKey,
 }
 
+fn jwks_keys(set: &JwkSet) -> Result<Vec<Key>, AuthError> {
+    let mut keys = Vec::new();
+    for jwk in &set.keys {
+        let alg = match jwk.common.key_algorithm {
+            Some(a) => a
+                .to_string()
+                .parse::<Algorithm>()
+                .map_err(|e| AuthError::Config(e.to_string()))?,
+            None => Algorithm::RS256,
+        };
+        keys.push(Key {
+            kid: jwk.common.key_id.clone(),
+            alg,
+            key: DecodingKey::from_jwk(jwk)?,
+        });
+    }
+    Ok(keys)
+}
+
+/// Remote JWKS endpoint with refresh bookkeeping.
+struct Remote {
+    url: String,
+    client: reqwest::Client,
+    min_interval: Duration,
+    last_attempt: Mutex<Option<Instant>>,
+}
+
+struct Inner {
+    keys: RwLock<Vec<Key>>,
+    issuer: Option<String>,
+    audience: Option<String>,
+    remote: Option<Remote>,
+}
+
+/// Cheap to clone; clones share the key cache.
+#[derive(Clone)]
 pub struct Authenticator {
-    keys: Vec<Key>,
+    inner: Arc<Inner>,
     /// True when running with [`DEV_HS256_SECRET`].
     pub dev_key: bool,
 }
 
 impl Authenticator {
-    pub fn hs256(secret: &[u8]) -> Self {
+    fn with_keys(keys: Vec<Key>, dev_key: bool) -> Self {
         Authenticator {
-            keys: vec![Key {
+            inner: Arc::new(Inner {
+                keys: RwLock::new(keys),
+                issuer: None,
+                audience: None,
+                remote: None,
+            }),
+            dev_key,
+        }
+    }
+
+    pub fn hs256(secret: &[u8]) -> Self {
+        Self::with_keys(
+            vec![Key {
                 kid: None,
                 alg: Algorithm::HS256,
                 key: DecodingKey::from_secret(secret),
             }],
-            dev_key: secret == DEV_HS256_SECRET.as_bytes(),
-        }
+            secret == DEV_HS256_SECRET.as_bytes(),
+        )
     }
 
     pub fn rs256_pem(pem: &[u8]) -> Result<Self, AuthError> {
-        Ok(Authenticator {
-            keys: vec![Key {
+        Ok(Self::with_keys(
+            vec![Key {
                 kid: None,
                 alg: Algorithm::RS256,
                 key: DecodingKey::from_rsa_pem(pem)?,
             }],
-            dev_key: false,
-        })
+            false,
+        ))
     }
 
-    /// Keys from a JWKS document (e.g. fetched from the IdP's `jwks_uri`).
+    /// Keys from a JWKS document.
     pub fn jwks(set: &JwkSet) -> Result<Self, AuthError> {
-        let mut keys = Vec::new();
-        for jwk in &set.keys {
-            let alg = match jwk.common.key_algorithm {
-                Some(a) => a
-                    .to_string()
-                    .parse::<Algorithm>()
-                    .map_err(|e| AuthError::Config(e.to_string()))?,
-                None => Algorithm::RS256,
-            };
-            keys.push(Key {
-                kid: jwk.common.key_id.clone(),
-                alg,
-                key: DecodingKey::from_jwk(jwk)?,
-            });
-        }
+        let keys = jwks_keys(set)?;
         if keys.is_empty() {
             return Err(AuthError::Config("empty JWKS".into()));
         }
+        Ok(Self::with_keys(keys, false))
+    }
+
+    /// Keys fetched from `url` (the identity service's `jwks_uri`). Starts empty;
+    /// call [`Authenticator::refresh`] (or [`Authenticator::spawn_refresh`]).
+    pub fn jwks_url(url: &str, min_refresh: Duration) -> Result<Self, AuthError> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| AuthError::Config(e.to_string()))?;
         Ok(Authenticator {
-            keys,
+            inner: Arc::new(Inner {
+                keys: RwLock::new(Vec::new()),
+                issuer: None,
+                audience: None,
+                remote: Some(Remote {
+                    url: url.to_string(),
+                    client,
+                    min_interval: min_refresh,
+                    last_attempt: Mutex::new(None),
+                }),
+            }),
             dev_key: false,
         })
     }
 
+    /// Requires and checks `iss` / `aud`. Call before cloning / sharing.
+    pub fn with_validation(mut self, issuer: Option<String>, audience: Option<String>) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.issuer = issuer;
+            inner.audience = audience;
+        }
+        self
+    }
+
     pub fn from_env() -> Result<Self, AuthError> {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let secs = |k: &str, d: u64| var(k).and_then(|v| v.parse().ok()).unwrap_or(d);
         let read =
             |p: String| std::fs::read(&p).map_err(|e| AuthError::Config(format!("{p}: {e}")));
-        if let Ok(p) = std::env::var("FXVPS_JWT_JWKS_FILE") {
+        let auth = if let Some(url) = var("FXVPS_JWT_JWKS_URL") {
+            Self::jwks_url(
+                &url,
+                Duration::from_secs(secs("FXVPS_JWT_JWKS_MIN_REFRESH_SECS", 10)),
+            )?
+        } else if let Some(p) = var("FXVPS_JWT_JWKS_FILE") {
             let set: JwkSet =
                 serde_json::from_slice(&read(p)?).map_err(|e| AuthError::Config(e.to_string()))?;
-            return Self::jwks(&set);
+            Self::jwks(&set)?
+        } else if let Some(p) = var("FXVPS_JWT_RS256_PUBLIC_KEY_FILE") {
+            Self::rs256_pem(&read(p)?)?
+        } else if let Some(s) = var("FXVPS_JWT_HS256_SECRET") {
+            Self::hs256(s.as_bytes())
+        } else {
+            Self::hs256(DEV_HS256_SECRET.as_bytes())
+        };
+        let auth = auth.with_validation(var("FXVPS_JWT_ISSUER"), var("FXVPS_JWT_AUDIENCE"));
+        if auth.inner.remote.is_some() {
+            auth.spawn_refresh(Duration::from_secs(secs(
+                "FXVPS_JWT_JWKS_REFRESH_SECS",
+                300,
+            )));
         }
-        if let Ok(p) = std::env::var("FXVPS_JWT_RS256_PUBLIC_KEY_FILE") {
-            return Self::rs256_pem(&read(p)?);
+        Ok(auth)
+    }
+
+    /// Fetches the remote JWKS now and replaces the cached keys. Keys absent
+    /// from the new document stop being accepted (retired by the issuer).
+    /// No-op for static key sources.
+    pub async fn refresh(&self) -> Result<usize, AuthError> {
+        let Some(r) = &self.inner.remote else {
+            return Ok(self.read_keys().len());
+        };
+        *r.last_attempt.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        let resp = r
+            .client
+            .get(&r.url)
+            .send()
+            .await
+            .and_then(|x| x.error_for_status())
+            .map_err(|e| AuthError::Fetch(e.to_string()))?;
+        let set: JwkSet = resp
+            .json()
+            .await
+            .map_err(|e| AuthError::Fetch(e.to_string()))?;
+        let keys = jwks_keys(&set)?;
+        if keys.is_empty() {
+            return Err(AuthError::Fetch("empty JWKS".into()));
         }
-        if let Ok(s) = std::env::var("FXVPS_JWT_HS256_SECRET") {
-            return Ok(Self::hs256(s.as_bytes()));
+        let n = keys.len();
+        *self.inner.keys.write().unwrap_or_else(|e| e.into_inner()) = keys;
+        tracing::debug!(url = %r.url, keys = n, "JWKS refreshed");
+        Ok(n)
+    }
+
+    /// Background refresh: immediately, then every `every`. Needs a Tokio runtime
+    /// (no-op without one or for static keys).
+    pub fn spawn_refresh(&self, every: Duration) {
+        if self.inner.remote.is_none() {
+            return;
         }
-        Ok(Self::hs256(DEV_HS256_SECRET.as_bytes()))
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let weak = Arc::downgrade(&self.inner);
+        let dev_key = self.dev_key;
+        rt.spawn(async move {
+            loop {
+                let Some(inner) = weak.upgrade() else { return };
+                let a = Authenticator { inner, dev_key };
+                let ok = match a.refresh().await {
+                    Ok(_) => true,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "JWKS refresh failed; keeping cached keys");
+                        false
+                    }
+                };
+                drop(a);
+                // Retry sooner while we have nothing / the fetch failed.
+                let wait = if ok {
+                    every
+                } else {
+                    every.min(Duration::from_secs(5))
+                };
+                tokio::time::sleep(wait).await;
+            }
+        });
+    }
+
+    /// Unknown `kid` (likely a rotation): refresh in the background, rate limited.
+    fn poke_refresh(&self) {
+        let Some(r) = &self.inner.remote else { return };
+        {
+            let mut last = r.last_attempt.lock().unwrap_or_else(|e| e.into_inner());
+            if last.is_some_and(|t| t.elapsed() < r.min_interval) {
+                return;
+            }
+            *last = Some(Instant::now());
+        }
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let a = self.clone();
+            rt.spawn(async move {
+                if let Err(e) = a.refresh().await {
+                    tracing::warn!(error = %e, "JWKS refresh (unknown kid) failed");
+                }
+            });
+        }
+    }
+
+    fn read_keys(&self) -> std::sync::RwLockReadGuard<'_, Vec<Key>> {
+        self.inner.keys.read().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn verify(&self, token: &str) -> Result<Claims, AuthError> {
         let header = decode_header(token)?;
-        let key = self
-            .keys
+        let keys = self.read_keys();
+        let Some(key) = keys
             .iter()
             .find(|k| k.alg == header.alg && (header.kid.is_none() || k.kid == header.kid))
-            .ok_or_else(|| AuthError::NoKey {
+        else {
+            drop(keys);
+            self.poke_refresh();
+            return Err(AuthError::NoKey {
                 alg: header.alg,
                 kid: header.kid.clone(),
-            })?;
+            });
+        };
         let mut v = jsonwebtoken::Validation::new(key.alg);
         v.leeway = 5;
-        v.set_required_spec_claims(&["exp", "sub"]);
+        let mut req = vec!["exp", "sub"];
+        if let Some(i) = &self.inner.issuer {
+            v.set_issuer(&[i]);
+            req.push("iss");
+        }
+        match &self.inner.audience {
+            Some(a) => {
+                v.set_audience(&[a]);
+                req.push("aud");
+            }
+            None => v.validate_aud = false,
+        }
+        v.set_required_spec_claims(&req);
         Ok(decode::<Claims>(token, &key.key, &v)?.claims)
     }
 }
@@ -140,6 +338,8 @@ pub fn issue_hs256(secret: &[u8], sub: &str, accounts: &[&str], ttl_secs: u64) -
         sub: sub.into(),
         exp: domain::now_ns() / 1_000_000_000 + ttl_secs,
         accounts: accounts.iter().map(|s| s.to_string()).collect(),
+        roles: Vec::new(),
+        amr: Vec::new(),
     };
     encode(
         &Header::new(Algorithm::HS256),
@@ -171,6 +371,8 @@ mod tests {
                 sub: "u".into(),
                 exp: 1_000,
                 accounts: vec![],
+                roles: vec![],
+                amr: vec![],
             },
             &EncodingKey::from_secret(b"k1"),
         )
@@ -183,6 +385,8 @@ mod tests {
                 sub: "u".into(),
                 exp: u64::MAX / 2,
                 accounts: vec![],
+                roles: vec![],
+                amr: vec![],
             },
             &EncodingKey::from_secret(b"k1"),
         )
@@ -194,5 +398,38 @@ mod tests {
     fn dev_key_is_flagged() {
         assert!(Authenticator::hs256(DEV_HS256_SECRET.as_bytes()).dev_key);
         assert!(!Authenticator::hs256(b"x").dev_key);
+    }
+
+    #[test]
+    fn iss_aud_enforced_when_configured() {
+        #[derive(Serialize)]
+        struct C<'a> {
+            sub: &'a str,
+            exp: u64,
+            iss: &'a str,
+            aud: &'a str,
+        }
+        let tok = |iss, aud| {
+            encode(
+                &Header::new(Algorithm::HS256),
+                &C {
+                    sub: "u",
+                    exp: u64::MAX / 2,
+                    iss,
+                    aud,
+                },
+                &EncodingKey::from_secret(b"k"),
+            )
+            .unwrap()
+        };
+        let a = Authenticator::hs256(b"k")
+            .with_validation(Some("https://id".into()), Some("fxvps".into()));
+        assert!(a.verify(&tok("https://id", "fxvps")).is_ok());
+        assert!(a.verify(&tok("https://evil", "fxvps")).is_err());
+        assert!(a.verify(&tok("https://id", "other")).is_err());
+        // missing iss/aud entirely
+        assert!(a.verify(&issue_hs256(b"k", "u", &[], 60)).is_err());
+        // unconfigured: aud ignored
+        assert!(Authenticator::hs256(b"k").verify(&tok("x", "y")).is_ok());
     }
 }
