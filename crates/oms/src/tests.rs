@@ -430,14 +430,35 @@ fn modify_position_sl_closes() {
     let mut h = b();
     h.market(1, "a", Side::Sell, "1");
     let pid = h.pos(1)[0].id;
-    h.cmd(Command::ModifyPosition {
+    // SL already through the market (ask 1.10010) is rejected
+    let ev = h.cmd(Command::ModifyPosition {
         account: 1,
         position_id: pid,
         sl: Some(px("1.10005")),
         tp: None,
         trailing_points: None,
     });
+    assert!(matches!(ev[0], Event::CommandRejected { .. }));
+    let ev = h.cmd(Command::ModifyPosition {
+        account: 1,
+        position_id: pid,
+        sl: None,
+        tp: Some(px("1.10020")),
+        trailing_points: None,
+    });
+    assert!(matches!(ev[0], Event::CommandRejected { .. }));
+    h.cmd(Command::ModifyPosition {
+        account: 1,
+        position_id: pid,
+        sl: Some(px("1.10050")),
+        tp: Some(px("1.09000")),
+        trailing_points: None,
+    });
+    assert_eq!(h.pos(1)[0].sl, Some(px("1.10050")));
+    h.quote("EURUSD", "1.10045", "1.10055");
     assert!(h.pos(1).is_empty());
+    let d = h.e.deals().last().unwrap();
+    assert_eq!((d.entry, d.reason), (DealEntry::Out, OrderOrigin::StopLoss));
 }
 
 #[test]
@@ -716,4 +737,131 @@ proptest! {
             prop_assert!(h.bal(a).minor >= 0 || !h.pos(a).is_empty(), "NBP: flat accounts are never negative");
         }
     }
+}
+
+fn change(o: &Order) -> OrderChange {
+    OrderChange {
+        volume: o.req.volume,
+        limit_price: o.req.limit_price,
+        stop_price: o.req.stop_price,
+        sl: o.req.sl,
+        tp: o.req.tp,
+        trailing_points: o.req.trailing_points,
+        expire_at: o.req.expire_at,
+    }
+}
+
+#[test]
+fn modify_pending_order_in_place() {
+    let mut h = b();
+    let o = h.pending(1, "lim", Side::Buy, OrderType::Limit, Some("1.09900"), None);
+    let (_, id) = h.order(o);
+    let mut c = change(h.e.order(id).unwrap());
+    c.volume = qty("2");
+    c.limit_price = Some(px("1.09950"));
+    c.sl = Some(px("1.09000"));
+    c.tp = Some(px("1.11000"));
+    let ev = h.cmd(Command::ModifyOrder {
+        account: 1,
+        order_id: id,
+        change: c.clone(),
+    });
+    assert_eq!(ev, vec![Event::OrderModified { order_id: id }]);
+    let o = h.e.order(id).unwrap();
+    assert_eq!(o.req.client_order_id, "lim");
+    assert_eq!(o.req.volume, qty("2"));
+    assert_eq!(o.req.limit_price, Some(px("1.09950")));
+    // invalid change (SL above a buy entry) is rejected and nothing changes
+    let mut bad = c.clone();
+    bad.sl = Some(px("1.20000"));
+    let ev = h.cmd(Command::ModifyOrder {
+        account: 1,
+        order_id: id,
+        change: bad,
+    });
+    assert!(matches!(ev[0], Event::CommandRejected { .. }));
+    assert_eq!(h.e.order(id).unwrap().req.sl, Some(px("1.09000")));
+    // someone else's order
+    h.account(2, "b", "1000");
+    let ev = h.cmd(Command::ModifyOrder {
+        account: 2,
+        order_id: id,
+        change: c.clone(),
+    });
+    assert!(matches!(ev[0], Event::CommandRejected { .. }));
+    // moving the limit through the market fills it, SL/TP go to the position
+    c.limit_price = Some(px("1.10050"));
+    h.cmd(Command::ModifyOrder {
+        account: 1,
+        order_id: id,
+        change: c.clone(),
+    });
+    assert_eq!(h.e.order(id).unwrap().status, OrderStatus::Filled);
+    let p = &h.pos(1)[0];
+    assert_eq!((p.volume, p.sl, p.tp), (qty("2"), c.sl, c.tp));
+    // filled order is no longer modifiable
+    let ev = h.cmd(Command::ModifyOrder {
+        account: 1,
+        order_id: id,
+        change: c,
+    });
+    assert!(matches!(ev[0], Event::CommandRejected { .. }));
+}
+
+#[test]
+fn deal_history_records_entries_pnl_and_reasons() {
+    let mut h = H::new(EngineConfig::default());
+    let mut eu = SymbolSpec::fx("EURUSD", Currency::EUR, USD, 5);
+    eu.commission_per_lot = usd("3.5");
+    h.cmd(Command::AddSymbol(eu));
+    h.account(1, "b", "10000");
+    let mut o = NewOrder::market(1, "o", "EURUSD", Side::Buy, qty("2"));
+    o.sl = Some(px("1.09000"));
+    let (ev, _) = h.order(o);
+    assert!(ev
+        .iter()
+        .any(|e| matches!(e, Event::DealAdded { deal_id: 1 })));
+    let pid = h.pos(1)[0].id;
+    h.quote("EURUSD", "1.10100", "1.10110");
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: pid,
+        volume: Some(qty("0.5")),
+        client_order_id: "pc".into(),
+    });
+    h.quote("EURUSD", "1.08900", "1.08910");
+    assert!(h.pos(1).is_empty(), "SL closed the rest");
+    let d = h.e.deals();
+    assert_eq!(d.len(), 3);
+    assert_eq!(
+        (d[0].entry, d[0].volume, d[0].pnl),
+        (DealEntry::In, qty("2"), usd("0"))
+    );
+    assert_eq!(d[0].commission, usd("-7"));
+    // (1.10100 - 1.10010) * 0.5 lot = 45
+    assert_eq!(
+        (d[1].entry, d[1].pnl, d[1].reason),
+        (DealEntry::Out, usd("45"), OrderOrigin::Client)
+    );
+    assert_eq!(d[1].commission, usd("-1.75"));
+    assert_eq!(d[2].reason, OrderOrigin::StopLoss);
+    assert_eq!(d[2].volume, qty("1.5"));
+    assert!(d[2].pnl.minor < 0);
+    assert!(d.iter().all(|x| x.position_id == pid && x.account == 1));
+    assert_eq!(h.e.deal(2).unwrap().id, 2);
+    assert!(h.e.deal(0).is_none() && h.e.deal(4).is_none());
+}
+
+#[test]
+fn netting_flip_yields_out_and_in_deals() {
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "n", "10000");
+    h.market(1, "a", Side::Buy, "1");
+    h.market(1, "b", Side::Sell, "1.5");
+    let d = h.e.deals();
+    assert_eq!(d.len(), 3);
+    assert_eq!((d[1].entry, d[1].volume), (DealEntry::Out, qty("1")));
+    assert_eq!((d[2].entry, d[2].volume), (DealEntry::In, qty("0.5")));
+    assert_ne!(d[1].position_id, d[2].position_id);
+    assert_eq!(h.pos(1)[0].id, d[2].position_id);
 }
