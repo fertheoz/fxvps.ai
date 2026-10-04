@@ -1,0 +1,19 @@
+{{- if .Values.serviceMonitor.enabled }}
+{{- range $name, $svc := .Values.services }}
+{{- if and $svc.enabled $svc.metricsPort }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $name }}
+  labels: {{- include "fxvps.labels" (dict "name" $name "root" $) | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "fxvps.selector" (dict "name" $name "root" $) | nindent 6 }}
+  endpoints:
+    - port: {{ $svc.metricsPort }}
+      path: /metrics
+      interval: {{ $.Values.serviceMonitor.interval }}
+{{- end }}
+{{- end }}
+{{- end }}

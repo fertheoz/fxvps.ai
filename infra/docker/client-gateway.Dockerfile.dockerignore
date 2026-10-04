@@ -1,0 +1,10 @@
+target/
+node_modules/
+**/node_modules/
+.git/
+**/.next/
+**/dist/
+**/out/
+.env
+*.pem
+*.key
