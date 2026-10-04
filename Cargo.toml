@@ -7,6 +7,8 @@ members = [
     "services/lp-simulator",
     "services/fix-gateway",
 ]
+# Tauri shell needs GTK/WebKit system libs; built by .github/workflows/desktop.yml.
+exclude = ["apps/desktop/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

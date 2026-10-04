@@ -1,0 +1,19 @@
+# App-defined command permissions (Tauri 2 ACL). Each command must be listed
+# here and granted through a capability before the webview may invoke it.
+
+[[permission]]
+identifier = "allow-app-commands"
+description = "Commands available to the main terminal window."
+commands.allow = [
+  "open_chart_window",
+  "set_connection_status",
+  "notify_event",
+  "credential_set",
+  "credential_get",
+  "credential_delete",
+]
+
+[[permission]]
+identifier = "allow-chart-commands"
+description = "Commands available to detached chart windows."
+commands.allow = ["notify_event"]
