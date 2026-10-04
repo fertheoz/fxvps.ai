@@ -19,6 +19,7 @@ import { useT } from '../hooks';
 import { applyTick } from '../lib/bars';
 import { bollinger, ema, rsi, sma } from '../lib/indicators';
 import { formatPrice, lotsToVolume, volumeToLots } from '../lib/money';
+import { isTauri, openChartWindow } from '../native';
 import { dragProtection, hitLine } from '../lib/chartDrag';
 
 type Line = ISeriesApi<'Line'>;
@@ -46,7 +47,7 @@ function lineData(bars: Bar[], values: (number | null)[]) {
   return out;
 }
 
-export function ChartPanel({ index }: { index: number }) {
+export function ChartPanel({ index, detached = false }: { index: number; detached?: boolean }) {
   const t = useT();
   const slot = useTerminal((s) => s.charts[index]);
   const spec = useTerminal((s) => (slot ? s.symbols[slot.symbol] : undefined));
@@ -361,6 +362,16 @@ export function ChartPanel({ index }: { index: number }) {
             </button>
           ))}
         </div>
+        {isTauri() && !detached && (
+          <button
+            className="ml-auto px-1.5 py-0.5 rounded text-[11px] border border-line text-muted hover:text-fg"
+            title={t('chart.detach')}
+            data-testid={`chart-detach-${index}`}
+            onClick={() => void openChartWindow(slot.symbol, slot.timeframe)}
+          >
+            ⧉ {t('chart.detach')}
+          </button>
+        )}
       </div>
       <div className="relative flex-1 min-h-0">
         <div ref={host} className="absolute inset-0" onMouseDownCapture={onPointerDown} onMouseMove={onHover} data-testid={`chart-canvas-${index}`} />

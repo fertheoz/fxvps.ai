@@ -97,6 +97,7 @@ export const tr: Record<MessageKey, string> = {
   'chart.sell': 'SAT',
   'chart.buy': 'AL',
   'chart.lots': 'Lot',
+  'chart.detach': 'Ayır',
   'chart.loading': 'Grafik yükleniyor…',
   'ticket.title': 'Yeni Emir',
   'ticket.symbol': 'Sembol',
