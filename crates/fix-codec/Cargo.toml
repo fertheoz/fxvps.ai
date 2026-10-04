@@ -1,0 +1,17 @@
+[package]
+name = "fix-codec"
+description = "Minimal FIX 4.4 tag=value codec with typed session and application messages"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+domain.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
