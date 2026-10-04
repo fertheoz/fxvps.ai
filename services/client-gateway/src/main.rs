@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use client_gateway::auth::{issue_hs256, Authenticator, DEV_HS256_SECRET};
-use client_gateway::demo::Demo;
+use client_gateway::demo::{demo_seed, Demo};
 use client_gateway::{ClientGatewayConfig, Hub};
+use core_engine::api::CoreApi;
+use core_engine::stack::{CoreStack, StackConfig};
 use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: client-gateway [--demo] [--config client-gateway.toml] \
-[--fix-config fix-gateway.toml] [--listen ADDR]";
+[--fix-config fix-gateway.toml] [--data-dir DIR] [--listen ADDR]";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,6 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut cfg_path = None;
     let mut fix_cfg = None;
     let mut listen = None;
+    let mut data_dir = String::from("./data/core-engine");
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -24,6 +27,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--config" => cfg_path = args.next(),
             "--fix-config" => fix_cfg = args.next(),
             "--listen" => listen = args.next(),
+            "--data-dir" => {
+                data_dir = args
+                    .next()
+                    .ok_or_else(|| format!("--data-dir needs a value\n{USAGE}"))?
+            }
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(());
@@ -56,12 +64,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         demo_handle = Some(d);
         hub
     } else if let Some(p) = fix_cfg {
+        // fix-gateway + core-engine in-process against a configured LP; the
+        // journal lives in --data-dir. Fresh journals get the demo seed (dev use).
         let gw_cfg = fix_gateway::GatewayConfig::load(p)?;
         let instruments = gw_cfg.instruments.clone();
-        let gw = fix_gateway::start(gw_cfg)?;
-        let hub = Hub::with_instruments(cfg, auth, &instruments, Some(gw.orders()));
-        tokio::spawn(hub.clone().run_bridge(gw.subscribe()));
-        fix_handle = Some(gw);
+        let mut st = StackConfig::new(gw_cfg.clone(), &data_dir);
+        st.seed = Some(demo_seed(&cfg, &gw_cfg)?);
+        let stack = CoreStack::start(st).await?;
+        let core: Arc<dyn CoreApi> = stack.core.clone();
+        let hub = Hub::with_instruments(cfg, auth, &instruments, Some(core.clone()));
+        tokio::spawn(hub.clone().run_core_bridge(core.subscribe()));
+        fix_handle = Some(stack);
         hub
     } else {
         tracing::warn!("no --demo / --fix-config: serving without a market data feed");
@@ -89,8 +102,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(d) = demo_handle {
         d.shutdown().await;
     }
-    if let Some(g) = fix_handle {
-        g.shutdown().await;
+    if let Some(s) = fix_handle {
+        s.shutdown().await;
     }
     Ok(())
 }
