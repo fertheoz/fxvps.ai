@@ -7,9 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least privilege (G12): read-only by default; only the push-on-main job below
+# gets packages: write. Pull requests build without registry credentials.
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: docker-${{ github.ref }}
@@ -17,7 +18,11 @@ concurrency:
 
 jobs:
   build:
+    # Pull requests: build only (no push, no packages permission).
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -30,36 +35,83 @@ jobs:
           - { svc: terminal, dockerfile: infra/docker/static-web.Dockerfile, src: apps/terminal, args: "APP=terminal\nOUT=dist" }
           - { svc: backoffice, dockerfile: infra/docker/static-web.Dockerfile, src: apps/backoffice, args: "APP=backoffice\nOUT=out" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check source exists (pending services are skipped)
         id: exists
         run: |
           if [ -d "${{ matrix.src }}" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"
           else echo "ok=false" >> "$GITHUB_OUTPUT"; echo "::notice::${{ matrix.src }} not on this ref; skipping ${{ matrix.svc }}"; fi
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         if: steps.exists.outputs.ok == 'true'
-      - uses: docker/login-action@v3
-        if: steps.exists.outputs.ok == 'true' && github.event_name != 'pull_request'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
         if: steps.exists.outputs.ok == 'true'
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/fertheoz/fxvps-${{ matrix.svc }}
           tags: |
             type=sha,format=short
             type=ref,event=pr
             type=raw,value=latest,enable={{is_default_branch}}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         if: steps.exists.outputs.ok == 'true'
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           build-args: ${{ matrix.args }}
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.svc }}
+
+  publish:
+    # push to main / manual: build and push to GHCR.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { svc: lp-simulator, dockerfile: infra/docker/lp-simulator.Dockerfile, src: services/lp-simulator, args: "" }
+          - { svc: fix-gateway, dockerfile: infra/docker/fix-gateway.Dockerfile, src: services/fix-gateway, args: "" }
+          - { svc: client-gateway, dockerfile: infra/docker/client-gateway.Dockerfile, src: services/client-gateway, args: "" }
+          - { svc: core-engine, dockerfile: infra/docker/core-engine.Dockerfile, src: services/core-engine, args: "" }
+          - { svc: identity, dockerfile: infra/docker/identity.Dockerfile, src: services/identity, args: "" }
+          - { svc: terminal, dockerfile: infra/docker/static-web.Dockerfile, src: apps/terminal, args: "APP=terminal\nOUT=dist" }
+          - { svc: backoffice, dockerfile: infra/docker/static-web.Dockerfile, src: apps/backoffice, args: "APP=backoffice\nOUT=out" }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check source exists (pending services are skipped)
+        id: exists
+        run: |
+          if [ -d "${{ matrix.src }}" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"
+          else echo "ok=false" >> "$GITHUB_OUTPUT"; echo "::notice::${{ matrix.src }} not on this ref; skipping ${{ matrix.svc }}"; fi
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        if: steps.exists.outputs.ok == 'true'
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: steps.exists.outputs.ok == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        if: steps.exists.outputs.ok == 'true'
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/fertheoz/fxvps-${{ matrix.svc }}
+          tags: |
+            type=sha,format=short
+            type=ref,event=pr
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        if: steps.exists.outputs.ok == 'true'
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          build-args: ${{ matrix.args }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.svc }}

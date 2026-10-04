@@ -1,0 +1,7 @@
+# Keeps the SHA-pinned GitHub Actions (finding G12) current.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
