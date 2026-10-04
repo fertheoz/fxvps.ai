@@ -47,7 +47,7 @@ async function login(page: Page, email: string, password: string) {
   await page.getByTestId('login-submit').click();
 }
 
-test('register → verify → login → connect → trade → 2FA → passkey', async ({ page, request }) => {
+test('register → verify → login → connect → trade → 2FA → passkey', async ({ page, request }, testInfo) => {
   test.skip(!live, 'set FXVPS_IDENTITY_E2E_LIVE=1 to run against real services');
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -71,7 +71,9 @@ test('register → verify → login → connect → trade → 2FA → passkey', 
   // Back office / core-engine links the trading account through the service API.
   const r = await request.post(`${ID}/v1/admin/accounts/link`, {
     headers: { Authorization: `Bearer ${process.env.FXVPS_IDENTITY_SERVICE_TOKEN}` },
-    data: { email, account_id: 'DEMO-1' },
+    // A fresh demo account per attempt: a retry must not re-link one owned by the
+    // previous attempt's user (409 = owned by another user).
+    data: { email, account_id: `DEMO-${testInfo.retry + 1}` },
   });
   expect(r.status()).toBe(200);
 
@@ -97,7 +99,7 @@ test('register → verify → login → connect → trade → 2FA → passkey', 
   await page.getByTestId('totp-code').fill(totp(secret));
   await page.getByTestId('totp-confirm').click();
   await expect(page.getByTestId('recovery-codes')).toBeVisible();
-  await page.getByRole('button', { name: 'Close' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
 
   // Sign out → sign in again with the second factor.
   await page.getByTestId('sign-out').click();
@@ -118,7 +120,7 @@ test('register → verify → login → connect → trade → 2FA → passkey', 
   await page.getByTestId('user-menu').click();
   await page.getByTestId('passkey-add').click();
   await expect(page.getByTestId('security-dialog')).toContainText('Passkey added');
-  await page.getByRole('button', { name: 'Close' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
   await page.getByTestId('sign-out').click();
   await expect(page.getByTestId('login-form')).toBeVisible();
   await page.getByTestId('login-email').fill(email);
