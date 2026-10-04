@@ -1038,10 +1038,14 @@ async fn presets(actor: Actor) -> ApiResult {
     Ok(Json(views::presets()))
 }
 
-async fn lp_sessions(actor: Actor) -> ApiResult {
+async fn lp_sessions(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "lp.view")?;
-    // FIX sessions live in fix-gateway; not exposed by core-engine yet.
-    Ok(Json(json!([])))
+    let rows = ctx
+        .lp_status
+        .as_ref()
+        .and_then(|s| s.read().ok().map(|t| t.clone()))
+        .unwrap_or_default();
+    Ok(Json(views::lp_sessions(&rows)))
 }
 
 async fn lp_reconnect(actor: Actor, Path(_id): Path<String>) -> ApiResult {

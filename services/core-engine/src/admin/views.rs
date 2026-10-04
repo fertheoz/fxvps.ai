@@ -398,3 +398,38 @@ pub fn trades(e: &Engine) -> Value {
     rows.reverse();
     Value::Array(rows)
 }
+
+/// FIX session rows in the back office `FixSession` shape. Sequence numbers
+/// and latency are not tracked by the gateway yet and are reported as 0.
+pub fn lp_sessions(rows: &[fix_gateway::SessionStatus]) -> Value {
+    Value::Array(
+        rows.iter()
+            .map(|r| {
+                let kind = match r.kind {
+                    fix_gateway::SessionKind::MarketData => "MD",
+                    fix_gateway::SessionKind::Trading => "TRADING",
+                };
+                let status = if r.logged_on {
+                    "logged_on"
+                } else if r.since_ms == 0 {
+                    "connecting"
+                } else {
+                    "disconnected"
+                };
+                json!({
+                    "id": format!("{}-{}", r.target_comp_id, kind.to_lowercase()),
+                    "lp": r.target_comp_id,
+                    "kind": kind,
+                    "senderCompId": r.sender_comp_id,
+                    "targetCompId": r.target_comp_id,
+                    "status": status,
+                    "inSeq": 0,
+                    "outSeq": 0,
+                    "latencyMs": 0,
+                    "rejects24h": r.rejects,
+                    "lastHeartbeat": iso(r.since_ms.saturating_mul(1_000_000)),
+                })
+            })
+            .collect(),
+    )
+}

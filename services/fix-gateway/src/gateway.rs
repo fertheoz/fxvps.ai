@@ -92,6 +92,7 @@ pub enum GatewayError {
 
 pub struct GatewayHandle {
     events: broadcast::Sender<GatewayEvent>,
+    status: Arc<std::sync::RwLock<Vec<SessionStatus>>>,
     orders: mpsc::Sender<OrderCommand>,
     shutdown: watch::Sender<bool>,
     tasks: Vec<JoinHandle<()>>,
@@ -101,6 +102,16 @@ impl GatewayHandle {
     /// New receiver for normalized events (slow receivers lag, see tokio broadcast).
     pub fn subscribe(&self) -> broadcast::Receiver<GatewayEvent> {
         self.events.subscribe()
+    }
+
+    /// Current state of the MD and trading sessions (for admin views).
+    pub fn status(&self) -> Vec<SessionStatus> {
+        self.status.read().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    /// Shared, cheap-to-clone view of [`GatewayHandle::status`].
+    pub fn status_source(&self) -> Arc<std::sync::RwLock<Vec<SessionStatus>>> {
+        self.status.clone()
     }
 
     /// Sender for order commands.
@@ -114,6 +125,52 @@ impl GatewayHandle {
         for t in self.tasks {
             let _ = t.await;
         }
+    }
+}
+
+/// Snapshot of one FIX session as seen by the gateway.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SessionStatus {
+    pub kind: SessionKind,
+    pub sender_comp_id: String,
+    pub target_comp_id: String,
+    pub logged_on: bool,
+    /// Unix ms of the last up/down transition (0 = never connected).
+    pub since_ms: u64,
+    pub last_down_reason: Option<String>,
+    /// Session-level Rejects received since start.
+    pub rejects: u64,
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Folds one gateway event into the status table.
+pub fn apply_status(table: &mut [SessionStatus], ev: &GatewayEvent) {
+    let (kind, up, reason, reject) = match ev {
+        GatewayEvent::SessionUp { session } => (*session, Some(true), None, false),
+        GatewayEvent::SessionDown { session, reason } => {
+            (*session, Some(false), Some(reason.clone()), false)
+        }
+        GatewayEvent::SessionReject { session, .. } => (*session, None, None, true),
+        _ => return,
+    };
+    let Some(r) = table.iter_mut().find(|r| r.kind == kind) else {
+        return;
+    };
+    if let Some(up) = up {
+        r.logged_on = up;
+        r.since_ms = unix_ms();
+        if reason.is_some() {
+            r.last_down_reason = reason;
+        }
+    }
+    if reject {
+        r.rejects += 1;
     }
 }
 
@@ -142,8 +199,45 @@ pub fn start(cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
     let (shutdown, sd) = watch::channel(false);
     let md_session = session_for(&cfg, &cfg.md, store_for(&cfg, "md")?);
     let trade_session = session_for(&cfg, &cfg.trade, store_for(&cfg, "trade")?);
+    let status = Arc::new(std::sync::RwLock::new(
+        [
+            (SessionKind::MarketData, &cfg.md),
+            (SessionKind::Trading, &cfg.trade),
+        ]
+        .into_iter()
+        .map(|(kind, ep)| SessionStatus {
+            kind,
+            sender_comp_id: ep.sender_comp_id.clone(),
+            target_comp_id: ep.target_comp_id.clone(),
+            logged_on: false,
+            since_ms: 0,
+            last_down_reason: None,
+            rejects: 0,
+        })
+        .collect::<Vec<_>>(),
+    ));
     let cfg = Arc::new(cfg);
+    let mut status_rx = events.subscribe();
+    let mut status_sd = sd.clone();
+    let status_w = status.clone();
+    let tracker = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                ev = status_rx.recv() => match ev {
+                    Ok(ev) => {
+                        if let Ok(mut t) = status_w.write() {
+                            apply_status(&mut t, &ev);
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                },
+                _ = status_sd.changed() => break,
+            }
+        }
+    });
     let tasks = vec![
+        tracker,
         tokio::spawn(md_task(cfg.clone(), md_session, events.clone(), sd.clone())),
         tokio::spawn(trade_task(
             cfg,
@@ -155,6 +249,7 @@ pub fn start(cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
     ];
     Ok(GatewayHandle {
         events,
+        status,
         orders,
         shutdown,
         tasks,
@@ -415,5 +510,57 @@ async fn trade_task(
         if stop || !backoff(&cfg, &mut sd).await {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn table() -> Vec<SessionStatus> {
+        [SessionKind::MarketData, SessionKind::Trading]
+            .into_iter()
+            .map(|kind| SessionStatus {
+                kind,
+                sender_comp_id: "S".into(),
+                target_comp_id: "T".into(),
+                logged_on: false,
+                since_ms: 0,
+                last_down_reason: None,
+                rejects: 0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tracks_up_down_and_rejects_per_session() {
+        let mut t = table();
+        apply_status(
+            &mut t,
+            &GatewayEvent::SessionUp {
+                session: SessionKind::Trading,
+            },
+        );
+        assert!(t[1].logged_on && !t[0].logged_on);
+        assert!(t[1].since_ms > 0);
+        apply_status(
+            &mut t,
+            &GatewayEvent::SessionReject {
+                session: SessionKind::Trading,
+                ref_seq_num: 7,
+                text: None,
+            },
+        );
+        apply_status(
+            &mut t,
+            &GatewayEvent::SessionDown {
+                session: SessionKind::Trading,
+                reason: "eof".into(),
+            },
+        );
+        assert!(!t[1].logged_on);
+        assert_eq!(t[1].rejects, 1);
+        assert_eq!(t[1].last_down_reason.as_deref(), Some("eof"));
+        assert_eq!(t[0].rejects, 0);
     }
 }
