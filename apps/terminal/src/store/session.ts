@@ -61,7 +61,8 @@ export interface SessionState {
   restore(): Promise<boolean>;
   accept(r: TokenResponse): void;
   refresh(): Promise<boolean>;
-  logout(): Promise<void>;
+  /** Revokes the session. `keepState` leaves the UI as is (caller reloads the page next). */
+  logout(opts?: { keepState?: boolean }): Promise<void>;
   selectAccount(id: string): void;
 }
 
@@ -158,10 +159,10 @@ export const useSession = create<SessionState>((set, get) => ({
     return inflight;
   },
 
-  async logout() {
+  async logout(opts) {
     clearTimeout(timer);
     const c = get().client;
-    set({ status: 'anonymous', accessToken: null, claims: null, error: null });
+    if (!opts?.keepState) set({ status: 'anonymous', accessToken: null, claims: null, error: null });
     store()?.removeItem(ACCOUNT_KEY);
     try {
       await c?.logout();

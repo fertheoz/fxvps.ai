@@ -631,7 +631,9 @@ export function UserMenu() {
         className="px-2 py-1 rounded border border-line text-muted hover:text-fg"
         data-testid="sign-out"
         onClick={() => {
-          void logout().then(() => location.reload());
+          // Keep the terminal mounted until the reload: showing the login form first
+          // would let input typed into it be wiped by the reload.
+          void logout({ keepState: true }).then(() => location.reload());
         }}
       >
         {t('auth.signOut')}
