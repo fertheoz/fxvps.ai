@@ -33,7 +33,7 @@ jobs:
       - run: pnpm install --ignore-workspace --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint --max-warnings 0
-      - run: pnpm test --ci
+      - run: pnpm test -- --ci
       - run: pnpm export:web
         env:
           CI: '1'
