@@ -2,6 +2,7 @@ import type { TradingApi } from '../api/types';
 import { MockTradingApi } from '../api/mock';
 import { WsTradingApi } from '../api/ws';
 import { resolveGateway } from './connection';
+import { sessionToken } from './session';
 import { RafBatcher } from '../lib/rafBatcher';
 import type { Quote } from '../api/types';
 import { useTerminal } from './terminal';
@@ -21,7 +22,9 @@ export function createApiFromLocation(search: string): TradingApi {
     // Do not leave the bearer token in the address bar / history.
     history.replaceState(history.state, '', `${location.pathname}${cleanedSearch}${location.hash}`);
   }
-  if (gateway) return new WsTradingApi({ url: gateway.url, token: () => gateway.token });
+  // Without a pasted dev token the identity session supplies (and silently refreshes)
+  // the access token; it is read on every (re)connect.
+  if (gateway) return new WsTradingApi({ url: gateway.url, token: () => gateway.token || sessionToken() });
   return new MockTradingApi();
 }
 
