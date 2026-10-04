@@ -93,6 +93,7 @@ export const en = {
   'chart.sell': 'SELL',
   'chart.buy': 'BUY',
   'chart.lots': 'Lots',
+  'chart.detach': 'Detach',
   'chart.loading': 'Loading chart…',
   'ticket.title': 'New Order',
   'ticket.symbol': 'Symbol',
