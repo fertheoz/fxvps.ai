@@ -26,8 +26,10 @@ RUN cargo build --release --locked -p core-engine --bin core-engine ${CARGO_FEAT
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 WORKDIR /app
 COPY --from=builder /src/target/release/core-engine /app/core-engine
-COPY --from=builder /src/services/core-engine/config /app/config
 USER nonroot:nonroot
-ENV RUST_LOG=info
+# Yapılandırma ortam değişkenleriyle: journal/snapshot dizini ve admin HTTP adresi.
+ENV RUST_LOG=info \
+    CORE_DATA_DIR=/home/nonroot/data \
+    CORE_ADMIN_ADDR=0.0.0.0:8080
+VOLUME ["/home/nonroot/data"]
 ENTRYPOINT ["/app/core-engine"]
-CMD ["/app/config/default.toml"]
