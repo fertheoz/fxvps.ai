@@ -28,9 +28,31 @@ pub struct SimHandle {
     pub trade_addr: SocketAddr,
     shutdown: watch::Sender<bool>,
     tasks: Vec<JoinHandle<()>>,
+    market: SharedMarket,
+    ticks: broadcast::Sender<()>,
 }
 
 impl SimHandle {
+    /// Control hook: jumps the instrument's mid price (symbol such as
+    /// `EUR/USD`, or security id) and publishes the new book right away.
+    /// Used to simulate price shocks (e.g. stop-out scenarios).
+    pub fn set_mid(&self, symbol: &str, mid: domain::Price) -> bool {
+        let ok = self
+            .market
+            .lock()
+            .map(|mut m| m.set_mid(symbol, mid))
+            .unwrap_or(false);
+        if ok {
+            let _ = self.ticks.send(());
+        }
+        ok
+    }
+
+    /// Current mid price of an instrument.
+    pub fn mid(&self, symbol: &str) -> Option<domain::Price> {
+        self.market.lock().ok().and_then(|m| m.mid(symbol))
+    }
+
     pub async fn shutdown(self) {
         let _ = self.shutdown.send(true);
         for t in self.tasks {
@@ -109,6 +131,8 @@ pub async fn start(cfg: SimConfig) -> std::io::Result<SimHandle> {
         trade_addr,
         shutdown,
         tasks,
+        market,
+        ticks: ticks_tx,
     })
 }
 
