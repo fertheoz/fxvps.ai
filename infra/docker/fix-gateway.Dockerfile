@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1.7
+# fix-gateway — çok aşamalı imaj: cargo-chef bağımlılık önbelleği + distroless/cc, root olmayan.
+# Bağlam: depo kökü.  docker build -f infra/docker/fix-gateway.Dockerfile -t fxvps-fix-gateway .
+ARG RUST_VERSION=1.87
+
+FROM lukemathwalker/cargo-chef:latest-rust-${RUST_VERSION}-bookworm AS chef
+WORKDIR /src
+
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+ARG CARGO_FEATURES="nats"
+COPY --from=planner /src/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json -p fix-gateway ${CARGO_FEATURES:+--features $CARGO_FEATURES}
+COPY . .
+RUN cargo build --release --locked -p fix-gateway --bin fix-gateway ${CARGO_FEATURES:+--features $CARGO_FEATURES}
+
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+WORKDIR /app
+COPY --from=builder /src/target/release/fix-gateway /app/fix-gateway
+COPY --from=builder /src/services/fix-gateway/config /app/config
+USER nonroot:nonroot
+ENV RUST_LOG=info
+ENTRYPOINT ["/app/fix-gateway"]
+CMD ["/app/config/default.toml"]
