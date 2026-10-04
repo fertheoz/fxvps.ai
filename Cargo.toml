@@ -4,6 +4,8 @@ members = [
     "crates/domain",
     "crates/fix-codec",
     "crates/fix-session",
+    "services/lp-simulator",
+    "services/fix-gateway",
 ]
 
 [workspace.package]
@@ -11,12 +13,14 @@ version = "0.1.0"
 edition = "2021"
 license = "UNLICENSED"
 publish = false
-rust-version = "1.85"
+rust-version = "1.87"
 
 [workspace.dependencies]
 domain = { path = "crates/domain" }
 fix-codec = { path = "crates/fix-codec" }
 fix-session = { path = "crates/fix-session" }
+lp-simulator = { path = "services/lp-simulator" }
+fix-gateway = { path = "services/fix-gateway" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "fs", "signal"] }
 thiserror = "2"
