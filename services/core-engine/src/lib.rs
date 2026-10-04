@@ -13,6 +13,8 @@
 //! - [`output`]: turns engine events into account-level [`api::CoreEvent`]s.
 //! - [`stack`]: starts fix-gateway + engine + bridge in-process (demo/dev).
 
+pub mod admin;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};

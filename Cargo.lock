@@ -474,6 +474,7 @@ dependencies = [
  "domain",
  "fix-gateway",
  "http-body-util",
+ "jsonwebtoken",
  "ledger",
  "lp-simulator",
  "money",
@@ -484,7 +485,9 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-stream",
  "tower",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3457,6 +3460,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

@@ -2,12 +2,15 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Command, Languages, Menu, Moon, ShieldOff, Sun } from "lucide-react";
+import { Command, Languages, LogOut, Menu, Moon, Radio, ShieldOff, Sun } from "lucide-react";
 import { NAV } from "./nav";
 import { CommandPalette } from "./command-palette";
 import { Button, Select } from "@/components/ui/primitives";
 import { setPrefs, usePrefs } from "@/lib/prefs";
-import { useT } from "@/lib/hooks";
+import { useActor, useT } from "@/lib/hooks";
+import { decodeToken, isLive, setToken, useToken } from "@/lib/auth";
+import { LiveUpdates, useLiveConnected } from "@/lib/queries";
+import { LoginScreen } from "./login";
 import { canAccessRoute, ROLES, type Role } from "@/lib/rbac";
 import { LOCALES, type Locale } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -31,6 +34,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const t = useT();
   const [paletteOpen, setPaletteOpen] = React.useState(false);
   const [mobileNav, setMobileNav] = React.useState(false);
+  const live = isLive();
+  const token = useToken();
+  const signedIn = !live || decodeToken(token) !== null;
+  const actor = useActor();
+  const pushed = useLiveConnected();
 
   React.useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -43,7 +51,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", h);
   }, []);
 
-  const items = NAV.filter((n) => canAccessRoute(prefs.role, n.href));
+  const items = signedIn ? NAV.filter((n) => canAccessRoute(actor.role, n.href)) : [];
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 
   const nav = (
@@ -70,7 +78,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <span>fxvps<span className="text-primary">.ai</span></span>
         </div>
         <div className="flex-1 overflow-y-auto">{nav}</div>
-        <p className="border-t border-border p-3 text-[11px] text-muted-foreground">{t("common.demo")}</p>
+        <p className="flex items-center gap-1.5 border-t border-border p-3 text-[11px] text-muted-foreground" data-testid="data-source">
+          {live ? <><Radio className={cn("h-3 w-3", pushed ? "text-emerald-500" : "text-muted-foreground")} />{t("common.live")}</> : t("common.demo")}
+        </p>
       </aside>
       {mobileNav && (
         <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={() => setMobileNav(false)}>
@@ -90,9 +100,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <kbd className="ml-auto hidden rounded border border-border px-1.5 text-[10px] sm:inline">⌘K</kbd>
           </button>
           <div className="ml-auto flex items-center gap-1.5">
-            <Select aria-label={t("common.role")} value={prefs.role} onChange={(e) => setPrefs({ role: e.target.value as Role })} data-testid="role-select">
-              {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-            </Select>
+            {live ? (
+              signedIn && (
+                <>
+                  <span className="hidden text-xs sm:inline" data-testid="current-user">{actor.name} <span className="text-muted-foreground">({actor.role})</span></span>
+                  <Button variant="ghost" size="icon" aria-label={t("auth.logout")} title={t("auth.logout")} onClick={() => setToken(null)} data-testid="logout">
+                    <LogOut className="h-4 w-4" />
+                  </Button>
+                </>
+              )
+            ) : (
+              <Select aria-label={t("common.role")} value={prefs.role} onChange={(e) => setPrefs({ role: e.target.value as Role })} data-testid="role-select">
+                {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+              </Select>
+            )}
             <Button variant="ghost" size="icon" aria-label={t("common.language")} onClick={() => setPrefs({ locale: prefs.locale === "en" ? "tr" : "en" })} title={LOCALES[prefs.locale === "en" ? "tr" : "en"].label}>
               <Languages className="h-4 w-4" /><span className="sr-only">{prefs.locale}</span>
             </Button>
@@ -103,7 +124,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
         <main className="min-w-0 flex-1 p-3 sm:p-5">
-          <RouteGuard role={prefs.role} pathname={pathname}>{children}</RouteGuard>
+          {signedIn ? (
+            <>
+              {live && <LiveUpdates key={token ?? ""} />}
+              <RouteGuard role={actor.role} pathname={pathname}>{children}</RouteGuard>
+            </>
+          ) : (
+            <LoginScreen />
+          )}
         </main>
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
