@@ -77,6 +77,7 @@ pub struct Hub {
     pub cfg: ClientGatewayConfig,
     pub auth: Authenticator,
     pub metrics: Metrics,
+    pub conns: crate::limits::ConnLimits,
     quotes: broadcast::Sender<Arc<QuoteMsg>>,
     accounts: broadcast::Sender<Arc<AccountEvent>>,
     candles: Mutex<CandleStore>,
@@ -222,6 +223,11 @@ impl Hub {
             quotes,
             accounts,
             metrics: Metrics::default(),
+            conns: crate::limits::ConnLimits::new(
+                cfg.max_connections,
+                cfg.max_connections_per_ip,
+                cfg.max_connections_per_subject,
+            ),
             auth,
             cfg,
         })

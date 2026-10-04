@@ -29,6 +29,17 @@ pub struct ClientGatewayConfig {
     pub demo_balance: String,
     /// Currency of seeded demo accounts.
     pub currency: String,
+    /// Max concurrent WebSocket connections (0 = unlimited).
+    pub max_connections: usize,
+    /// Max concurrent connections per client IP (0 = unlimited).
+    pub max_connections_per_ip: usize,
+    /// Max concurrent authenticated connections per token subject (0 = unlimited).
+    pub max_connections_per_subject: usize,
+    /// Serve `/metrics` on this separate address instead of the public listener
+    /// (e.g. `0.0.0.0:9090`, reachable only by Prometheus via NetworkPolicy).
+    pub metrics_listen: Option<String>,
+    /// Allowed WebSocket `Origin`s (empty = any; native clients send none).
+    pub allowed_origins: Vec<String>,
 }
 
 impl Default for ClientGatewayConfig {
@@ -45,6 +56,11 @@ impl Default for ClientGatewayConfig {
             candle_capacity: 1_000,
             demo_balance: "10000".into(),
             currency: "USD".into(),
+            max_connections: 10_000,
+            max_connections_per_ip: 50,
+            max_connections_per_subject: 20,
+            metrics_listen: None,
+            allowed_origins: Vec::new(),
         }
     }
 }
@@ -66,6 +82,45 @@ impl ClientGatewayConfig {
         Ok(c)
     }
 
+    /// Environment overrides (container deployments without a config file):
+    /// `FXVPS_METRICS_LISTEN`, `FXVPS_ALLOWED_ORIGINS` (comma separated),
+    /// `FXVPS_MAX_CONNECTIONS`, `FXVPS_MAX_CONNECTIONS_PER_IP`,
+    /// `FXVPS_MAX_CONNECTIONS_PER_SUBJECT`.
+    pub fn apply_env(&mut self) -> Result<(), ConfigError> {
+        self.apply_vars(|k| std::env::var(k).ok())
+    }
+
+    fn apply_vars(&mut self, var: impl Fn(&str) -> Option<String>) -> Result<(), ConfigError> {
+        let var = |k: &str| var(k).filter(|v| !v.trim().is_empty());
+        let num = |k: &str, cur: usize| -> Result<usize, ConfigError> {
+            match var(k) {
+                Some(v) => v
+                    .trim()
+                    .parse()
+                    .map_err(|_| ConfigError::Invalid(format!("{k} must be a number"))),
+                None => Ok(cur),
+            }
+        };
+        if let Some(v) = var("FXVPS_METRICS_LISTEN") {
+            self.metrics_listen = Some(v);
+        }
+        if let Some(v) = var("FXVPS_ALLOWED_ORIGINS") {
+            self.allowed_origins = v
+                .split(',')
+                .map(|s| s.trim().trim_end_matches('/').to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        self.max_connections = num("FXVPS_MAX_CONNECTIONS", self.max_connections)?;
+        self.max_connections_per_ip =
+            num("FXVPS_MAX_CONNECTIONS_PER_IP", self.max_connections_per_ip)?;
+        self.max_connections_per_subject = num(
+            "FXVPS_MAX_CONNECTIONS_PER_SUBJECT",
+            self.max_connections_per_subject,
+        )?;
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.max_quote_hz == 0 || self.max_quote_hz > 1000 {
             return Err(ConfigError::Invalid("max_quote_hz must be 1..=1000".into()));
@@ -79,5 +134,28 @@ impl ClientGatewayConfig {
             return Err(ConfigError::Invalid("demo_balance is not a decimal".into()));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_overrides() {
+        let mut c = ClientGatewayConfig::default();
+        let env = |k: &str| match k {
+            "FXVPS_METRICS_LISTEN" => Some("0.0.0.0:9090".to_string()),
+            "FXVPS_ALLOWED_ORIGINS" => Some("https://a.test/, https://b.test".to_string()),
+            "FXVPS_MAX_CONNECTIONS_PER_IP" => Some("7".to_string()),
+            _ => None,
+        };
+        c.apply_vars(env).unwrap();
+        assert_eq!(c.metrics_listen.as_deref(), Some("0.0.0.0:9090"));
+        assert_eq!(c.allowed_origins, vec!["https://a.test", "https://b.test"]);
+        assert_eq!(c.max_connections_per_ip, 7);
+        assert_eq!(c.max_connections, 10_000);
+        let bad = |k: &str| (k == "FXVPS_MAX_CONNECTIONS").then(|| "lots".to_string());
+        assert!(c.apply_vars(bad).is_err());
     }
 }
