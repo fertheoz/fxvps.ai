@@ -140,6 +140,16 @@ export const en = {
   'toast.placed': 'Order #{id} placed',
   'toast.rejected': 'Rejected: {error}',
   'toast.closed': 'Closed #{id} @ {price}',
+  'gw.button': 'Gateway',
+  'gw.title': 'Connect to gateway',
+  'gw.url': 'WebSocket URL',
+  'gw.token': 'Access token (JWT)',
+  'gw.connect': 'Connect',
+  'gw.useMock': 'Use demo simulator',
+  'gw.invalidUrl': 'Enter a ws:// or wss:// URL',
+  'gw.hint': 'Saved for this browser tab only.',
+  'gw.mock': 'Simulator',
+  'gw.failed': 'Could not connect: {error}',
 } as const;
 
 export type MessageKey = keyof typeof en;

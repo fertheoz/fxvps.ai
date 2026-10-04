@@ -6,7 +6,7 @@ import { getApi } from '../store/api';
 import { SHORTCUTS } from '../shortcuts';
 import { OrderTicket } from './OrderTicket';
 
-function Modal({ title, onClose, children, width = 'w-[420px]' }: { title: string; onClose: () => void; children: ReactNode; width?: string }) {
+export function Modal({ title, onClose, children, width = 'w-[420px]' }: { title: string; onClose: () => void; children: ReactNode; width?: string }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-start justify-center pt-[10vh] bg-black/40" onMouseDown={onClose}>
       <div

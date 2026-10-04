@@ -1,0 +1,11 @@
+# Generates TS types for the client wire protocol. Run `pnpm proto:gen`.
+version: v2
+inputs:
+  - directory: ../../crates/client-proto/proto
+plugins:
+  - local: protoc-gen-es
+    out: src/api/gen
+    opt:
+      - target=ts
+      - import_extension=none
+clean: true

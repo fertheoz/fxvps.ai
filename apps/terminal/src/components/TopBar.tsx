@@ -2,6 +2,10 @@ import { useMetrics, useT } from '../hooks';
 import { useTerminal } from '../store/terminal';
 import { formatMoney } from '../lib/money';
 import type { ConnectionState } from '../api/types';
+import { useState } from 'react';
+import { isGatewayApi } from '../store/api';
+import { loadGateway } from '../store/connection';
+import { ConnectDialog } from './ConnectDialog';
 
 const connColor: Record<ConnectionState, string> = {
   connected: 'bg-up',
@@ -35,6 +39,8 @@ export function TopBar() {
   const setPalette = useTerminal((s) => s.setPaletteOpen);
   const setShortcuts = useTerminal((s) => s.setShortcutsOpen);
   const m = useMetrics();
+  const [gwOpen, setGwOpen] = useState(false);
+  const gateway = isGatewayApi() ? loadGateway() : null;
   const active = accounts.find((a) => a.id === activeId);
   const cur = active?.currency ?? 'USD';
 
@@ -88,6 +94,16 @@ export function TopBar() {
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <button
+          className="px-2 py-1 rounded border border-line text-muted hover:text-fg max-w-[220px] truncate"
+          onClick={() => setGwOpen(true)}
+          title={gateway?.url ?? t('gw.mock')}
+          data-testid="gateway-button"
+          data-api={gateway ? 'ws' : 'mock'}
+        >
+          {t('gw.button')}: {gateway ? new URL(gateway.url).host : t('gw.mock')}
+        </button>
+        {gwOpen && <ConnectDialog onClose={() => setGwOpen(false)} />}
         <button
           className="flex items-center gap-2 px-2 py-1 rounded border border-line text-muted hover:text-fg"
           onClick={() => setPalette(true)}
