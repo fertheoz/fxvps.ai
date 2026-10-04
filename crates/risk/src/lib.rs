@@ -28,6 +28,25 @@ impl Side {
     }
 }
 
+/// Conversions with the FIX-edge side type (`domain::Side`).
+impl From<domain::Side> for Side {
+    fn from(s: domain::Side) -> Side {
+        match s {
+            domain::Side::Buy => Side::Buy,
+            domain::Side::Sell => Side::Sell,
+        }
+    }
+}
+
+impl From<Side> for domain::Side {
+    fn from(s: Side) -> domain::Side {
+        match s {
+            Side::Buy => domain::Side::Buy,
+            Side::Sell => domain::Side::Sell,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum MarginMode {
     /// Independent positions per fill, opposite positions may coexist.
