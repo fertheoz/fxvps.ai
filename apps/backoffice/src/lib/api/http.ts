@@ -1,25 +1,64 @@
-import type { AdminApi, Actor } from "./types";
+import type { AdminApi, Actor, ApprovalRequest } from "./types";
+
+/** Error returned by the admin API: `{ error: { code, message, permission? } }`. */
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+    public permission?: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+export interface HttpApiOptions {
+  /** Called on 401 (missing/expired token), e.g. to show the login screen. */
+  onUnauthorized?: () => void;
+  fetchImpl?: typeof fetch;
+  /** EventSource constructor (injectable for tests). */
+  eventSource?: typeof EventSource;
+}
 
 /**
- * HTTP adapter stub for the future Rust `backoffice-api` (axum). Endpoints are
- * documented in API.md. Auth: OIDC bearer token; the actor is derived
- * server-side from the token, the `actor` argument is only sent as a hint
- * header for local development.
+ * HTTP adapter for the core-engine admin API (`/v1/*`, see API.md). The actor
+ * is derived server-side from the bearer token; the `actor` argument is only
+ * sent as an `x-actor-hint` header for logs.
  */
-export function createHttpApi(baseUrl: string, getToken: () => Promise<string | null>): AdminApi {
+export function createHttpApi(baseUrl: string, getToken: () => string | null | Promise<string | null>, opts: HttpApiOptions = {}): AdminApi {
+  const base = baseUrl.replace(/\/+$/, "");
+  const doFetch = opts.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
+
   const call = async <T,>(method: string, path: string, body?: unknown, actor?: Actor, headers: Record<string, string> = {}): Promise<T> => {
     const token = await getToken();
-    const res = await fetch(`${baseUrl}${path}`, {
+    const res = await doFetch(`${base}${path}`, {
       method,
       headers: {
-        "content-type": "application/json",
+        accept: "application/json",
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
         ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...(actor ? { "x-actor-hint": actor.name } : {}),
+        ...(actor ? { "x-actor-hint": encodeURIComponent(actor.name) } : {}),
         ...headers,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`${method} ${path} → ${res.status}`);
+    if (!res.ok) {
+      let code = "http_error";
+      let message = `${method} ${path} → ${res.status}`;
+      let permission: string | undefined;
+      try {
+        const e = ((await res.json()) as { error?: { code?: string; message?: string; permission?: string } }).error;
+        if (e?.code) code = e.code;
+        if (e?.message) message = e.message;
+        permission = e?.permission;
+      } catch {
+        /* non-JSON error body */
+      }
+      if (res.status === 401) opts.onUnauthorized?.();
+      throw new ApiError(res.status, code, message, permission);
+    }
+    if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   };
   const enc = encodeURIComponent;
@@ -28,7 +67,14 @@ export function createHttpApi(baseUrl: string, getToken: () => Promise<string | 
     dashboard: () => call("GET", "/v1/dashboard"),
     exposure: () => call("GET", "/v1/exposure"),
     listClients: (q) => call("GET", `/v1/accounts${q?.search ? `?search=${enc(q.search)}` : ""}`),
-    getClient: (id) => call("GET", `/v1/accounts/${enc(id)}`),
+    getClient: async (id) => {
+      try {
+        return await call("GET", `/v1/accounts/${enc(id)}`);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
     balanceOp: (req, actor) =>
       call("POST", `/v1/accounts/${enc(req.clientId)}/balance-ops`, req, actor, { "idempotency-key": req.idempotencyKey }),
     setKyc: (id, kyc, actor) => call("PATCH", `/v1/accounts/${enc(id)}/kyc`, { kyc }, actor),
@@ -47,9 +93,46 @@ export function createHttpApi(baseUrl: string, getToken: () => Promise<string | 
     listTrades: () => call("GET", "/v1/reports/trades"),
     statements: () => call("GET", "/v1/reports/statements"),
     listAudit: () => call("GET", "/v1/audit"),
+    listApprovals: (status = "pending_approval") => call<ApprovalRequest[]>("GET", `/v1/approvals?status=${enc(status)}`),
+    approve: (id, actor) => call("POST", `/v1/approvals/${enc(id)}/approve`, {}, actor),
+    reject: (id, reason, actor) => call("POST", `/v1/approvals/${enc(id)}/reject`, { reason }, actor),
     listUsers: () => call("GET", "/v1/admin-users"),
     saveUser: (u, actor) => call("PUT", `/v1/admin-users/${enc(u.id)}`, u, actor),
     getSettings: () => call("GET", "/v1/settings"),
     saveSettings: (s, actor) => call("PUT", "/v1/settings", s, actor),
+
+    subscribe(onTopics, onStatus) {
+      const ES = opts.eventSource ?? (typeof EventSource === "undefined" ? undefined : EventSource);
+      if (!ES) return () => {};
+      let es: EventSource | null = null;
+      let closed = false;
+      let retry: ReturnType<typeof setTimeout> | undefined;
+      const open = async () => {
+        const token = await getToken();
+        if (closed || !token) return;
+        es = new ES(`${base}/v1/stream?access_token=${enc(token)}`);
+        es.addEventListener("hello", () => onStatus?.(true));
+        es.addEventListener("invalidate", (ev) => {
+          try {
+            const { topics } = JSON.parse((ev as MessageEvent<string>).data) as { topics: string[] };
+            if (topics.length) onTopics(topics);
+          } catch {
+            onTopics(["*"]);
+          }
+        });
+        es.onerror = () => {
+          onStatus?.(false);
+          es?.close();
+          if (!closed) retry = setTimeout(() => void open(), 3000);
+        };
+      };
+      void open();
+      return () => {
+        closed = true;
+        clearTimeout(retry);
+        es?.close();
+        onStatus?.(false);
+      };
+    },
   };
 }

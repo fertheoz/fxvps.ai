@@ -5,6 +5,8 @@ import { LOCALES, translate, type MessageKey } from "./i18n";
 import { can, type Permission } from "./rbac";
 import { formatMoney } from "./money";
 import type { Actor } from "./api";
+import { decodeToken, isLive, useToken } from "./auth";
+import type { Role } from "./rbac";
 
 const ROLE_NAMES = { admin: "Admin Demo", dealer: "Deniz Dealer", risk: "Rita Risk", support: "Sam Support", readonly: "Olga Observer" } as const;
 
@@ -26,7 +28,14 @@ export function useFormat() {
   }, [locale]);
 }
 
+/**
+ * Current operator. Mock mode: the role picked in the header. Live mode: the
+ * claims of the bearer token (the server re-checks everything).
+ */
 export function useActor(): Actor & { can: (p: Permission) => boolean } {
-  const { role } = usePrefs();
-  return { name: ROLE_NAMES[role], role, can: (p: Permission) => can(role, p) };
+  const prefs = usePrefs();
+  const token = useToken();
+  const claims = isLive() ? decodeToken(token) : null;
+  const role: Role = claims?.role ?? prefs.role;
+  return { name: claims?.name ?? ROLE_NAMES[role], sub: claims?.sub, role, can: (p: Permission) => can(role, p) };
 }

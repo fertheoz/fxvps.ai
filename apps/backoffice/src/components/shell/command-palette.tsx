@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { Languages, Moon, UserCog } from "lucide-react";
 import { NAV } from "./nav";
 import { setPrefs, usePrefs } from "@/lib/prefs";
-import { useT } from "@/lib/hooks";
+import { useActor, useT } from "@/lib/hooks";
+import { isLive } from "@/lib/auth";
 import { canAccessRoute, ROLES } from "@/lib/rbac";
 import { cn } from "@/lib/utils";
 
@@ -19,14 +20,15 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   const t = useT();
   const router = useRouter();
   const prefs = usePrefs();
+  const actor = useActor();
   const [q, setQ] = React.useState("");
   const [idx, setIdx] = React.useState(0);
 
   const cmds: Cmd[] = [
-    ...NAV.filter((n) => canAccessRoute(prefs.role, n.href)).map((n) => ({ id: n.href, label: t(n.key), group: t("palette.hint"), icon: n.icon, run: () => router.push(n.href) })),
+    ...NAV.filter((n) => canAccessRoute(actor.role, n.href)).map((n) => ({ id: n.href, label: t(n.key), group: t("palette.hint"), icon: n.icon, run: () => router.push(n.href) })),
     { id: "theme", label: t("common.theme"), group: "⚙", icon: Moon, run: () => setPrefs({ theme: prefs.theme === "dark" ? "light" : "dark" }) },
     { id: "lang", label: `${t("common.language")}: ${prefs.locale === "en" ? "Türkçe" : "English"}`, group: "⚙", icon: Languages, run: () => setPrefs({ locale: prefs.locale === "en" ? "tr" : "en" }) },
-    ...ROLES.map((r) => ({ id: `role-${r}`, label: `${t("common.role")}: ${r}`, group: "⚙", icon: UserCog, run: () => setPrefs({ role: r }) })),
+    ...(isLive() ? [] : ROLES).map((r) => ({ id: `role-${r}`, label: `${t("common.role")}: ${r}`, group: "⚙", icon: UserCog, run: () => setPrefs({ role: r }) })),
   ];
   const filtered = cmds.filter((c) => c.label.toLowerCase().includes(q.toLowerCase()));
   const active = Math.min(idx, Math.max(0, filtered.length - 1));
