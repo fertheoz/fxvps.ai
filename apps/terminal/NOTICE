@@ -1,0 +1,16 @@
+fxvps.ai Web Terminal
+Copyright (c) 2026 fxvps.ai
+
+This product includes third-party software:
+
+TradingView Lightweight Charts™
+Copyright (c) 2025 TradingView, Inc. — https://www.tradingview.com/
+Licensed under the Apache License, Version 2.0
+https://github.com/tradingview/lightweight-charts/blob/master/LICENSE
+The charts in this application are powered by TradingView Lightweight Charts.
+The TradingView attribution logo is kept enabled (`layout.attributionLogo: true`)
+on every chart and links to https://www.tradingview.com/.
+
+Other runtime dependencies (React, Zustand, cmdk, react-resizable-panels,
+@tanstack/react-virtual, big.js) are MIT licensed; see each package's LICENSE
+file under node_modules.
