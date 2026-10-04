@@ -21,7 +21,7 @@ RUN cargo chef cook --release --recipe-path recipe.json -p fix-gateway ${CARGO_F
 COPY . .
 RUN cargo build --release --locked -p fix-gateway --bin fix-gateway ${CARGO_FEATURES:+--features $CARGO_FEATURES}
 
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS runtime
 WORKDIR /app
 COPY --from=builder /src/target/release/fix-gateway /app/fix-gateway
 COPY --from=builder /src/services/fix-gateway/config /app/config
