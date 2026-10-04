@@ -10,7 +10,9 @@ ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN corepack enable
 WORKDIR /src
 COPY . .
-RUN pnpm install --frozen-lockfile=false && pnpm --filter "./apps/${APP}" build
+# Her uygulamanın kendi pnpm-lock.yaml dosyası var; kök workspace yok sayılır.
+WORKDIR /src/apps/${APP}
+RUN pnpm install --ignore-workspace --frozen-lockfile && pnpm build
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 ARG APP=terminal
