@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Deal, TradingApi, TradingEvent } from '../api/types';
+import type { Deal, TradingApi, TradingEvent } from '@fxvps/trading-core';
 import {
   credentials,
   dealNotification,

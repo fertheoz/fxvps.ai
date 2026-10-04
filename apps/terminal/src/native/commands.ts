@@ -1,4 +1,4 @@
-import type { ConnectionState, Timeframe } from '../api/types';
+import type { ConnectionState, Timeframe } from '@fxvps/trading-core';
 import { invokeNative } from './tauri';
 
 /** Mirrors `NotifyEvent` in apps/desktop/src-tauri/src/commands.rs (serde tag = kind). */

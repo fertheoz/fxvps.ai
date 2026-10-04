@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { TradingApi } from '../api/types';
+import type { TradingApi } from '@fxvps/trading-core';
 import { useT } from '../hooks';
 import type { ChartView } from '../native';
 import { bootstrap } from '../store/api';

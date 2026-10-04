@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
-import type { TradingApi } from './api/types';
+import type { TradingApi } from '@fxvps/trading-core';
 import { bootstrap } from './store/api';
 import { useTerminal } from './store/terminal';
 import { useKeyboardShortcuts } from './shortcuts';

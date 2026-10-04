@@ -21,7 +21,7 @@ import {
   type Quote as WireQuote,
 } from './gen/fxvps_client_v1_pb';
 import { decimalToBig, decimalToString, toDecimal } from './decimal';
-import { MOCK_SYMBOLS, toSpec } from './symbols';
+import { MOCK_SYMBOLS, toSpec } from '@fxvps/trading-core';
 import type {
   Account,
   Bar,
@@ -39,7 +39,7 @@ import type {
   TradingApi,
   TradingEvent,
   Unsubscribe,
-} from './types';
+} from '@fxvps/trading-core';
 
 /**
  * Adapter for services/client-gateway. Wire protocol: binary protobuf frames,

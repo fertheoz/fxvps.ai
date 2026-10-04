@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Depth, Side } from '../api/types';
+import type { Depth, Side } from '@fxvps/trading-core';
 import { useT } from '../hooks';
 import { getApi } from '../store/api';
 import { useTerminal } from '../store/terminal';
-import { RafBatcher } from '../lib/rafBatcher';
-import { vwapFill } from '../lib/depth';
-import { formatPrice, lotsToVolume, pipsBetween, volumeToLots } from '../lib/money';
+import { RafBatcher } from '@fxvps/trading-core';
+import { vwapFill } from '@fxvps/trading-core';
+import { formatPrice, lotsToVolume, pipsBetween, volumeToLots } from '@fxvps/trading-core';
 
 export function DepthOfMarket() {
   const t = useT();

@@ -3,9 +3,9 @@ name: terminal
 on:
   push:
     branches: [main]
-    paths: ['apps/terminal/**', 'crates/**', 'services/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/terminal.yml']
+    paths: ['apps/terminal/**', 'packages/trading-core/**', 'crates/**', 'services/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/terminal.yml']
   pull_request:
-    paths: ['apps/terminal/**', 'crates/**', 'services/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/terminal.yml']
+    paths: ['apps/terminal/**', 'packages/trading-core/**', 'crates/**', 'services/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/terminal.yml']
 
 permissions:
   contents: read

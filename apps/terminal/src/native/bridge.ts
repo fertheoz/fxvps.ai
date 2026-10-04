@@ -1,5 +1,5 @@
-import type { Deal, TradingApi, TradingEvent } from '../api/types';
-import { formatPrice, minorToMajorString, volumeToLots } from '../lib/money';
+import type { Deal, TradingApi, TradingEvent } from '@fxvps/trading-core';
+import { formatPrice, minorToMajorString, volumeToLots } from '@fxvps/trading-core';
 import { useTerminal } from '../store/terminal';
 import { notifyEvent, setConnectionStatus, type NotifyEvent } from './commands';
 import { isTauri } from './tauri';

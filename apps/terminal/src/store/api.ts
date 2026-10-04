@@ -1,13 +1,13 @@
-import type { TradingApi } from '../api/types';
-import { MockTradingApi } from '../api/mock';
+import type { TradingApi } from '@fxvps/trading-core';
+import { MockTradingApi } from '@fxvps/trading-core';
 import { WsTradingApi } from '../api/ws';
 import { isAllowedWsUrl, resolveGateway } from './connection';
 import { sessionToken } from './session';
-import { RafBatcher } from '../lib/rafBatcher';
-import type { Quote } from '../api/types';
+import { RafBatcher } from '@fxvps/trading-core';
+import type { Quote } from '@fxvps/trading-core';
 import { useTerminal } from './terminal';
 import { translate } from '../i18n';
-import { volumeToLots } from '../lib/money';
+import { volumeToLots } from '@fxvps/trading-core';
 
 let api: TradingApi | null = null;
 

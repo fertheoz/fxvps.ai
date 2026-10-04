@@ -1,5 +1,5 @@
-import type { Position } from '../api/types';
-import { closePrice, roundPrice } from './money';
+import type { Position } from '@fxvps/trading-core';
+import { closePrice, roundPrice } from '@fxvps/trading-core';
 
 /** A protective line on the chart that can be dragged to a new price. */
 export interface DragLine {

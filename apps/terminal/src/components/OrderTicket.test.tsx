@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { OrderTicket } from './OrderTicket';
 import { useTerminal } from '../store/terminal';
 import { bootstrap } from '../store/api';
-import { MockTradingApi } from '../api/mock';
+import { MockTradingApi } from '@fxvps/trading-core';
 
 describe('<OrderTicket />', () => {
   let api: MockTradingApi;

@@ -15,7 +15,12 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
+    "paths": {
+      "@fxvps/trading-core": ["../../packages/trading-core/src/index.ts"],
+      "big.js": ["./node_modules/@types/big.js"]
+    },
     "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"]
   },
-  "include": ["src"]
+  "include": ["src", "../../packages/trading-core/src/**/*.ts"],
+  "exclude": ["../../packages/trading-core/src/**/*.test.ts", "../../packages/trading-core/src/test"]
 }

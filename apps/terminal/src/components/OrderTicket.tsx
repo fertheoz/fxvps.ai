@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import type { OrderType, Side } from '../api/types';
+import type { OrderType, Side } from '@fxvps/trading-core';
 import { useMetrics, useRates, useT } from '../hooks';
 import { getApi } from '../store/api';
 import { selectActiveAccount, useTerminal, type TicketPreset } from '../store/terminal';
@@ -16,9 +16,9 @@ import {
   units,
   volumeToLots,
   convert,
-} from '../lib/money';
-import { entryPrice, validateTicket, type TicketInput } from '../lib/validation';
-import { parseDecimal } from '../lib/format';
+} from '@fxvps/trading-core';
+import { entryPrice, validateTicket, type TicketInput } from '@fxvps/trading-core';
+import { parseDecimal } from '@fxvps/trading-core';
 import type { MessageKey } from '../i18n';
 
 const TYPES: OrderType[] = ['market', 'limit', 'stop', 'stop_limit'];

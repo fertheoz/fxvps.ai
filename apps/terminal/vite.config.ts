@@ -1,4 +1,5 @@
 /// <reference types="vitest/config" />
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -30,6 +31,14 @@ const cspMeta = (): Plugin => ({
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), cspMeta()],
+  resolve: {
+    // Shared pure-TS package without its own node_modules: its bare imports
+    // (big.js) resolve from this app via dedupe.
+    alias: {
+      '@fxvps/trading-core': fileURLToPath(new URL('../../packages/trading-core/src/index.ts', import.meta.url)),
+    },
+    dedupe: ['big.js'],
+  },
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 900,
@@ -38,6 +47,6 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.test.{ts,tsx}'],
+    include: ['src/**/*.test.{ts,tsx}', '../../packages/trading-core/src/**/*.test.ts'],
   },
 });

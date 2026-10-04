@@ -1,10 +1,10 @@
 import { memo, useMemo, useState } from 'react';
-import type { Deal, PendingOrder, Position } from '../api/types';
+import type { Deal, PendingOrder, Position } from '@fxvps/trading-core';
 import { useRates, useT } from '../hooks';
 import { getApi } from '../store/api';
 import { selectActiveAccount, selectHistory, selectOrders, selectPositions, useTerminal, type ToolboxTab } from '../store/terminal';
-import { closePrice, distanceToPips, formatMoney, formatPrice, lotsToVolume, pipsToDistance, positionProfit, volumeToLots } from '../lib/money';
-import { formatTimeShort as formatTime, parseDecimal } from '../lib/format';
+import { closePrice, distanceToPips, formatMoney, formatPrice, lotsToVolume, pipsToDistance, positionProfit, volumeToLots } from '@fxvps/trading-core';
+import { formatTimeShort as formatTime, parseDecimal } from '@fxvps/trading-core';
 import { VirtualTable } from './VirtualTable';
 
 const TABS: ToolboxTab[] = ['positions', 'orders', 'history', 'journal'];

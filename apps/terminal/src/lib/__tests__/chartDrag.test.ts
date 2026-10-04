@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Position } from '../../api/types';
+import type { Position } from '@fxvps/trading-core';
 import { dragProtection, hitLine } from '../chartDrag';
 
 const pos = (side: 'buy' | 'sell'): Position => ({

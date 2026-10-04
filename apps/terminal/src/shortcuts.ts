@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { TIMEFRAMES } from './api/types';
+import { TIMEFRAMES } from '@fxvps/trading-core';
 import { useTerminal, type ChartLayout } from './store/terminal';
 import { trade } from './store/api';
 import type { MessageKey } from './i18n';
