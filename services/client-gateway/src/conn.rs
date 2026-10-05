@@ -425,6 +425,10 @@ async fn handle(
             if !unknown.is_empty() {
                 return out.error(&s.request_id, ErrorCode::UnknownSymbol, &unknown.join(","));
             }
+            // Current prices first: the flush tick sends them with the next batch.
+            for q in hub.last_quotes(&s.symbols, &st.groups) {
+                st.conflator.push(q);
+            }
             st.subs.extend(s.symbols);
             out.send(Body::Ack(Ack {
                 request_id: s.request_id,
