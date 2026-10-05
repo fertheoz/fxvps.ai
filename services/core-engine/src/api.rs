@@ -369,8 +369,16 @@ impl AccountNames {
             g.1.insert(no, name.to_string());
         }
     }
+    /// Engine number of an external account id: a registered name, else a
+    /// plain account number (accounts opened from the back office are linked
+    /// in identity by their number; the token's `accounts` claim is signed).
     pub fn number(&self, name: &str) -> Option<u64> {
-        self.inner.read().ok()?.0.get(name).copied()
+        let named = self.inner.read().ok()?.0.get(name).copied();
+        named.or_else(|| {
+            (!name.is_empty() && name.len() <= 12 && name.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| name.parse().ok())
+                .flatten()
+        })
     }
     /// Name of an engine account (falls back to the number).
     pub fn name(&self, no: u64) -> String {

@@ -139,6 +139,11 @@ pub enum AdminCmd {
         account: u64,
         kyc: String,
     },
+    AccountOpened {
+        account: u64,
+        group: String,
+        profile: ClientProfile,
+    },
     GroupSaved {
         group: String,
         details: String,
@@ -175,6 +180,12 @@ pub struct AdminRecord {
     pub cmd: AdminCmd,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientProfile {
+    pub name: String,
+    pub email: String,
+}
+
 #[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
 pub struct AdminState {
     pub seq: u64,
@@ -183,6 +194,9 @@ pub struct AdminState {
     pub keys: BTreeMap<String, String>,
     pub credit: BTreeMap<u64, i64>,
     pub kyc: BTreeMap<u64, String>,
+    /// Client name / e-mail of accounts opened via `POST /v1/accounts`.
+    #[serde(default)]
+    pub profiles: BTreeMap<u64, ClientProfile>,
     pub users: BTreeMap<String, AdminUserRec>,
     pub settings: SettingsRec,
     /// Oldest first.
@@ -303,6 +317,19 @@ impl AdminState {
                     format!("balance.{}.rejected", kind.as_str()),
                     format!("#{account}"),
                     format!("{amount} ({id}) — {note}"),
+                );
+            }
+            AdminCmd::AccountOpened {
+                account,
+                group,
+                profile,
+            } => {
+                self.profiles.insert(*account, profile.clone());
+                self.audit(
+                    r,
+                    "account.open".into(),
+                    format!("#{account}"),
+                    format!("{} <{}> in {group}", profile.name, profile.email),
                 );
             }
             AdminCmd::KycSet { account, kyc } => {

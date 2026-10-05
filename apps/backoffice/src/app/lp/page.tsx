@@ -55,7 +55,7 @@ const emptyEndpoint = (): LpEndpoint => ({
   addr: "", sender_comp_id: "", target_comp_id: "", username: "", password: null, reset_on_logon: true, tls: {},
 });
 
-const DEFAULT_INSTRUMENTS = "EUR/USD 4001 0.00001";
+const DEFAULT_INSTRUMENTS = "EUR/USD 4001 0.00001 10000";
 
 /** Blank LMAX-style config used until the first save. */
 const blankConfig = (): LpConfig => ({
@@ -63,12 +63,12 @@ const blankConfig = (): LpConfig => ({
   md: emptyEndpoint(), trade: emptyEndpoint(), instruments: [], nats: null,
 });
 
-const instrumentsText = (c: LpConfig) => c.instruments.map((i) => `${i.symbol} ${i.security_id} ${i.tick_size}`).join("\n") || DEFAULT_INSTRUMENTS;
+const instrumentsText = (c: LpConfig) => c.instruments.map((i) => `${i.symbol} ${i.security_id} ${i.tick_size} ${i.contract_size ?? 1}`).join("\n") || DEFAULT_INSTRUMENTS;
 
 function parseInstruments(text: string): LpConfig["instruments"] {
   return text.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
-    const [symbol = "", security_id = "", tick_size = "0.00001"] = l.split(/\s+/);
-    return { symbol, security_id, tick_size };
+    const [symbol = "", security_id = "", tick_size = "0.00001", size = "1"] = l.split(/\s+/);
+    return { symbol, security_id, tick_size, contract_size: Math.max(1, Math.trunc(Number(size)) || 1) };
   });
 }
 

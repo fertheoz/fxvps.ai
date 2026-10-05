@@ -1241,3 +1241,55 @@ async fn lp_config_through_gateway() {
     assert!(!audit.to_string().contains("pa55word"));
     t.stop();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn open_account_and_fund() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), true).await;
+    let a = token("root", Role::Admin);
+    let d = token("dealer", Role::Dealer);
+    let req = json!({"name": "Saygın Balıkel", "email": "Saygin@Example.com", "group": "a"});
+    let (s, _) = t
+        .req(
+            Method::POST,
+            "/v1/accounts",
+            Some(&d),
+            Some(req.clone()),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = t
+        .req(
+            Method::POST,
+            "/v1/accounts",
+            Some(&a),
+            Some(json!({"name": "X Y", "email": "x@y.z", "group": "nope"})),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, v) = t
+        .req(Method::POST, "/v1/accounts", Some(&a), Some(req), &[])
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["login"], 100_001);
+    assert_eq!(v["name"], "Saygın Balıkel");
+    assert_eq!(v["email"], "saygin@example.com");
+    assert_eq!(v["currency"], "USD");
+    let (s, v) = t
+        .req(
+            Method::POST,
+            "/v1/accounts/100001/balance-ops",
+            Some(&a),
+            Some(json!({"type": "deposit", "amount": 500_000, "currency": "USD", "reason": "demo funding", "idempotencyKey": "open-1"})),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (_, c) = t.get("/v1/accounts/100001", &a).await;
+    assert_eq!(c["balance"], 500_000);
+    let (_, audit) = t.get("/v1/audit", &a).await;
+    assert!(audit.to_string().contains("account.open"));
+    t.stop();
+}

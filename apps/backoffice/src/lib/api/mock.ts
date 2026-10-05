@@ -142,6 +142,20 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
         : s.clients;
       return delay(list);
     },
+    async openAccount(req, actor) {
+      guard(actor, "clients.edit");
+      const g = s.groups.find((x) => x.id === req.group || x.name === req.group);
+      if (!g) throw new Error("Unknown group");
+      const login = Math.max(100000, ...s.clients.map((c) => c.login)) + 1;
+      const c: Client = {
+        id: String(login), login, parentId: null, name: req.name.trim(), email: req.email.trim().toLowerCase(), country: "TR",
+        group: g.name, status: "active", kyc: "none", currency: g.currency, leverage: g.leverage,
+        balance: 0, credit: 0, equity: 0, margin: 0, createdAt: new Date().toISOString(), lastIp: "",
+      };
+      s.clients.unshift(c);
+      audit(actor, "account.open", `#${login}`, `${c.name} <${c.email}> in ${g.name}`);
+      return delay(c);
+    },
     async getClient(id) { return delay(s.clients.find((c) => c.id === id) ?? null); },
 
     async balanceOp(req, actor): Promise<BalanceOpResult> {

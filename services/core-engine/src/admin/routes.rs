@@ -26,7 +26,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/stream/ticket", post(super::stream::ticket))
         .route("/v1/dashboard", get(dashboard))
         .route("/v1/exposure", get(exposure))
-        .route("/v1/accounts", get(list_accounts))
+        .route("/v1/accounts", get(list_accounts).post(open_account))
         .route("/v1/accounts/{id}", get(get_account))
         .route("/v1/accounts/{id}/positions", get(account_positions))
         .route("/v1/accounts/{id}/balance-ops", post(balance_op))
@@ -107,6 +107,7 @@ impl AdminCtx {
         AdminState {
             credit: st.credit.clone(),
             kyc: st.kyc.clone(),
+            profiles: st.profiles.clone(),
             ..Default::default()
         }
     }
@@ -322,6 +323,68 @@ async fn list_accounts(
         ctx.q(move |e| views::clients(e, &st, q.search.as_deref()))
             .await?,
     ))
+}
+
+#[derive(Deserialize)]
+struct OpenAccountReq {
+    name: String,
+    email: String,
+    group: String,
+}
+
+/// Opens a client account (engine `OpenAccount`, next free number >= 100001);
+/// funding is a separate deposit (`/balance-ops`, 4-eyes rules apply).
+async fn open_account(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(req): Json<OpenAccountReq>,
+) -> ApiResult {
+    need(&actor, "clients.edit")?;
+    let name = req.name.trim().to_string();
+    let email = req.email.trim().to_lowercase();
+    if name.chars().count() < 2 || name.chars().count() > 100 {
+        return Err(ApiError::bad("name must be 2-100 characters"));
+    }
+    if !email.contains('@') || email.len() > 254 {
+        return Err(ApiError::bad("invalid e-mail"));
+    }
+    let group = req.group.clone();
+    let (exists, next) = ctx
+        .q(move |e| {
+            let next = e
+                .accounts()
+                .map(|a| a.id)
+                .max()
+                .unwrap_or(100_000)
+                .max(100_000)
+                + 1;
+            (e.group(&group).is_some(), next)
+        })
+        .await?;
+    if !exists {
+        return Err(ApiError::bad(format!("unknown group {:?}", req.group)));
+    }
+    let mut store = ctx.store.lock().await;
+    ctx.cmd(Command::OpenAccount {
+        account: next,
+        group: req.group.clone(),
+    })
+    .await?;
+    store.append(
+        &actor,
+        AdminCmd::AccountOpened {
+            account: next,
+            group: req.group,
+            profile: super::store::ClientProfile { name, email },
+        },
+    )?;
+    drop(store);
+    ctx.notify(&["listClients", "listAudit", "dashboard"]);
+    let st = ctx.view_state().await;
+    ctx.q(move |e| views::client(e, next, &st))
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::internal("account not visible after open"))
 }
 
 async fn get_account(
