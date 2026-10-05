@@ -1,5 +1,7 @@
 # Checkpoint — 4 Ekim 2026 (son durum)
 
+> **Yerini aldı:** güncel durum [`CHECKPOINT-2026-10-05.md`](CHECKPOINT-2026-10-05.md).
+
 Bu belge, bulut oturumu kapanmadan önce projenin **tek kaynaklı özetidir**. Yeni bir oturum buradan başlamalıdır.
 Sabit nokta: `checkpoint/2026-10-04` dalı = `main` @ `cc766cf`.
 
