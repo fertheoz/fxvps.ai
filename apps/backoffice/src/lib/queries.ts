@@ -1,7 +1,10 @@
 "use client";
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getApi, type AdminApi } from "./api";
+import { ApiError, getApi, type AdminApi } from "./api";
+import { isLive } from "./auth";
+import { useT } from "./hooks";
+import type { MessageKey } from "./i18n";
 import { useToast } from "@/components/shell/providers";
 
 export const api = () => getApi();
@@ -61,15 +64,32 @@ export function LiveUpdates({ enabled = true }: { enabled?: boolean }) {
 }
 
 /** Mutation that invalidates all queries and reports errors as toasts. */
+/** API errors in plain words (no permission ids). */
+export function humanError(e: unknown, t: (k: MessageKey) => string): string {
+  if (e instanceof ApiError) {
+    if (e.code === "mfa_required") return t("mfa.error");
+    if (e.code === "forbidden") return t("err.forbidden");
+  }
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** false while the session lacks the 2FA login that mutating calls need (live mode only). */
+export function useMfaOk(): boolean {
+  const live = isLive();
+  const me = useApiQuery("getMe", [], { enabled: live });
+  return !live || me.data?.mfaOk !== false;
+}
+
 export function useApiMutation<A, R>(fn: (a: A) => Promise<R>, onOk?: (r: R) => void) {
   const qc = useQueryClient();
   const toast = useToast();
+  const t = useT();
   return useMutation({
     mutationFn: fn,
     onSuccess: (r) => {
       void qc.invalidateQueries();
       onOk?.(r);
     },
-    onError: (e) => toast(e instanceof Error ? e.message : String(e), "error"),
+    onError: (e) => toast(humanError(e, t), "error"),
   });
 }

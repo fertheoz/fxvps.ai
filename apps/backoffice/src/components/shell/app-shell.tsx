@@ -8,7 +8,8 @@ import { CommandPalette } from "./command-palette";
 import { Button, Select } from "@/components/ui/primitives";
 import { setPrefs, usePrefs } from "@/lib/prefs";
 import { useActor, useT } from "@/lib/hooks";
-import { decodeToken, identityLogout, identityUrl, isLive, setToken, startIdentitySession, useToken } from "@/lib/auth";
+import { decodeToken, identityLogout, identityUrl, isLive, securityUrl, setToken, startIdentitySession, useToken } from "@/lib/auth";
+import { useMfaOk } from "@/lib/queries";
 import { LiveUpdates, useLiveConnected } from "@/lib/queries";
 import { LoginScreen } from "./login";
 import { canAccessRoute, ROLES, type Role } from "@/lib/rbac";
@@ -132,6 +133,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {signedIn ? (
             <>
               {live && <LiveUpdates key={token ?? ""} />}
+              {live && <MfaBanner />}
               <RouteGuard role={actor.role} pathname={pathname}>{children}</RouteGuard>
             </>
           ) : (
@@ -140,6 +142,35 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </main>
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+    </div>
+  );
+}
+
+/**
+ * Session without a 2FA login: changes (money, settings, LP) will be refused, so
+ * say so up front with a link to the 2FA setup. Admins are sent there once per
+ * browser session right after signing in.
+ */
+function MfaBanner() {
+  const t = useT();
+  const mfaOk = useMfaOk();
+  const actor = useActor();
+  const url = securityUrl();
+  React.useEffect(() => {
+    if (mfaOk || actor.role !== "admin" || !url) return;
+    try {
+      if (window.sessionStorage.getItem("fxvps-mfa-redirected")) return;
+      window.sessionStorage.setItem("fxvps-mfa-redirected", "1");
+    } catch {
+      return;
+    }
+    window.location.assign(url);
+  }, [mfaOk, actor.role, url]);
+  if (mfaOk) return null;
+  return (
+    <div role="alert" data-testid="mfa-banner" className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+      <strong>{t("mfa.title")}</strong> {t("mfa.body")}{" "}
+      {url && <a className="font-medium underline" href={url}>{t("mfa.setup")}</a>}
     </div>
   );
 }

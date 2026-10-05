@@ -142,6 +142,8 @@ export interface AdminApi {
   saveUser(u: AdminUser, actor: Actor): Promise<AdminUser>;
 
   getSettings(): Promise<Settings>;
+  /** Session: `mfaOk` false = mutating calls answer `mfa_required` until a 2FA login. */
+  getMe(): Promise<{ sub: string; name: string; role: string; permissions: string[]; mfaOk: boolean }>;
   saveSettings(s: Settings, actor: Actor): Promise<Settings>;
 
   /** Server push (SSE). Adapters without push omit it and the UI polls. */

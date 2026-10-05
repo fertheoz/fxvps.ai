@@ -2,7 +2,7 @@
 import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader } from "@/components/ui/primitives";
 import { NumField, SelectField, TextField, useZodForm } from "@/components/form";
 import { useToast } from "@/components/shell/providers";
-import { api, useApiMutation, useApiQuery } from "@/lib/queries";
+import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
 import { useActor, useT } from "@/lib/hooks";
 import { Book, Settings } from "@/lib/schemas";
 import { CURRENCY_MINOR_DIGITS } from "@/lib/money";
@@ -34,7 +34,8 @@ function SettingsForm({ initial }: { initial: Settings }) {
   const t = useT();
   const actor = useActor();
   const toast = useToast();
-  const editable = actor.can("settings.edit");
+  const mfaOk = useMfaOk();
+  const editable = actor.can("settings.edit") && mfaOk;
   const { draft, set, errors, validate } = useZodForm(Settings, initial);
   const mut = useApiMutation((s: Settings) => api().saveSettings(s, actor), () => toast(t("common.saved")));
   return (

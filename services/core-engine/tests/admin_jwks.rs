@@ -75,6 +75,9 @@ async fn identity_jwks_iss_aud_and_mfa() {
     assert_eq!(s, StatusCode::OK, "{me}");
     assert_eq!(me["role"], "admin");
     assert_eq!(me["sub"], "user-1");
+    assert_eq!(me["mfaOk"], false);
+    let (_, me) = call(&app, Method::GET, "/v1/me", &mfa, None).await;
+    assert_eq!(me["mfaOk"], true);
     // wrong issuer / audience
     for t in [
         identity_token(&ring, "https://evil", "fxvps", &["admin"], &["otp"]),
