@@ -190,6 +190,9 @@ struct RawClaims {
     roles: Vec<String>,
     #[serde(default)]
     amr: Vec<String>,
+    /// Cloudflare Access tokens carry the user's e-mail and no role.
+    #[serde(default)]
+    email: Option<String>,
 }
 
 /// Back-office role of a token: `role`, else the most privileged back-office
@@ -255,6 +258,10 @@ pub struct Authenticator {
     audience: Option<String>,
     require_mfa: bool,
     dev: Option<DevAuth>,
+    /// Role by e-mail for tokens without a role claim (Cloudflare Access).
+    email_roles: std::collections::HashMap<String, Role>,
+    /// Signer for short-lived console session tokens minted from an Access login.
+    session: Option<EncodingKey>,
 }
 
 /// Startup policy for `CORE_DEV_AUTH=1` (finding G2): never together with a
@@ -307,6 +314,8 @@ impl Authenticator {
             audience: None,
             require_mfa: false,
             dev: None,
+            email_roles: Default::default(),
+            session: None,
         }
     }
 
@@ -372,6 +381,47 @@ impl Authenticator {
         self.with_dev_signer(&k, allow_admin)
     }
 
+    /// Maps e-mail addresses (lower-cased) to roles for role-less tokens.
+    pub fn with_email_roles(mut self, roles: impl IntoIterator<Item = (String, Role)>) -> Self {
+        self.email_roles = roles
+            .into_iter()
+            .map(|(e, r)| (e.trim().to_lowercase(), r))
+            .collect();
+        self
+    }
+
+    /// Random per-process key for console session tokens ([`Authenticator::sign_session`]).
+    /// Verified like dev tokens (local issuer) but does not enable `/auth/dev-token`.
+    pub fn with_session_signer(self) -> Authenticator {
+        use rand::RngCore;
+        let mut secret = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut secret);
+        if let Ok(mut k) = self.keys.write() {
+            k.push(Key {
+                alg: Algorithm::HS256,
+                kid: None,
+                key: DecodingKey::from_secret(&secret),
+                dev: true,
+            });
+        }
+        Authenticator {
+            session: Some(EncodingKey::from_secret(&secret)),
+            ..self
+        }
+    }
+
+    pub fn session_enabled(&self) -> bool {
+        self.session.is_some()
+    }
+
+    /// Signs a console session token (only with [`Authenticator::with_session_signer`]).
+    pub fn sign_session(&self, claims: &Claims) -> Option<String> {
+        let k = self.session.as_ref()?;
+        let mut c = claims.clone();
+        c.iss = Some(DEV_ISSUER.into());
+        encode(&Header::new(Algorithm::HS256), &c, k).ok()
+    }
+
     pub fn dev_enabled(&self) -> bool {
         self.dev.is_some()
     }
@@ -403,6 +453,42 @@ impl Authenticator {
     pub fn from_env(dev_auth: bool, bind: &str) -> Result<Authenticator, AuthError> {
         let var = |k: &str| std::env::var(k).ok().filter(|s| !s.is_empty());
         let flag = |k: &str| var(k).is_some_and(|v| v == "1" || v == "true");
+        // Cloudflare Access (console behind Tunnel + Access): its JWKS, iss and aud.
+        let cf_team = var("CORE_CF_ACCESS_TEAM");
+        if let Some(team) = &cf_team {
+            dev_auth_policy(dev_auth, true, bind)?;
+            let aud = var("CORE_CF_ACCESS_AUD").ok_or_else(|| {
+                AuthError(
+                    "CORE_CF_ACCESS_TEAM needs CORE_CF_ACCESS_AUD (Access application AUD tag)"
+                        .into(),
+                )
+            })?;
+            let admins: Vec<(String, Role)> = var("CORE_CF_ACCESS_ADMINS")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|e| e.contains('@'))
+                .map(|e| (e.to_string(), Role::Admin))
+                .collect();
+            if admins.is_empty() {
+                return Err(AuthError(
+                    "CORE_CF_ACCESS_TEAM needs CORE_CF_ACCESS_ADMINS (comma-separated e-mails)"
+                        .into(),
+                ));
+            }
+            let base = format!(
+                "https://{}.cloudflareaccess.com",
+                team.trim_end_matches(".cloudflareaccess.com")
+            );
+            let a = Authenticator::with_keys(vec![]);
+            a.spawn_jwks_refresh(
+                format!("{base}/cdn-cgi/access/certs"),
+                Duration::from_secs(300),
+            );
+            return Ok(a
+                .with_validation(Some(base), Some(aud))
+                .with_email_roles(admins)
+                .with_session_signer());
+        }
         let jwks_url = var("CORE_JWT_JWKS_URL");
         let jwks_file = var("CORE_JWT_JWKS_FILE");
         let rsa = var("CORE_JWT_RS256_PUBLIC_KEY_FILE");
@@ -467,6 +553,8 @@ impl Authenticator {
                     audience: None,
                     require_mfa: false,
                     dev: None,
+                    email_roles: Default::default(),
+                    session: None,
                 };
                 let ok = match fetch_jwks(&client, &url).await {
                     Ok(set) => a.replace_jwks(&set).map(|_| ()),
@@ -524,11 +612,17 @@ impl Authenticator {
             match decode::<RawClaims>(token, &k.key, &v) {
                 Ok(d) => {
                     let c = d.claims;
+                    let email = c.email.as_deref().map(str::to_lowercase);
                     let role = token_role(&c)
+                        .or_else(|| {
+                            email
+                                .as_ref()
+                                .and_then(|e| self.email_roles.get(e).copied())
+                        })
                         .ok_or_else(|| AuthError("no back-office role in token".into()))?;
                     let mfa = c.amr.iter().any(|m| MFA_AMR.contains(&m.as_str()));
                     return Ok(Actor {
-                        name: c.name.clone().unwrap_or_else(|| c.sub.clone()),
+                        name: c.name.clone().or(email).unwrap_or_else(|| c.sub.clone()),
                         sub: c.sub,
                         role,
                         mfa_ok: mfa || !self.require_mfa,

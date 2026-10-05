@@ -26,6 +26,8 @@ const listeners = new Set<() => void>();
 export const apiUrl = (): string | undefined => process.env.NEXT_PUBLIC_API_URL || undefined;
 export const isLive = (): boolean => !!apiUrl();
 /** Dev-token button: in development builds or when NEXT_PUBLIC_DEV_AUTH=1. */
+/** "Continue with Cloudflare Access" (console published behind Tunnel + Access). */
+export const accessAuthUi = (): boolean => process.env.NEXT_PUBLIC_CF_ACCESS === "1";
 export const devAuthUi = (): boolean => process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_DEV_AUTH === "1";
 
 function b64urlDecode(s: string): string {
@@ -107,4 +109,14 @@ export async function fetchDevToken(baseUrl: string, role: Role, name?: string, 
   if (!res.ok) throw new Error(res.status === 404 ? "Dev auth is disabled on the server (CORE_DEV_AUTH=1)" : `dev-token → ${res.status}`);
   const body = (await res.json()) as { token: string };
   return body.token;
+}
+
+/**
+ * `POST /auth/access-token`: core-engine verifies the Cloudflare Access assertion
+ * that Cloudflare adds to the request and returns a 1 h session token.
+ */
+export async function fetchAccessToken(baseUrl: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const res = await fetchImpl(`${baseUrl.replace(/\/+$/, "")}/auth/access-token`, { method: "POST", credentials: "same-origin" });
+  if (!res.ok) throw new Error(res.status === 404 ? "Cloudflare Access login is not enabled on the server" : `access-token → ${res.status}`);
+  return ((await res.json()) as { token: string }).token;
 }

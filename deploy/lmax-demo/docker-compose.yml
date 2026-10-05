@@ -25,9 +25,15 @@ services:
     network_mode: host
     environment:
       CORE_ADMIN_ADDR: 127.0.0.1:8090
-      # Dev-token login (refused by core-engine on non-loopback addresses).
-      CORE_DEV_AUTH: "1"
-      CORE_DEV_AUTH_ADMIN: "1"   # admin role needed for lp.manage
+      # Login mode (exactly one):
+      #  - SSH tunnel: dev-token login (CORE_DEV_AUTH=1, loopback only), the default;
+      #  - console.fxvps.ai via Cloudflare Tunnel + Access: CORE_DEV_AUTH=0 and
+      #    CF_ACCESS_TEAM / CF_ACCESS_AUD / CF_ACCESS_ADMINS set (core-engine refuses both at once).
+      CORE_DEV_AUTH: ${CORE_DEV_AUTH:-1}
+      CORE_DEV_AUTH_ADMIN: ${CORE_DEV_AUTH:-1}   # admin role needed for lp.manage
+      CORE_CF_ACCESS_TEAM: ${CF_ACCESS_TEAM:-}
+      CORE_CF_ACCESS_AUD: ${CF_ACCESS_AUD:-}
+      CORE_CF_ACCESS_ADMINS: ${CF_ACCESS_ADMINS:-}
       CORE_DATA_DIR: /var/lib/core-engine
       CORE_LP_STATUS_URL: http://127.0.0.1:9890/status
       CORE_LP_ADMIN_URL: http://127.0.0.1:9890
@@ -44,5 +50,20 @@ services:
     network_mode: host
     volumes: ["./console-nginx.conf:/etc/nginx/conf.d/default.conf:ro"]
     depends_on: [core-engine]
+    restart: unless-stopped
+    logging: *logs
+
+  # Publishes the console at console.fxvps.ai without opening a port: outbound
+  # connection to Cloudflare; the public hostname -> http://127.0.0.1:8080 route and
+  # the Access policy are configured in the Cloudflare Zero Trust dashboard.
+  # Only with: docker compose --profile tunnel up -d
+  cloudflared:
+    image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-latest}
+    profiles: ["tunnel"]
+    network_mode: host
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on: [console]
     restart: unless-stopped
     logging: *logs

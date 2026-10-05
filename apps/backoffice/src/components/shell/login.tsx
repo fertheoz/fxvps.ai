@@ -2,7 +2,7 @@
 import * as React from "react";
 import { KeyRound } from "lucide-react";
 import { Button, Card, CardContent, FieldError, Input, Label, Select } from "@/components/ui/primitives";
-import { apiUrl, decodeToken, devAuthUi, fetchDevToken, setToken } from "@/lib/auth";
+import { accessAuthUi, apiUrl, decodeToken, devAuthUi, fetchAccessToken, fetchDevToken, setToken } from "@/lib/auth";
 import { useT } from "@/lib/hooks";
 import { ROLES, type Role } from "@/lib/rbac";
 
@@ -23,6 +23,30 @@ export function LoginScreen() {
     setToken(v);
   };
 
+  const access = async () => {
+    setBusy(true);
+    try {
+      setToken(await fetchAccessToken(apiUrl()!));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Behind Cloudflare Access the user is already authenticated: sign in silently.
+  React.useEffect(() => {
+    if (!accessAuthUi()) return;
+    let live = true;
+    fetchAccessToken(apiUrl()!)
+      .then(setToken)
+      .catch((e: unknown) => {
+        if (live) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   const dev = async () => {
     setBusy(true);
     try {
@@ -41,6 +65,13 @@ export function LoginScreen() {
         <h1 className="text-lg font-semibold">{t("auth.title")}</h1>
       </div>
       <p className="text-sm text-muted-foreground">{t("auth.body")}</p>
+      {accessAuthUi() && (
+        <Card>
+          <CardContent className="grid gap-2 pt-4" data-testid="access-login">
+            <Button onClick={() => void access()} disabled={busy} data-testid="access-token">{t("auth.access")}</Button>
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardContent className="pt-4">
           <form onSubmit={signIn} className="grid gap-3">

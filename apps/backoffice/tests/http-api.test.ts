@@ -196,3 +196,16 @@ describe("same-origin console build (NEXT_PUBLIC_API_URL=/)", () => {
     expect(urls).toEqual(["/auth/dev-token", "/v1/lp/config"]);
   });
 });
+
+describe("Cloudflare Access login", () => {
+  it("posts to the same-origin access-token endpoint", async () => {
+    const { fetchAccessToken } = await import("@/lib/auth");
+    const urls: string[] = [];
+    const fetchImpl = (async (u: RequestInfo | URL) => {
+      urls.push(String(u));
+      return new Response(JSON.stringify({ token: "tok" }), { status: 200 });
+    }) as typeof fetch;
+    expect(await fetchAccessToken("/", fetchImpl)).toBe("tok");
+    expect(urls).toEqual(["/auth/access-token"]);
+  });
+});
