@@ -1,4 +1,6 @@
 .env
 fix-store/
 core-data/
+pg-data/
+keys/
 !.env.example

@@ -1,47 +1,75 @@
-# LP console on the CT: fix-gateway (managed config) + core-engine (admin API) +
-# back office console. Everything listens on 127.0.0.1 only (host networking inside
-# the CT); reach the console through an SSH tunnel (see BRIFING). No orders are sent
-# unless someone does it on purpose.
-#
-# Start: docker compose up -d   — then open the console and fill the LP settings.
-services:
-  fix-gateway:
-    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-fix-gateway:${FIXVPS_TAG:-latest}
-    network_mode: host
-    environment:
-      FIX_CONFIG_FILE: /var/lib/fix-gateway/lp.json   # written by the console, mode 0600
-      FIX_STATUS_ADDR: 127.0.0.1:9890
-      FIX_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN:?set FIX_ADMIN_TOKEN in .env}
-      RUST_LOG: ${RUST_LOG:-info}
-    # Image runs as uid 65532: mkdir -p fix-store && chown 65532:65532 fix-store
-    volumes: ["./fix-store:/var/lib/fix-gateway"]
-    restart: unless-stopped
-    logging: &logs
-      driver: json-file
-      options: { max-size: "20m", max-file: "5" }
+# fxvps.ai demo platform on CT 970 (LMAX demo FIX). Everything listens on
+# 127.0.0.1 only (host networking inside the CT); Cloudflare Tunnel publishes:
+#   console.fxvps.ai -> 127.0.0.1:8080  (back office; behind Cloudflare Access)
+#   trade.fxvps.ai   -> 127.0.0.1:8082  (client terminal; public, identity login)
+#   id.fxvps.ai      -> 127.0.0.1:8081  (identity service; public)
+# Start: docker compose --profile tunnel up -d
+x-logs: &logs
+  driver: json-file
+  options: { max-size: "20m", max-file: "5" }
 
-  core-engine:
-    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-core-engine:${FIXVPS_TAG:-latest}
+services:
+  postgres:
+    image: postgres:16-alpine
+    network_mode: host
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "port=5433"]
+    environment:
+      POSTGRES_USER: fxvps
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD in .env}
+      POSTGRES_DB: identity
+    volumes: ["./pg-data:/var/lib/postgresql/data"]
+    restart: unless-stopped
+    logging: *logs
+
+  identity:
+    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-identity:${FIXVPS_TAG:-latest}
     network_mode: host
     environment:
-      CORE_ADMIN_ADDR: 127.0.0.1:8090
-      # Login mode (exactly one):
-      #  - SSH tunnel: dev-token login (CORE_DEV_AUTH=1, loopback only), the default;
-      #  - console.fxvps.ai via Cloudflare Tunnel + Access: CORE_DEV_AUTH=0 and
-      #    CF_ACCESS_TEAM / CF_ACCESS_AUD / CF_ACCESS_ADMINS set (core-engine refuses both at once).
-      CORE_DEV_AUTH: ${CORE_DEV_AUTH:-1}
-      CORE_DEV_AUTH_ADMIN: ${CORE_DEV_AUTH:-1}   # admin role needed for lp.manage
-      CORE_CF_ACCESS_TEAM: ${CF_ACCESS_TEAM:-}
-      CORE_CF_ACCESS_AUD: ${CF_ACCESS_AUD:-}
-      CORE_CF_ACCESS_ADMINS: ${CF_ACCESS_ADMINS:-}
-      CORE_DATA_DIR: /var/lib/core-engine
-      CORE_LP_STATUS_URL: http://127.0.0.1:9890/status
-      CORE_LP_ADMIN_URL: http://127.0.0.1:9890
-      CORE_LP_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN}
+      IDENTITY_LISTEN: 127.0.0.1:8081
+      DATABASE_URL: postgres://fxvps:${PG_PASSWORD}@127.0.0.1:5433/identity
+      IDENTITY_SIGNING_KEY_FILE: /keys/identity.pem   # openssl genpkey (see BRIFING)
+      IDENTITY_ISSUER: https://id.fxvps.ai
+      IDENTITY_AUDIENCE: fxvps
+      IDENTITY_PUBLIC_URL: https://trade.fxvps.ai
+      IDENTITY_RP_ID: fxvps.ai
+      IDENTITY_RP_ORIGIN: https://trade.fxvps.ai
+      IDENTITY_ALLOWED_ORIGINS: https://trade.fxvps.ai,https://console.fxvps.ai
+      IDENTITY_TRUST_PROXY: "1"            # cloudflared adds X-Forwarded-For
+      # No SMTP on the demo: verification links go to the log; the operator
+      # verifies with `identity verify-email <email>` instead (see BRIFING).
+      IDENTITY_DEV_MAILER: "1"
       RUST_LOG: ${RUST_LOG:-info}
-    # chown 65532:65532 core-data
-    volumes: ["./core-data:/var/lib/core-engine"]
-    depends_on: [fix-gateway]
+    volumes: ["./keys:/keys:ro"]
+    depends_on: [postgres]
+    restart: unless-stopped
+    logging: *logs
+
+  # client-gateway with core-engine + fix-gateway in one process (one LMAX
+  # session per CompID): client WebSocket, back office admin API, LP config.
+  trading:
+    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-client-gateway:${FIXVPS_TAG:-latest}
+    network_mode: host
+    command: ["--listen", "127.0.0.1:8088", "--data-dir", "/var/lib/core-engine"]
+    environment:
+      # LP settings (entered in the console, file mode 0600); a change restarts this service.
+      FIX_CONFIG_FILE: /var/lib/fix-gateway/lp.json
+      FIX_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN:?set FIX_ADMIN_TOKEN in .env}
+      FIX_STATUS_ADDR: 127.0.0.1:9890
+      # Back office admin API: identity tokens, admin role + 2FA for changes.
+      CORE_ADMIN_ADDR: 127.0.0.1:8090
+      CORE_JWT_JWKS_URL: http://127.0.0.1:8081/.well-known/jwks.json
+      CORE_JWT_ISSUER: https://id.fxvps.ai
+      CORE_JWT_AUDIENCE: fxvps
+      CORE_REQUIRE_MFA: "1"
+      # Client WebSocket: identity tokens (accounts claim).
+      FXVPS_JWT_JWKS_URL: http://127.0.0.1:8081/.well-known/jwks.json
+      FXVPS_JWT_ISSUER: https://id.fxvps.ai
+      FXVPS_JWT_AUDIENCE: fxvps
+      FXVPS_ALLOWED_ORIGINS: https://trade.fxvps.ai
+      RUST_LOG: ${RUST_LOG:-info}
+    # chown 65532:65532 fix-store core-data
+    volumes: ["./fix-store:/var/lib/fix-gateway", "./core-data:/var/lib/core-engine"]
+    depends_on: [identity]
     restart: unless-stopped
     logging: *logs
 
@@ -49,14 +77,19 @@ services:
     image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-backoffice-console:${FIXVPS_TAG:-latest}
     network_mode: host
     volumes: ["./console-nginx.conf:/etc/nginx/conf.d/default.conf:ro"]
-    depends_on: [core-engine]
+    depends_on: [trading]
     restart: unless-stopped
     logging: *logs
 
-  # Publishes the console at console.fxvps.ai without opening a port: outbound
-  # connection to Cloudflare; the public hostname -> http://127.0.0.1:8080 route and
-  # the Access policy are configured in the Cloudflare Zero Trust dashboard.
-  # Only with: docker compose --profile tunnel up -d
+  terminal:
+    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-terminal-trade:${FIXVPS_TAG:-latest}
+    network_mode: host
+    volumes: ["./terminal-nginx.conf:/etc/nginx/conf.d/default.conf:ro"]
+    depends_on: [trading]
+    restart: unless-stopped
+    logging: *logs
+
+  # Outbound-only connection to Cloudflare; hostnames + Access in Zero Trust.
   cloudflared:
     image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-latest}
     profiles: ["tunnel"]
@@ -64,6 +97,5 @@ services:
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
-    depends_on: [console]
     restart: unless-stopped
     logging: *logs

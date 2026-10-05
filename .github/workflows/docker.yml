@@ -33,10 +33,12 @@ jobs:
           - { svc: core-engine, dockerfile: infra/docker/core-engine.Dockerfile, src: services/core-engine, args: "" }
           - { svc: identity, dockerfile: infra/docker/identity.Dockerfile, src: services/identity, args: "" }
           - { svc: terminal, dockerfile: infra/docker/static-web.Dockerfile, src: apps/terminal, args: "APP=terminal\nOUT=dist" }
+          # trade.fxvps.ai: identity login (id.fxvps.ai) and the gateway on the same host (/ws).
+          - { svc: terminal-trade, dockerfile: infra/docker/static-web.Dockerfile, src: apps/terminal, args: "APP=terminal\nOUT=dist\nVITE_IDENTITY_URL=https://id.fxvps.ai\nVITE_DEFAULT_WS_URL=/ws" }
           - { svc: backoffice, dockerfile: infra/docker/static-web.Dockerfile, src: apps/backoffice, args: "APP=backoffice\nOUT=out" }
-          # Same-origin console (nginx proxies /v1 to a loopback core-engine): Cloudflare Access
-          # login when published via Tunnel, dev-token login over an SSH tunnel otherwise.
-          - { svc: backoffice-console, dockerfile: infra/docker/static-web.Dockerfile, src: apps/backoffice, args: "APP=backoffice\nOUT=out\nNEXT_PUBLIC_API_URL=/\nNEXT_PUBLIC_DEV_AUTH=1\nNEXT_PUBLIC_CF_ACCESS=1" }
+          # Same-origin console (nginx proxies /v1 to the admin API): identity login
+          # (e-mail + password + 2FA at id.fxvps.ai); dev-token button for local use.
+          - { svc: backoffice-console, dockerfile: infra/docker/static-web.Dockerfile, src: apps/backoffice, args: "APP=backoffice\nOUT=out\nNEXT_PUBLIC_API_URL=/\nNEXT_PUBLIC_DEV_AUTH=1\nNEXT_PUBLIC_IDENTITY_URL=https://id.fxvps.ai" }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check source exists (pending services are skipped)
@@ -84,10 +86,12 @@ jobs:
           - { svc: core-engine, dockerfile: infra/docker/core-engine.Dockerfile, src: services/core-engine, args: "" }
           - { svc: identity, dockerfile: infra/docker/identity.Dockerfile, src: services/identity, args: "" }
           - { svc: terminal, dockerfile: infra/docker/static-web.Dockerfile, src: apps/terminal, args: "APP=terminal\nOUT=dist" }
+          # trade.fxvps.ai: identity login (id.fxvps.ai) and the gateway on the same host (/ws).
+          - { svc: terminal-trade, dockerfile: infra/docker/static-web.Dockerfile, src: apps/terminal, args: "APP=terminal\nOUT=dist\nVITE_IDENTITY_URL=https://id.fxvps.ai\nVITE_DEFAULT_WS_URL=/ws" }
           - { svc: backoffice, dockerfile: infra/docker/static-web.Dockerfile, src: apps/backoffice, args: "APP=backoffice\nOUT=out" }
-          # Same-origin console (nginx proxies /v1 to a loopback core-engine): Cloudflare Access
-          # login when published via Tunnel, dev-token login over an SSH tunnel otherwise.
-          - { svc: backoffice-console, dockerfile: infra/docker/static-web.Dockerfile, src: apps/backoffice, args: "APP=backoffice\nOUT=out\nNEXT_PUBLIC_API_URL=/\nNEXT_PUBLIC_DEV_AUTH=1\nNEXT_PUBLIC_CF_ACCESS=1" }
+          # Same-origin console (nginx proxies /v1 to the admin API): identity login
+          # (e-mail + password + 2FA at id.fxvps.ai); dev-token button for local use.
+          - { svc: backoffice-console, dockerfile: infra/docker/static-web.Dockerfile, src: apps/backoffice, args: "APP=backoffice\nOUT=out\nNEXT_PUBLIC_API_URL=/\nNEXT_PUBLIC_DEV_AUTH=1\nNEXT_PUBLIC_IDENTITY_URL=https://id.fxvps.ai" }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check source exists (pending services are skipped)

@@ -40,10 +40,14 @@ function b64urlDecode(s: string): string {
 export function decodeToken(t: string | null, nowSec = Date.now() / 1000): TokenClaims | null {
   if (!t) return null;
   try {
-    const p = JSON.parse(b64urlDecode(t.split(".")[1] ?? "")) as Partial<TokenClaims>;
-    if (typeof p.sub !== "string" || !ROLES.includes(p.role as Role)) return null;
+    const p = JSON.parse(b64urlDecode(t.split(".")[1] ?? "")) as Partial<TokenClaims> & { roles?: unknown; email?: unknown };
+    // Back-office tokens carry `role`; identity tokens a `roles` array (highest wins).
+    const roles = Array.isArray(p.roles) ? p.roles : [];
+    const role = ROLES.includes(p.role as Role) ? (p.role as Role) : ROLES.find((r) => roles.includes(r));
+    if (typeof p.sub !== "string" || !role) return null;
     if (typeof p.exp === "number" && p.exp < nowSec) return null;
-    return { sub: p.sub, name: typeof p.name === "string" ? p.name : p.sub, role: p.role as Role, exp: p.exp ?? 0 };
+    const name = typeof p.name === "string" ? p.name : typeof p.email === "string" ? p.email : p.sub;
+    return { sub: p.sub, name, role, exp: p.exp ?? 0 };
   } catch {
     return null;
   }
@@ -119,4 +123,70 @@ export async function fetchAccessToken(baseUrl: string, fetchImpl: typeof fetch 
   const res = await fetchImpl(`${baseUrl.replace(/\/+$/, "")}/auth/access-token`, { method: "POST", credentials: "same-origin" });
   if (!res.ok) throw new Error(res.status === 404 ? "Cloudflare Access login is not enabled on the server" : `access-token → ${res.status}`);
   return ((await res.json()) as { token: string }).token;
+}
+
+// --- identity service login (console behind console.fxvps.ai) ----------------
+
+/** NEXT_PUBLIC_IDENTITY_URL: identity service for e-mail/password/2FA login. */
+export const identityUrl = (): string | undefined => process.env.NEXT_PUBLIC_IDENTITY_URL?.replace(/\/+$/, "") || undefined;
+
+export type IdentityLogin = { token: string } | { mfaToken: string };
+
+async function idCall<T>(path: string, body?: unknown, fetchImpl: typeof fetch = fetch): Promise<T> {
+  const res = await fetchImpl(`${identityUrl()}${path}`, {
+    method: "POST",
+    credentials: "include", // HttpOnly refresh cookie (path /v1/token) on the identity host
+    // Cookie endpoints require the CSRF header (identity service).
+    headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), "x-fxvps-csrf": "1" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const v = (await res.json().catch(() => ({}))) as T & { error?: string; message?: string };
+  if (!res.ok) throw new Error(v.message ?? v.error ?? `${path} → ${res.status}`);
+  return v;
+}
+
+/** Password step; returns the access token or an MFA challenge. */
+export async function identityLogin(email: string, password: string, fetchImpl?: typeof fetch): Promise<IdentityLogin> {
+  const r = await idCall<{ access_token?: string; mfa_required?: boolean; mfa_token?: string }>("/v1/login", { email, password, session: "cookie" }, fetchImpl);
+  if (r.mfa_required && r.mfa_token) return { mfaToken: r.mfa_token };
+  if (r.access_token) return { token: r.access_token };
+  throw new Error("unexpected login response");
+}
+
+export async function identity2fa(mfaToken: string, code: string, fetchImpl?: typeof fetch): Promise<string> {
+  const r = await idCall<{ access_token: string }>("/v1/login/2fa", { mfa_token: mfaToken, code, session: "cookie" }, fetchImpl);
+  return r.access_token;
+}
+
+/** Rotates the refresh cookie; null when there is no session. */
+export async function identityRefresh(fetchImpl?: typeof fetch): Promise<string | null> {
+  try {
+    return (await idCall<{ access_token: string }>("/v1/token/refresh", undefined, fetchImpl)).access_token;
+  } catch {
+    return null;
+  }
+}
+
+let refresher: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Keeps an identity session alive: privileged access tokens live ~60 s, so the
+ * token is refreshed in the background (and once at start-up from the cookie).
+ */
+export function startIdentitySession() {
+  if (!identityUrl() || typeof window === "undefined" || refresher) return;
+  const tick = async () => {
+    const t = await identityRefresh();
+    if (t) setToken(t);
+    else if (decodeToken(getToken()) === null) setToken(null);
+  };
+  void tick();
+  refresher = setInterval(() => void tick(), 30_000);
+}
+
+export async function identityLogout() {
+  if (refresher) clearInterval(refresher);
+  refresher = null;
+  await idCall("/v1/token/revoke").catch(() => undefined);
+  setToken(null);
 }

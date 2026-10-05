@@ -414,6 +414,41 @@ impl Store for MemoryStore {
     }
 }
 
+/// Marks a user's e-mail as verified (operator CLI where no SMTP is configured).
+/// Returns `Ok(false)` when it already was.
+pub async fn verify_email(store: &dyn Store, email: &str) -> Result<bool, String> {
+    let email = email.trim().to_lowercase();
+    let mut u = store
+        .user_by_email(&email)
+        .await
+        .map_err(|e| format!("{e:?}"))?
+        .ok_or_else(|| format!("no user with email {email}"))?;
+    if u.email_verified {
+        return Ok(false);
+    }
+    u.email_verified = true;
+    store.update_user(&u).await.map_err(|e| format!("{e:?}"))?;
+    Ok(true)
+}
+
+/// Links a trading account to a user (operator CLI; same as the admin API).
+pub async fn link_account(store: &dyn Store, email: &str, account: &str) -> Result<(), String> {
+    let account = account.trim();
+    if account.is_empty() || account.len() > 64 {
+        return Err("account id must be 1..64 characters".into());
+    }
+    let email = email.trim().to_lowercase();
+    let u = store
+        .user_by_email(&email)
+        .await
+        .map_err(|e| format!("{e:?}"))?
+        .ok_or_else(|| format!("no user with email {email}"))?;
+    store
+        .link_account(&u.id, account)
+        .await
+        .map_err(|e| format!("{e:?}"))
+}
+
 /// Adds the `admin` role to an existing user (one-time bootstrap, G14).
 /// Returns `Ok(false)` when the user already had it.
 pub async fn grant_admin(store: &dyn Store, email: &str) -> Result<bool, String> {
@@ -442,7 +477,7 @@ mod grant_admin_tests {
             id: "u1".into(),
             email: "a@b.c".into(),
             password_hash: String::new(),
-            email_verified: true,
+            email_verified: false,
             roles: vec!["trader".into()],
             totp_secret: None,
             totp_enabled: false,
@@ -456,5 +491,10 @@ mod grant_admin_tests {
         assert_eq!(grant_admin(&s, " A@B.c ").await, Ok(true));
         assert_eq!(grant_admin(&s, "a@b.c").await, Ok(false));
         assert!(grant_admin(&s, "x@y.z").await.is_err());
+        assert_eq!(verify_email(&s, "a@b.c").await, Ok(true));
+        assert_eq!(verify_email(&s, "a@b.c").await, Ok(false));
+        link_account(&s, "a@b.c", "100001").await.unwrap();
+        assert_eq!(s.accounts("u1").await.unwrap(), vec!["100001".to_string()]);
+        assert!(link_account(&s, "a@b.c", " ").await.is_err());
     }
 }

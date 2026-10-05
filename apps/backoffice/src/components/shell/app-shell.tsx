@@ -8,7 +8,7 @@ import { CommandPalette } from "./command-palette";
 import { Button, Select } from "@/components/ui/primitives";
 import { setPrefs, usePrefs } from "@/lib/prefs";
 import { useActor, useT } from "@/lib/hooks";
-import { decodeToken, isLive, setToken, useToken } from "@/lib/auth";
+import { decodeToken, identityLogout, identityUrl, isLive, setToken, startIdentitySession, useToken } from "@/lib/auth";
 import { LiveUpdates, useLiveConnected } from "@/lib/queries";
 import { LoginScreen } from "./login";
 import { canAccessRoute, ROLES, type Role } from "@/lib/rbac";
@@ -39,6 +39,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const signedIn = !live || decodeToken(token) !== null;
   const actor = useActor();
   const pushed = useLiveConnected();
+
+  // Identity sessions: keep the short-lived admin token fresh (no-op otherwise).
+  React.useEffect(() => {
+    if (live) startIdentitySession();
+  }, [live]);
 
   React.useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -104,7 +109,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               signedIn && (
                 <>
                   <span className="hidden text-xs sm:inline" data-testid="current-user">{actor.name} <span className="text-muted-foreground">({actor.role})</span></span>
-                  <Button variant="ghost" size="icon" aria-label={t("auth.logout")} title={t("auth.logout")} onClick={() => setToken(null)} data-testid="logout">
+                  <Button variant="ghost" size="icon" aria-label={t("auth.logout")} title={t("auth.logout")} onClick={() => (identityUrl() ? void identityLogout() : setToken(null))} data-testid="logout">
                     <LogOut className="h-4 w-4" />
                   </Button>
                 </>
