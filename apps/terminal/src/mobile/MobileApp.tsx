@@ -19,7 +19,7 @@ import type { MessageKey } from '../i18n';
 import { getApi, trade as tradeApi } from '../store/api';
 import { useSession } from '../store/session';
 import { selectActiveAccount, selectHistory, selectOrders, selectPositions, useTerminal } from '../store/terminal';
-import { ChartPanel } from '../components/ChartPanel';
+import { ChartAttribution, ChartPanel } from '../components/ChartPanel';
 import { OrderTicket } from '../components/OrderTicket';
 
 /** Phone layout: one view at a time, bottom tab bar, order ticket as a bottom sheet. */
@@ -786,6 +786,7 @@ function AccountView() {
           <span className="num text-muted">{conn === 'connected' && latency !== undefined ? `${latency} ms` : ''}</span>,
         )}
       </div>
+      <ChartAttribution className="px-2 text-center" />
       {claims && (
         <div className="fx-card">
           {row(

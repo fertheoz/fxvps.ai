@@ -1,3 +1,4 @@
+import { ChartAttribution } from './ChartPanel';
 import type { ReactNode } from 'react';
 import { Command } from 'cmdk';
 import { useT } from '../hooks';
@@ -55,6 +56,7 @@ export function ShortcutsDialog() {
           ))}
         </tbody>
       </table>
+      <ChartAttribution className="px-3 py-2 border-t border-line/50" />
     </Modal>
   );
 }
