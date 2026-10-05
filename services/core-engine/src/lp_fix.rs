@@ -19,7 +19,8 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::{EngineHandle, LpFeedback};
 
-/// Core symbol (`EURUSD`) <-> LP symbol (`EUR/USD`) with contract sizes.
+/// Core symbol (`EURUSD`) <-> LP symbol (`EUR/USD`) with the LP `OrderQty` per
+/// engine lot (100 000 for an LP quoting units, 10 for LMAX 10 000-unit contracts).
 #[derive(Clone, Debug, Default)]
 pub struct SymbolMap {
     to_lp: BTreeMap<String, (String, i64)>,
@@ -41,12 +42,12 @@ impl SymbolMap {
     }
 }
 
-/// Lots -> LP units.
+/// Lots -> LP `OrderQty` (`per_lot` = LP quantity of one lot).
 pub fn lots_to_units(lots: Qty, contract_size: i64) -> Fixed {
     Fixed::from_raw(lots.raw().saturating_mul(contract_size))
 }
 
-/// LP units -> lots (truncating to the engine's 1e-8 lot resolution).
+/// LP `OrderQty` -> lots (truncating to the engine's 1e-8 lot resolution).
 pub fn units_to_lots(units: Fixed, contract_size: i64) -> Qty {
     Qty::from_raw(units.raw() / contract_size.max(1))
 }
@@ -195,6 +196,14 @@ mod tests {
         let mut m = SymbolMap::default();
         m.insert("EURUSD", "EUR/USD", 100_000);
         m
+    }
+
+    #[test]
+    fn lmax_contracts() {
+        // LMAX FX: 1 contract = 10 000 units -> 10 contracts per lot.
+        assert_eq!(lots_to_units(qty("1"), 10), Fixed::from_int(10));
+        assert_eq!(lots_to_units(qty("0.01"), 10), "0.1".parse().unwrap());
+        assert_eq!(units_to_lots("2.5".parse().unwrap(), 10), qty("0.25"));
     }
 
     #[test]

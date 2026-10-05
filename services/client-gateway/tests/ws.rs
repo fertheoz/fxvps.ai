@@ -414,6 +414,7 @@ async fn symbol_list_describes_instruments() {
         security_id: "4001".into(),
         tick_size: "0.00001".parse().unwrap(),
         qty_step: "1000".parse().unwrap(),
+        contract_size: 1,
     };
     let h = Hub::with_instruments(
         ClientGatewayConfig::default(),

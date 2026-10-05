@@ -83,6 +83,7 @@ fn config(md: String, trade: String, server_name: &str) -> GatewayConfig {
             security_id: "4001".into(),
             tick_size: Fixed::from_parts(1, 5),
             qty_step: Fixed::from_int(1),
+            contract_size: 1,
         }],
         nats: None,
     }

@@ -30,6 +30,7 @@ fn gateway_config(sim: &lp_simulator::SimHandle) -> GatewayConfig {
             security_id: "4001".into(),
             tick_size: Fixed::from_parts(1, 5),
             qty_step: Fixed::from_int(1),
+            contract_size: 1,
         }],
         nats: None,
     }

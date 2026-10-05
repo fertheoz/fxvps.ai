@@ -696,6 +696,7 @@ mod tests {
             security_id: "4004".into(),
             tick_size: px("0.001"),
             qty_step: px("1000"),
+            contract_size: 1,
         };
         let hub = Hub::with_instruments(
             ClientGatewayConfig::default(),
