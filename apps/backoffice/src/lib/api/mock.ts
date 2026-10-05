@@ -211,6 +211,18 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       return delay(publicApproval(a));
     },
 
+    async setGroup(id, group, actor) {
+      guard(actor, "clients.edit");
+      const c = s.clients.find((x) => x.id === id);
+      if (!c) throw new Error("Client not found");
+      const g = s.groups.find((x) => x.name === group);
+      if (!g) throw new Error("Unknown group");
+      if (s.positions.some((p) => p.clientId === id)) throw new Error("account has open positions");
+      audit(actor, "account.group", `#${c.login}`, `${c.group} → ${group}`);
+      c.group = group;
+      c.leverage = g.leverage;
+      return delay(c);
+    },
     async setKyc(id, kyc, actor) {
       guard(actor, "clients.edit");
       const c = s.clients.find((x) => x.id === id);

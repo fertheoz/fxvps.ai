@@ -153,6 +153,8 @@ export interface AdminApi {
   openAccount(req: { name: string; email: string; group: string }, actor: Actor): Promise<Client>;
   balanceOp(req: BalanceOpRequest, actor: Actor): Promise<BalanceOpResult>;
   setKyc(id: string, kyc: Client["kyc"], actor: Actor): Promise<Client>;
+  /** Moves the account to another group (refused while it has positions or orders). */
+  setGroup(id: string, group: string, actor: Actor): Promise<Client>;
 
   listGroups(): Promise<Group[]>;
   saveGroup(g: Group, actor: Actor): Promise<Group>;

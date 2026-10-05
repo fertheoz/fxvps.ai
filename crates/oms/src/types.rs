@@ -303,6 +303,12 @@ pub enum Command {
         account: AccountNo,
         group: String,
     },
+    /// Moves an account to another group (same currency; no open positions or
+    /// working orders, since the margin mode and routing may change).
+    SetAccountGroup {
+        account: AccountNo,
+        group: String,
+    },
     Deposit {
         account: AccountNo,
         amount: Money,
@@ -375,6 +381,10 @@ pub enum Event {
     },
     AccountOpened {
         account: AccountNo,
+    },
+    AccountGroupChanged {
+        account: AccountNo,
+        group: String,
     },
     BalanceChanged {
         account: AccountNo,

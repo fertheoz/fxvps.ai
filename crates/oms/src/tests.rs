@@ -673,6 +673,44 @@ fn abook_limit_goes_to_lp_as_limit_and_waits_when_unfilled() {
 }
 
 #[test]
+fn account_group_change_needs_a_flat_account() {
+    let mut h = b();
+    // account 1 is in the hedging B-book group "b"; "n" is netting
+    let id = h.market(1, "x", Side::Buy, "1");
+    assert_eq!(h.e.order(id).unwrap().status, OrderStatus::Filled);
+    let ev = h.cmd(Command::SetAccountGroup {
+        account: 1,
+        group: "n".into(),
+    });
+    assert!(matches!(ev[0], Event::CommandRejected { .. }));
+    assert_eq!(h.e.account(1).unwrap().group, "b");
+    let pid = h.pos(1)[0].id;
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: pid,
+        volume: None,
+        client_order_id: "c".into(),
+    });
+    let ev = h.cmd(Command::SetAccountGroup {
+        account: 1,
+        group: "n".into(),
+    });
+    assert_eq!(
+        ev,
+        vec![Event::AccountGroupChanged {
+            account: 1,
+            group: "n".into()
+        }]
+    );
+    assert_eq!(h.e.account(1).unwrap().group, "n");
+    let ev = h.cmd(Command::SetAccountGroup {
+        account: 1,
+        group: "nope".into(),
+    });
+    assert!(matches!(ev[0], Event::CommandRejected { .. }));
+}
+
+#[test]
 fn abook_aggregated_pro_rata_allocation() {
     let mut h = H::new(EngineConfig {
         allocation: AllocationMode::ProRata,
