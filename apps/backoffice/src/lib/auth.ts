@@ -98,7 +98,8 @@ export function useToken(): string | null {
  * loopback address). The server derives `sub` from the role.
  */
 export async function fetchDevToken(baseUrl: string, role: Role, name?: string, fetchImpl: typeof fetch = fetch): Promise<string> {
-  const res = await fetchImpl(`${baseUrl}/auth/dev-token`, {
+  // `/` (same-origin console build) must not become a protocol-relative `//auth/...`.
+  const res = await fetchImpl(`${baseUrl.replace(/\/+$/, "")}/auth/dev-token`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ role, name }),

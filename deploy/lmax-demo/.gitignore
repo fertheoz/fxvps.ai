@@ -1,3 +1,4 @@
 .env
 fix-store/
+core-data/
 !.env.example

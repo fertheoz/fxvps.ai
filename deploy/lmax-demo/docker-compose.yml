@@ -1,20 +1,48 @@
-# LMAX demo connectivity test: fix-gateway only (no customer data, no orders
-# unless sent on purpose). Run from this directory: docker compose up -d
+# LP console on the CT: fix-gateway (managed config) + core-engine (admin API) +
+# back office console. Everything listens on 127.0.0.1 only (host networking inside
+# the CT); reach the console through an SSH tunnel (see BRIFING). No orders are sent
+# unless someone does it on purpose.
+#
+# Start: docker compose up -d   — then open the console and fill the LP settings.
 services:
   fix-gateway:
-    image: ${FIX_GATEWAY_IMAGE:-ghcr.io/fertheoz/fxvps-fix-gateway:latest}
-    command: ["/app/lmax/lmax-demo.toml"]
-    env_file: .env
+    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-fix-gateway:${FIXVPS_TAG:-latest}
+    network_mode: host
     environment:
-      # Session table for a later core-engine (CORE_LP_STATUS_URL); loopback only.
-      FIX_STATUS_ADDR: 0.0.0.0:9890
-    volumes:
-      - ./lmax-demo.toml:/app/lmax/lmax-demo.toml:ro
-      # Image runs as uid 65532 (distroless nonroot): mkdir -p fix-store && chown 65532:65532 fix-store
-      - ./fix-store:/var/lib/fix-gateway
-    ports:
-      - "127.0.0.1:9890:9890"
+      FIX_CONFIG_FILE: /var/lib/fix-gateway/lp.json   # written by the console, mode 0600
+      FIX_STATUS_ADDR: 127.0.0.1:9890
+      FIX_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN:?set FIX_ADMIN_TOKEN in .env}
+      RUST_LOG: ${RUST_LOG:-info}
+    # Image runs as uid 65532: mkdir -p fix-store && chown 65532:65532 fix-store
+    volumes: ["./fix-store:/var/lib/fix-gateway"]
     restart: unless-stopped
-    logging:
+    logging: &logs
       driver: json-file
       options: { max-size: "20m", max-file: "5" }
+
+  core-engine:
+    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-core-engine:${FIXVPS_TAG:-latest}
+    network_mode: host
+    environment:
+      CORE_ADMIN_ADDR: 127.0.0.1:8090
+      # Dev-token login (refused by core-engine on non-loopback addresses).
+      CORE_DEV_AUTH: "1"
+      CORE_DEV_AUTH_ADMIN: "1"   # admin role needed for lp.manage
+      CORE_DATA_DIR: /var/lib/core-engine
+      CORE_LP_STATUS_URL: http://127.0.0.1:9890/status
+      CORE_LP_ADMIN_URL: http://127.0.0.1:9890
+      CORE_LP_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN}
+      RUST_LOG: ${RUST_LOG:-info}
+    # chown 65532:65532 core-data
+    volumes: ["./core-data:/var/lib/core-engine"]
+    depends_on: [fix-gateway]
+    restart: unless-stopped
+    logging: *logs
+
+  console:
+    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-backoffice-console:${FIXVPS_TAG:-latest}
+    network_mode: host
+    volumes: ["./console-nginx.conf:/etc/nginx/conf.d/default.conf:ro"]
+    depends_on: [core-engine]
+    restart: unless-stopped
+    logging: *logs
