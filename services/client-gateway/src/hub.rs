@@ -1,7 +1,7 @@
 //! Shared gateway state: quote/account fan-out, order routing through the
 //! core engine ([`CoreApi`]), candles.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
@@ -84,6 +84,9 @@ pub struct Hub {
     quotes: broadcast::Sender<Arc<QuoteMsg>>,
     accounts: broadcast::Sender<Arc<AccountEvent>>,
     candles: Mutex<CandleStore>,
+    /// Latest quote per (group, symbol): sent on subscribe so a new connection shows
+    /// every price at once instead of waiting for each instrument's next tick.
+    last_quotes: Mutex<HashMap<(Option<Arc<str>>, Arc<str>), Arc<ClientQuote>>>,
     /// Client symbol -> internal symbol.
     symbols: BTreeMap<String, String>,
     /// Client symbol -> instrument spec (for `SymbolList`).
@@ -342,6 +345,7 @@ impl Hub {
         Arc::new(Hub {
             specs,
             candles: Mutex::new(CandleStore::new(cfg.candle_capacity)),
+            last_quotes: Mutex::new(HashMap::new()),
             limiter: RateLimiter::keyed(Quota::per_second(rate).allow_burst(burst)),
             symbols,
             candle_group: core.as_ref().and_then(|c| c.groups().into_iter().next()),
@@ -413,7 +417,32 @@ impl Hub {
                 }
             }
         }
+        if let Ok(mut last) = self.last_quotes.lock() {
+            last.insert((group.clone(), q.symbol.clone()), Arc::new(q.clone()));
+        }
         let _ = self.quotes.send(Arc::new(QuoteMsg { group, quote: q }));
+    }
+
+    /// Latest known quotes of `symbols` as a connection with `groups` sees them
+    /// (group streams after the common one, so the marked-up price wins).
+    pub fn last_quotes(
+        &self,
+        symbols: &[String],
+        groups: &HashSet<String>,
+    ) -> Vec<Arc<ClientQuote>> {
+        let Ok(last) = self.last_quotes.lock() else {
+            return Vec::new();
+        };
+        let mut out: Vec<_> = last
+            .iter()
+            .filter(|((g, s), _)| {
+                g.as_deref().is_none_or(|g| groups.contains(g))
+                    && symbols.iter().any(|x| **x == **s)
+            })
+            .map(|((g, _), q)| (g.is_some(), q.clone()))
+            .collect();
+        out.sort_by_key(|(grouped, _)| *grouped);
+        out.into_iter().map(|(_, q)| q).collect()
     }
 
     /// Ingests a client-form quote visible to every connection (tests,
@@ -725,6 +754,35 @@ mod tests {
         assert_eq!(h2.instruments()[0].tick_size, None);
         assert_eq!(decimals(px("0.00001")), 5);
         assert_eq!(decimals(px("1")), 0);
+    }
+
+    #[test]
+    fn last_quotes_snapshot_for_new_subscribers() {
+        let hub = Hub::new(
+            ClientGatewayConfig::default(),
+            Authenticator::hs256(b"k"),
+            Vec::new(),
+            None,
+        );
+        let q = |symbol: &str, bid: i64| ClientQuote {
+            symbol: symbol.into(),
+            bid: Some(Fixed::from_raw(bid)),
+            ask: Some(Fixed::from_raw(bid + 1)),
+            bid_size: None,
+            ask_size: None,
+            ts_ns: 1,
+        };
+        hub.publish_client_quote(q("EURUSD", 1));
+        hub.publish_client_quote(q("EURUSD", 2));
+        hub.publish_client_quote(q("GBPUSD", 5));
+        hub.publish(Some("vip".into()), q("EURUSD", 9), false);
+        let subs = ["EURUSD".to_string()];
+        let common = hub.last_quotes(&subs, &HashSet::new());
+        assert_eq!(common.len(), 1);
+        assert_eq!(common[0].bid, Some(Fixed::from_raw(2)));
+        // A member of the group gets its own (marked-up) price last, so it wins.
+        let vip = hub.last_quotes(&subs, &HashSet::from(["vip".to_string()]));
+        assert_eq!(vip.last().unwrap().bid, Some(Fixed::from_raw(9)));
     }
 
     #[test]
