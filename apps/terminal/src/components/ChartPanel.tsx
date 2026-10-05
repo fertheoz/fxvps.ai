@@ -47,7 +47,8 @@ function lineData(bars: Bar[], values: (number | null)[]) {
   return out;
 }
 
-export function ChartPanel({ index, detached = false }: { index: number; detached?: boolean }) {
+/** `bare`: canvas only (the mobile shell brings its own symbol / timeframe / trade controls). */
+export function ChartPanel({ index, detached = false, bare = false }: { index: number; detached?: boolean; bare?: boolean }) {
   const t = useT();
   const slot = useTerminal((s) => s.charts[index]);
   const spec = useTerminal((s) => (slot ? s.symbols[slot.symbol] : undefined));
@@ -340,7 +341,7 @@ export function ChartPanel({ index, detached = false }: { index: number; detache
       onMouseDown={() => setActive(index)}
       data-testid={`chart-${index}`}
     >
-      <div className="flex items-center gap-1 h-8 px-2 border-b border-line shrink-0">
+      <div className={`${bare ? 'hidden' : 'flex'} items-center gap-1 h-8 px-2 border-b border-line shrink-0`}>
         <select
           aria-label={t('ticket.symbol')}
           className="bg-transparent font-semibold text-[13px] pr-1"
@@ -376,7 +377,7 @@ export function ChartPanel({ index, detached = false }: { index: number; detache
       <div className="relative flex-1 min-h-0">
         <div ref={host} className="absolute inset-0" onMouseDownCapture={onPointerDown} onMouseMove={onHover} data-testid={`chart-canvas-${index}`} />
         {loading && <div className="absolute inset-0 grid place-items-center text-muted">{t('chart.loading')}</div>}
-        {spec && quote && (
+        {spec && quote && !bare && (
           <div className="absolute top-2 left-2 z-10 flex items-stretch rounded-md overflow-hidden shadow-lg border border-line text-[12px] select-none" data-testid={`oneclick-${index}`}>
             <button
               disabled={busy}

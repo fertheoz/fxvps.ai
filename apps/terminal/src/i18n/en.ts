@@ -217,6 +217,13 @@ export const en = {
   'gw.hint': 'Saved for this browser tab only.',
   'gw.mock': 'Simulator',
   'gw.failed': 'Could not connect: {error}',
+  'm.markets': 'Markets',
+  'm.chart': 'Chart',
+  'm.portfolio': 'Portfolio',
+  'm.account': 'Account',
+  'm.confirmClose': 'Tap again to close',
+  'm.protect': 'S/L · T/P',
+  'm.spread': 'Spread',
 } as const;
 
 export type MessageKey = keyof typeof en;

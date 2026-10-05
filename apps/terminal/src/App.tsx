@@ -13,6 +13,7 @@ import { DepthOfMarket } from './components/DepthOfMarket';
 import { Toolbox } from './components/Toolbox';
 import { ConnectDialog } from './components/ConnectDialog';
 import { CommandPalette, ShortcutsDialog, TicketDialog, Toasts } from './components/Dialogs';
+import { MobileApp } from './mobile/MobileApp';
 
 // One bootstrap per API instance for the app's lifetime (StrictMode mounts effects twice).
 const started = new WeakMap<TradingApi, Promise<() => void>>();
@@ -25,12 +26,27 @@ function startOnce(api: TradingApi): Promise<() => void> {
   return p;
 }
 
+/** Phones get their own shell (src/mobile); tablets and up keep the panel layout. */
+const MOBILE_QUERY = '(max-width: 767px)';
+function useIsMobile(): boolean {
+  const [mobile, setMobile] = useState(() => typeof matchMedia === 'function' && matchMedia(MOBILE_QUERY).matches);
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const mq = matchMedia(MOBILE_QUERY);
+    const on = () => setMobile(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  return mobile;
+}
+
 export function App({ api }: { api: TradingApi }) {
   const t = useT();
   const theme = useTerminal((s) => s.theme);
   const lang = useTerminal((s) => s.lang);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mobile = useIsMobile();
   useKeyboardShortcuts();
 
   useEffect(() => {
@@ -58,6 +74,7 @@ export function App({ api }: { api: TradingApi }) {
       </div>
     );
   if (!ready) return <div className="h-full grid place-items-center text-muted">{t('conn.connecting')}…</div>;
+  if (mobile) return <MobileApp />;
 
   return (
     <div className="flex flex-col h-full">

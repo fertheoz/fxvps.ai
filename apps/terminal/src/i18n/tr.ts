@@ -219,4 +219,11 @@ export const tr: Record<MessageKey, string> = {
   'gw.hint': 'Yalnızca bu tarayıcı sekmesi için saklanır.',
   'gw.mock': 'Simülatör',
   'gw.failed': 'Bağlanılamadı: {error}',
+  'm.markets': 'Piyasa',
+  'm.chart': 'Grafik',
+  'm.portfolio': 'Portföy',
+  'm.account': 'Hesap',
+  'm.confirmClose': 'Kapatmak için tekrar dokunun',
+  'm.protect': 'Z/D · K/A',
+  'm.spread': 'Makas',
 };
