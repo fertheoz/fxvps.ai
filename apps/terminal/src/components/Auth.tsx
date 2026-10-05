@@ -4,6 +4,7 @@ import type { MessageKey } from '../i18n';
 import { IdentityError, isMfa, passkeysSupported, type Me } from '../auth/identity';
 import { useSession } from '../store/session';
 import { useTerminal } from '../store/terminal';
+import { getApi, isGatewayApi } from '../store/api';
 import { saveGateway } from '../store/connection';
 import { Modal } from './Dialogs';
 
@@ -420,6 +421,10 @@ function AccountSync() {
   useEffect(() => {
     if (account && accounts.some((a) => a.id === account)) setActive(account);
   }, [account, accounts, setActive]);
+  // Signed in again after the session ended: the gateway gave up on the old token (4001).
+  useEffect(() => {
+    if (isGatewayApi() && useTerminal.getState().connection === 'disconnected') void getApi().connect().catch(() => undefined);
+  }, []);
   return null;
 }
 
