@@ -422,6 +422,20 @@ impl Hub {
         self.publish(None, q, true);
     }
 
+    /// Restores the candle history saved by [`Hub::save_candles`]; returns the bar count.
+    pub fn load_candles(&self, path: &std::path::Path) -> std::io::Result<usize> {
+        let text = std::fs::read_to_string(path)?;
+        Ok(self.candles.lock().map(|mut c| c.restore(&text)).unwrap_or(0))
+    }
+
+    /// Writes the candle history to `path` (temp file + rename).
+    pub fn save_candles(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let text = self.candles.lock().map(|c| c.dump()).unwrap_or_default();
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(tmp, path)
+    }
+
     pub fn candles(
         &self,
         symbol: &str,
