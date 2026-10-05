@@ -9,7 +9,7 @@ use std::time::Duration;
 use fix_gateway::{GatewayConfig, GatewayHandle};
 use money::{Currency, Money, SCALE};
 use oms::{Command, Event};
-use risk::{GroupConfig, MarginMode, Routing, SymbolSpec};
+use risk::{AssetClass, GroupConfig, MarginMode, Routing, SymbolSpec};
 use tokio::sync::broadcast;
 
 use crate::api::{AccountNames, CoreError, InProcessCore};
@@ -111,7 +111,30 @@ pub fn fx_spec(lp_symbol: &str, tick: domain::Price) -> Option<SymbolSpec> {
     }
     let mut s = SymbolSpec::fx(&core_symbol(lp_symbol), base, quote, digits);
     s.commission_per_lot = Money::parse("3.50", Currency::USD).ok()?;
+    s.contract_size = lot_units(lp_symbol);
+    s.asset_class = asset_class(b, q);
     Some(s)
+}
+
+/// Units of the base per engine lot: 100 000 for FX; spot metals in troy
+/// ounces (gold, platinum, palladium 100; silver 5 000).
+pub fn lot_units(lp_symbol: &str) -> i64 {
+    match lp_symbol.split('/').next().unwrap_or("") {
+        "XAU" | "XPT" | "XPD" => 100,
+        "XAG" => 5_000,
+        _ => 100_000,
+    }
+}
+
+/// ESMA classes: majors = pairs of USD, EUR, JPY, GBP, CAD, CHF.
+fn asset_class(base: &str, quote: &str) -> AssetClass {
+    const MAJOR: [&str; 6] = ["USD", "EUR", "JPY", "GBP", "CAD", "CHF"];
+    match base {
+        "XAU" => AssetClass::Gold,
+        "XAG" | "XPT" | "XPD" => AssetClass::Commodity,
+        _ if MAJOR.contains(&base) && MAJOR.contains(&quote) => AssetClass::MajorFx,
+        _ => AssetClass::MinorFx,
+    }
 }
 
 /// `EUR/USD` -> `EURUSD` (same as the client wire symbol).
@@ -173,14 +196,14 @@ impl CoreStack {
         for i in &cfg.gateway.instruments {
             // LP OrderQty per engine lot (100 000 units): LMAX FX contracts are
             // 10 000 units, so 1 lot = 10 contracts; contract_size 1 = units.
-            let cs = i.contract_size.max(1);
-            if 100_000 % cs != 0 {
+            let (lot, cs) = (lot_units(&i.symbol), i.contract_size.max(1));
+            if lot % cs != 0 {
                 return Err(StackError::Config(format!(
-                    "{}: contract_size {cs} does not divide a 100000-unit lot",
+                    "{}: contract_size {cs} does not divide a {lot}-unit lot",
                     i.symbol
                 )));
             }
-            symbols.insert(&core_symbol(&i.symbol), &i.symbol, 100_000 / cs);
+            symbols.insert(&core_symbol(&i.symbol), &i.symbol, lot / cs);
         }
         let symbols = Arc::new(symbols);
         let gateway = fix_gateway::start(cfg.gateway.clone())?;
@@ -216,6 +239,28 @@ impl CoreStack {
             },
             Some(publisher),
         )?;
+        // Instruments added to the LP config after the first start become
+        // engine symbols on the next start (the seed only runs once).
+        for i in &cfg.gateway.instruments {
+            let Some(spec) = fx_spec(&i.symbol, i.tick_size) else {
+                continue;
+            };
+            let name = spec.symbol.clone();
+            let known = engine
+                .read(move |e| e.symbols().any(|x| x.symbol == name))
+                .await
+                .map_err(StackError::Engine)?;
+            let seeded = cfg
+                .seed
+                .as_ref()
+                .is_some_and(|sd| sd.symbols.iter().any(|x| x.symbol == spec.symbol));
+            if !known && !seeded {
+                engine
+                    .command(Command::AddSymbol(spec))
+                    .await
+                    .map_err(StackError::Engine)?;
+            }
+        }
         if let Some(seed) = &cfg.seed {
             let fresh = engine
                 .read(|e| e.accounts().next().is_none())
@@ -229,18 +274,6 @@ impl CoreStack {
                     }
                 }
             }
-        }
-        // Contract sizes come from the engine's symbol specs.
-        let specs: Vec<(String, i64)> = engine
-            .read(|e| {
-                e.symbols()
-                    .map(|s| (s.symbol.clone(), s.contract_size))
-                    .collect()
-            })
-            .await
-            .map_err(StackError::Engine)?;
-        if specs.iter().any(|(_, cs)| *cs != 100_000) {
-            tracing::warn!("non-standard contract sizes: LP mapping assumes 100000");
         }
         let bridge = tokio::spawn(run_bridge(
             engine.clone(),
@@ -270,5 +303,39 @@ impl CoreStack {
         self.gateway.shutdown().await;
         self.engine.shutdown();
         let _ = tokio::task::spawn_blocking(move || self.writer.join()).await;
+    }
+}
+
+#[cfg(test)]
+mod spec_tests {
+    use super::*;
+
+    #[test]
+    fn fx_and_metal_specs() {
+        let px = |s: &str| s.parse::<domain::Price>().unwrap();
+        let eur = fx_spec("EUR/USD", px("0.00001")).unwrap();
+        assert_eq!((eur.contract_size, eur.digits), (100_000, 5));
+        assert_eq!(eur.asset_class, AssetClass::MajorFx);
+        assert_eq!(
+            fx_spec("EUR/TRY", px("0.00001")).unwrap().asset_class,
+            AssetClass::MinorFx
+        );
+        let xau = fx_spec("XAU/USD", px("0.01")).unwrap();
+        assert_eq!(
+            (xau.symbol.as_str(), xau.contract_size, xau.digits),
+            ("XAUUSD", 100, 2)
+        );
+        assert_eq!(xau.asset_class, AssetClass::Gold);
+        let xag = fx_spec("XAG/USD", px("0.001")).unwrap();
+        assert_eq!(
+            (xag.contract_size, xag.asset_class),
+            (5_000, AssetClass::Commodity)
+        );
+        // LMAX contracts: gold 10 oz, silver 500 oz -> 10 contracts per lot.
+        assert_eq!(lot_units("XAU/USD") / 10, 10);
+        assert_eq!(lot_units("XAG/USD") / 500, 10);
+        // Minis / indices are not mapped.
+        assert!(fx_spec("XAU/USDm", px("0.01")).is_none());
+        assert!(fx_spec("AUS200", px("0.1")).is_none());
     }
 }

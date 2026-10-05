@@ -112,6 +112,7 @@ Konsol → **LP** → **LP bağlantı ayarları**:
   GBP/USD 4002 0.00001 10000
   USD/JPY 4004 0.001 10000
   ```
+- **Tam liste** (84 FX paritesi + 7 değerli maden: altın, gümüş, platin, paladyum): `deploy/lmax-demo/lmax-instruments.txt` içeriğini kutuya yapıştırın. Satırlar `SEMBOL ID tick kontrat` biçiminde.
 - Diğer alanlar: LP `LMAX` · Heartbeat `30` · SecurityIDSource `8`.
 - **Kaydet** → trading kabı yeniden başlar (yaklaşık 5–10 sn) → tabloda MD ve TRADING satırları **logged_on** olur.
 
