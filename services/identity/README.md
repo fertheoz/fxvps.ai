@@ -68,7 +68,9 @@ revokes the whole session (token family). Password reset revokes all sessions.
 as `fxvps_rt` (`HttpOnly; Secure; SameSite=Strict; Path=/v1/token`) and never appears
 in the body. Cookie-authenticated calls (`/v1/token/refresh`, `/v1/token/revoke`)
 must carry `X-Fxvps-Csrf: 1` (forces a CORS preflight) and, when present, an allowed
-`Origin`. **Desktop / mobile (bearer mode, default)** — the refresh token is returned
+`Origin`. Each allowed origin after the first gets its own cookie
+(`fxvps_rt_<host>`, e.g. `fxvps_rt_console_fxvps_ai`), so two web apps open in one
+browser hold separate sessions and never rotate each other's token. **Desktop / mobile (bearer mode, default)** — the refresh token is returned
 in the body and sent back in the JSON body.
 
 ## HTTP API
