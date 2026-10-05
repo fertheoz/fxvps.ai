@@ -49,7 +49,7 @@ Zero Trust → Networks → Tunnels → `fxvps-console` → **Public Hostname**.
 ```bash
 cd /opt/fxvps.ai && git pull                                   # bu brifingi içeren main
 cd deploy/lmax-demo
-docker compose --profile tunnel down                           # eski kaplar (fix-gateway, core-engine, console, cloudflared)
+docker compose --profile tunnel down --remove-orphans          # ESKİ .env ile, yeni .env yazılmadan önce (eski fix-gateway/core-engine portları tutar)
 cp .env .env.yedek-$(date +%Y%m%d%H%M)
 mkdir -p fix-store core-data pg-data keys
 chown 65532:65532 fix-store core-data
