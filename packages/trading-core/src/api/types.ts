@@ -156,6 +156,23 @@ export interface Deal {
   reason: 'client' | 'sl' | 'tp' | 'stop_out' | 'order';
 }
 
+/** A finished order (order history). */
+export interface OrderHistoryEntry {
+  id: string;
+  accountId: string;
+  symbol: string;
+  side: Side;
+  type: OrderType;
+  volume: number;
+  filled: number;
+  /** Trigger price of a pending order (limit / stop), if any. */
+  price?: number;
+  avgPrice?: number;
+  status: 'filled' | 'cancelled' | 'rejected' | 'expired' | 'working';
+  time: number;
+  text?: string;
+}
+
 export interface OrderRequest {
   accountId: string;
   symbol: string;
@@ -210,6 +227,8 @@ export interface TradingApi {
   getSymbols(): Promise<SymbolSpec[]>;
   getBars(symbol: string, timeframe: Timeframe, count: number): Promise<Bar[]>;
   getHistory(accountId: string): Promise<Deal[]>;
+  /** Finished orders, newest first (empty where the backend has none). */
+  getOrderHistory(accountId: string): Promise<OrderHistoryEntry[]>;
   subscribeQuotes(symbols: string[], onQuotes: (quotes: Quote[]) => void): Unsubscribe;
   subscribeDepth(symbol: string, onDepth: (depth: Depth) => void): Unsubscribe;
   onEvent(listener: (event: TradingEvent) => void): Unsubscribe;

@@ -348,6 +348,8 @@ pub trait CoreApi: Send + Sync {
     fn positions(&self, account: &str) -> CoreFuture<'_, Vec<PositionView>>;
     /// Pending (working) orders of an account.
     fn orders(&self, account: &str) -> CoreFuture<'_, Vec<OrderView>>;
+    /// Finished orders of an account (filled, cancelled, rejected, expired), newest first.
+    fn order_history(&self, account: &str) -> CoreFuture<'_, Vec<OrderView>>;
     /// Deal history page of an account.
     fn deals(&self, account: &str, query: DealQuery) -> CoreFuture<'_, DealPage>;
     /// All core events; consumers filter by account / group.
@@ -834,6 +836,18 @@ impl CoreApi for InProcessCore {
             let names = self.names.clone();
             self.engine
                 .read(move |e| output::pending_orders_view(e, no, &names))
+                .await
+                .map_err(unavailable)
+        })
+    }
+
+    fn order_history(&self, account: &str) -> CoreFuture<'_, Vec<OrderView>> {
+        let account = account.to_string();
+        Box::pin(async move {
+            let no = self.account_no(&account)?;
+            let names = self.names.clone();
+            self.engine
+                .read(move |e| output::order_history_view(e, no, &names, 500))
                 .await
                 .map_err(unavailable)
         })

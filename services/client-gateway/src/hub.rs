@@ -630,6 +630,17 @@ impl Hub {
             .collect())
     }
 
+    /// Finished orders of an account (OrderUpdate shape), newest first.
+    pub async fn order_history(&self, account_id: &str) -> Result<Vec<OrderUpdate>, CmdError> {
+        let core = self.core.as_ref().ok_or_else(unavailable)?;
+        Ok(core
+            .order_history(account_id)
+            .await?
+            .iter()
+            .map(order_update)
+            .collect())
+    }
+
     /// One page of deal history.
     pub async fn deals(&self, account_id: &str, q: DealQuery) -> Result<DealPage, CmdError> {
         let core = self.core.as_ref().ok_or_else(unavailable)?;

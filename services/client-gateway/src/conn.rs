@@ -572,7 +572,12 @@ async fn handle(
                     "account not authorized",
                 );
             }
-            match hub.orders(&r.account_id).await {
+            let list = if r.include_history {
+                hub.order_history(&r.account_id).await
+            } else {
+                hub.orders(&r.account_id).await
+            };
+            match list {
                 Ok(orders) => out.send(Body::OrderList(OrderList {
                     request_id: r.request_id,
                     account_id: r.account_id,

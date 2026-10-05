@@ -14,6 +14,7 @@ import type {
   TradingApi,
   TradingEvent,
   Unsubscribe,
+  OrderHistoryEntry,
 } from './types';
 import { TIMEFRAME_SECONDS } from './types';
 import { MOCK_SYMBOLS, toSpec } from './symbols';
@@ -138,6 +139,23 @@ export class MockTradingApi implements TradingApi {
   async getHistory(accountId: string): Promise<Deal[]> {
     await this.delay();
     return [...(this.deals.get(accountId) ?? [])];
+  }
+
+  /** The simulator keeps no order history: every deal stands for one filled market order. */
+  async getOrderHistory(accountId: string): Promise<OrderHistoryEntry[]> {
+    await this.delay();
+    return [...(this.deals.get(accountId) ?? [])].reverse().map((d) => ({
+      id: d.id,
+      accountId,
+      symbol: d.symbol,
+      side: d.side,
+      type: 'market' as const,
+      volume: d.volume,
+      filled: d.volume,
+      avgPrice: d.price,
+      status: 'filled' as const,
+      time: d.time,
+    }));
   }
 
   async getBars(symbol: string, timeframe: Timeframe, count: number): Promise<Bar[]> {

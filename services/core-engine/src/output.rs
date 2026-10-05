@@ -129,6 +129,24 @@ pub fn positions_view(e: &Engine, account: AccountNo, names: &AccountNames) -> V
         .collect()
 }
 
+/// Every order of an account that is not waiting any more (filled, cancelled,
+/// rejected, expired, working), newest first, at most `limit`.
+pub fn order_history_view(
+    e: &Engine,
+    account: AccountNo,
+    names: &AccountNames,
+    limit: usize,
+) -> Vec<OrderView> {
+    let mut v: Vec<OrderView> = e
+        .orders()
+        .filter(|o| o.req.account == account && !o.is_pending())
+        .filter_map(|o| order_view(e, o.id, None, names, o.created_ts))
+        .collect();
+    v.sort_by(|a, b| b.order_id.cmp(&a.order_id));
+    v.truncate(limit);
+    v
+}
+
 /// Pending (working) orders of an account, oldest first.
 pub fn pending_orders_view(e: &Engine, account: AccountNo, names: &AccountNames) -> Vec<OrderView> {
     e.orders()
