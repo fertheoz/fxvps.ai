@@ -24,6 +24,23 @@ import { dragProtection, hitLine } from '../lib/chartDrag';
 
 type Line = ISeriesApi<'Line'>;
 
+/**
+ * Lightweight Charts™ (Apache 2.0) asks for the attribution notice and a link to
+ * tradingview.com on a page available to users; the on-chart logo is one way to
+ * satisfy it, the About / shortcuts screens are ours (see `ChartAttribution`).
+ */
+export function ChartAttribution({ className = '' }: { className?: string }) {
+  return (
+    <p className={`text-[11px] text-muted ${className}`} data-testid="chart-attribution">
+      Charts:{' '}
+      <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer" className="underline hover:text-fg">
+        TradingView Lightweight Charts™
+      </a>{' '}
+      © TradingView, Inc.
+    </p>
+  );
+}
+
 /** Height of the draft line's touch target (px). */
 const DRAFT_HANDLE = 44;
 /** Press-and-hold on a pending order line for this long to start moving it. */
@@ -109,7 +126,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     if (!host.current) return;
     const chart = createChart(host.current, {
       autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: 'transparent' }, attributionLogo: true, fontSize: 11 },
+      layout: { background: { type: ColorType.Solid, color: 'transparent' }, attributionLogo: false, fontSize: 11 },
       crosshair: { mode: CrosshairMode.Normal },
       timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 6 },
       rightPriceScale: { borderVisible: false },
