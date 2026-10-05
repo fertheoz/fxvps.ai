@@ -26,6 +26,11 @@ type Line = ISeriesApi<'Line'>;
 
 /** Height of the draft line's touch target (px). */
 const DRAFT_HANDLE = 44;
+/** Press-and-hold on a pending order line for this long to start moving it. */
+const PRESS_MS = 450;
+/** Pointer tolerance for hitting an order line / cancelling the press (px). */
+const PRESS_HIT_PX = 18;
+const PRESS_MOVE_PX = 8;
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
@@ -90,6 +95,11 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const protRef = useRef<{ line: IPriceLine; positionId: string; kind: 'sl' | 'tp' }[]>([]);
   const dragRef = useRef<{ line: IPriceLine; positionId: string; kind: 'sl' | 'tp'; price: number } | null>(null);
   const draftEl = useRef<HTMLDivElement>(null);
+  /** Pending order being moved after a long press (price = where the line is now). */
+  const [edit, setEdit] = useState<{ id: string; price: number } | null>(null);
+  const pressRef = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
+  const activeAccountId = useTerminal((s) => s.activeAccountId);
+  const toast = useTerminal((s) => s.toast);
   const [loadedKey, setLoadedKey] = useState('');
   const [lotsText, setLotsText] = useState(volumeToLots(oneClickVolume));
   const [busy, setBusy] = useState(false);
@@ -336,21 +346,74 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     e.currentTarget.style.cursor = lineAt(e.clientY) ? 'ns-resize' : '';
   };
 
-  // The draft line follows the price scale: placed after every render (ticks re-render the panel).
+  // The movable line: a pending order picked up by a long press, else the caller's draft.
+  const editOrder = edit ? orders.find((o) => o.id === edit.id) : undefined;
+  const line: DraftLine | undefined =
+    edit && editOrder && spec
+      ? {
+          price: edit.price,
+          label: `${editOrder.side.toUpperCase()} ${editOrder.type.replace('_', ' ').toUpperCase()} ${volumeToLots(editOrder.volume)} ${formatPrice(edit.price, spec.digits)}`,
+          tone: editOrder.side === 'buy' ? 'up' : 'down',
+          onMove: (price) => setEdit({ id: edit.id, price }),
+        }
+      : draft;
+  // The line follows the price scale: placed after every render (ticks re-render the panel).
   useEffect(() => {
     const el = draftEl.current;
     const series = candleRef.current;
-    if (!el || !series || !draft) return;
-    const y = series.priceToCoordinate(draft.price);
+    if (!el || !series || !line) return;
+    const y = series.priceToCoordinate(line.price);
     el.style.display = y === null ? 'none' : '';
     if (y !== null) el.style.top = `${y - DRAFT_HANDLE / 2}px`;
   });
+  useEffect(() => {
+    // Moving a line must not scroll the chart; the press timer dies with the panel.
+    chartRef.current?.applyOptions({ handleScroll: !edit, handleScale: !edit });
+    return () => {
+      if (pressRef.current) clearTimeout(pressRef.current.timer);
+    };
+  }, [edit]);
   const dragDraft = (e: React.PointerEvent<HTMLDivElement>) => {
     const el = host.current;
     const series = candleRef.current;
-    if (!draft || !spec || !el || !series || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    if (!line || !spec || !el || !series || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
     const p = series.coordinateToPrice(e.clientY - el.getBoundingClientRect().top);
-    if (p !== null && p > 0) draft.onMove(roundPrice(p, spec.digits));
+    if (p !== null && p > 0) line.onMove(roundPrice(p, spec.digits));
+  };
+  /** Releasing a moved pending order sends the new trigger price. */
+  const dropEdit = async () => {
+    const e = edit;
+    setEdit(null);
+    if (!e || !editOrder || !activeAccountId || e.price === editOrder.price) return;
+    const r = await getApi().modifyOrder(activeAccountId, e.id, { price: e.price });
+    if (!r.ok) toast('error', t('toast.rejected', { error: r.error ?? '' }));
+  };
+  /** Long press on a pending order line picks it up (touch and mouse). */
+  const pressStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    const series = candleRef.current;
+    const el = host.current;
+    if (edit || draft || !series || !el || !spec) return;
+    const y = e.clientY - el.getBoundingClientRect().top;
+    const hit = orders.find((o) => {
+      if (o.symbol !== spec.name) return false;
+      const c = series.priceToCoordinate(o.price);
+      return c !== null && Math.abs(c - y) <= PRESS_HIT_PX;
+    });
+    if (!hit) return;
+    const timer = setTimeout(() => {
+      pressRef.current = null;
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate(15);
+      setEdit({ id: hit.id, price: hit.price });
+    }, PRESS_MS);
+    pressRef.current = { timer, x: e.clientX, y: e.clientY };
+  };
+  const pressMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const p = pressRef.current;
+    if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > PRESS_MOVE_PX) pressEnd();
+  };
+  const pressEnd = () => {
+    if (pressRef.current) clearTimeout(pressRef.current.timer);
+    pressRef.current = null;
   };
 
   if (!slot) return null;
@@ -407,21 +470,33 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
         )}
       </div>
       <div className="relative flex-1 min-h-0">
-        <div ref={host} className="absolute inset-0" onMouseDownCapture={onPointerDown} onMouseMove={onHover} data-testid={`chart-canvas-${index}`} />
+        <div
+          ref={host}
+          className="absolute inset-0"
+          onMouseDownCapture={onPointerDown}
+          onMouseMove={onHover}
+          onPointerDown={pressStart}
+          onPointerMove={pressMove}
+          onPointerUp={pressEnd}
+          onPointerCancel={pressEnd}
+          data-testid={`chart-canvas-${index}`}
+        />
         {loading && <div className="absolute inset-0 grid place-items-center text-muted">{t('chart.loading')}</div>}
-        {draft && (
+        {line && (
           <div
             ref={draftEl}
             className="absolute left-0 right-0 z-20 flex items-center touch-none cursor-ns-resize select-none"
             style={{ height: DRAFT_HANDLE }}
             onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
             onPointerMove={dragDraft}
-            data-testid={`chart-draft-${index}`}
+            onPointerUp={() => void dropEdit()}
+            onPointerCancel={() => void dropEdit()}
+            data-testid={edit ? `chart-move-${index}` : `chart-draft-${index}`}
           >
-            <span className={`h-7 px-3 ml-2 rounded-full grid place-items-center text-[12px] font-semibold text-white shadow-lg ${draft.tone === 'up' ? 'bg-up' : 'bg-down'}`}>
-              ↕ {draft.label}
+            <span className={`h-7 px-3 ml-2 rounded-full grid place-items-center text-[12px] font-semibold text-white shadow-lg ${line.tone === 'up' ? 'bg-up' : 'bg-down'}`}>
+              ↕ {line.label}
             </span>
-            <span className={`flex-1 border-t-2 border-dashed ${draft.tone === 'up' ? 'border-up' : 'border-down'}`} />
+            <span className={`flex-1 border-t-2 border-dashed ${line.tone === 'up' ? 'border-up' : 'border-down'}`} />
           </div>
         )}
         {spec && quote && !bare && (
