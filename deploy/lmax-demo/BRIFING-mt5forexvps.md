@@ -11,7 +11,7 @@ fxvps.ai'nin `fix-gateway` servisini (tek Rust ikilisi, Docker imajı) LMAX **de
 ## Kapsam sınırları (mt5forexvps kuralları geçerli)
 - **Müşteri kutularına** (LXC 1xx, VM 106) ve **golden şablonlara** (11xx, onaylı şablon mührü) dokunulmaz.
 - mt5 üretim kaplarına (`mt5forexvps-api-1`, `-web-1`, `-postgres-1`) ve `/opt/mt5forexvps`'e dokunulmaz. Bunların docker compose'u kullanılmaz.
-- fix-gateway **ayrı bir LXC'de** çalışır. Kimlik önerisi: **CT 980** (boşsa; 9xx aralığı, 966 kapı için ayrılmış, ona dokunma). Ad: `fxvps-lmax-demo`.
+- fix-gateway **ayrı bir LXC'de** çalışır. Kimlik önerisi: **CT 970** (kurucu kararı; 980 golden soyu, 966 kapı — ikisine de dokunma). Ad: `fxvps-lmax-demo`.
 - Hiçbir şey "temizlik" diye silinmez. İş bitince CT durdurulur. Silmeye kurucu karar verir.
 - LMAX parolası yalnız CT içindeki `.env` dosyasında durur (`chmod 600`). Log'a, bilete, Telegram'a, depoya yazılmaz, ekrana basılmaz.
 
@@ -28,8 +28,8 @@ fxvps.ai'nin `fix-gateway` servisini (tek Rust ikilisi, Docker imajı) LMAX **de
 > LMAX çoğu zaman bağlanan IP'yi beyaz listeye alır. Seçilen IP'yi kurucu LMAX'e bildirir. Logon "connection refused/reset" ile düşüyorsa ilk şüpheli budur.
 
 ## Adımlar
-1. **Ön kontrol (salt okuma):** CT 980 boş mu, seçilen IP başka bir kutuda kullanılıyor mu (`pct list`, `pct config <id>` ile IP taraması, düğümde `ip neigh`)? Çakışma varsa dur ve kurucuya sor.
-2. **CT'yi oluştur:** Debian şablonundan CT 980. 1 vCPU, 1 GB RAM, 8 GB disk, `nesting=1`, seçilen genel IP/ağ geçidi, `onboot=0`. Başlat.
+1. **Ön kontrol (salt okuma):** CT 970 boş mu, seçilen IP başka bir kutuda kullanılıyor mu (`pct list`, `pct config <id>` ile IP taraması, düğümde `ip neigh`)? Çakışma varsa dur ve kurucuya sor.
+2. **CT'yi oluştur:** Debian şablonundan CT 970. 1 vCPU, 1 GB RAM, 8 GB disk, `nesting=1`, seçilen genel IP/ağ geçidi, `onboot=0`. Başlat.
 3. **CT içinde Docker:** `apt-get install -y docker.io docker-compose-plugin git` (paket adı sürüme göre `docker-compose` olabilir).
 4. **Paketi getir:** `git clone https://github.com/fertheoz/fxvps.ai /opt/fxvps.ai` (depo public). Sonra `cd /opt/fxvps.ai/deploy/lmax-demo`.
 5. **İmaj:** `docker pull ghcr.io/fertheoz/fxvps-fix-gateway:latest`. Çekme yetki hatası verirse (paket private) imajı yerelde derle: depo kökünde `docker build -f infra/docker/fix-gateway.Dockerfile -t ghcr.io/fertheoz/fxvps-fix-gateway:latest .` (Rust derlemesi; 1 vCPU'da uzun sürer, geçici olarak 2–4 vCPU verilebilir).
@@ -54,9 +54,9 @@ fxvps.ai'nin `fix-gateway` servisini (tek Rust ikilisi, Docker imajı) LMAX **de
 Hata metnini (parola içermeyen satırlar) fxvps.ai tarafına ilet: kodu orada düzeltip yeni imaj çıkarırız.
 
 ## Bitirme / geri alma
-- Durdur: `docker compose down` (CT içinde), sonra `pct stop 980`.
+- Durdur: `docker compose down` (CT içinde), sonra `pct stop 970`.
 - CT'yi silmek ve IP'yi geri vermek kurucunun kararıdır.
 - `/opt/fxvps.ai/deploy/lmax-demo/.env` CT ile birlikte gider. CT silinmeyecekse `.env`'i elle sil.
 
 ## Rapor
-`docs/agent-memory/` altına kısa bir not düş: CT kimliği, IP, başlangıç tarihi, logon sonucu (parolasız). ACIK-ISLER'e "fxvps LMAX demo CT 980 — geçici, sökülecek" maddesini ekle.
+`docs/agent-memory/` altına kısa bir not düş: CT kimliği, IP, başlangıç tarihi, logon sonucu (parolasız). ACIK-ISLER'e "fxvps LMAX demo CT 970 — geçici, sökülecek" maddesini ekle.
