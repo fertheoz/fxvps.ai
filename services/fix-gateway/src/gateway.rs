@@ -12,7 +12,7 @@ use fix_session::{
     run_session, FileStore, MemoryStore, MessageStore, Role, Session, SessionCommand,
     SessionConfig, SessionEvent,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -21,7 +21,7 @@ use tracing::{info, warn};
 use crate::config::{GatewayConfig, SessionEndpoint};
 use crate::normalize::{self, Books};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionKind {
     MarketData,
     Trading,
@@ -129,7 +129,7 @@ impl GatewayHandle {
 }
 
 /// Snapshot of one FIX session as seen by the gateway.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionStatus {
     pub kind: SessionKind,
     pub sender_comp_id: String,

@@ -122,6 +122,8 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
       FIX_GATEWAY_MD_PASSWORD: ${FIX_GATEWAY_MD_PASSWORD:-demo}
       FIX_GATEWAY_TRADE_PASSWORD: ${FIX_GATEWAY_TRADE_PASSWORD:-demo}
+      # Session table for core-engine (CORE_LP_STATUS_URL=http://fix-gateway:9890/status).
+      FIX_STATUS_ADDR: 0.0.0.0:9890
     volumes: ["./config/fix-gateway.toml:/app/config/compose.toml:ro"]
     depends_on:
       lp-simulator: { condition: service_started }

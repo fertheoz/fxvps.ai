@@ -21,11 +21,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if flag("CORE_SEED") && admin::seed::seed_if_empty(&handle).await? {
         tracing::info!("seeded demo data");
     }
-    let app = admin::app(
-        handle.clone(),
-        auth,
-        AdminConfig::new(&dir).with_env(flag("CORE_DEV_AUTH"))?,
-    )?;
+    let mut admin_cfg = AdminConfig::new(&dir).with_env(flag("CORE_DEV_AUTH"))?;
+    if let Some(url) = std::env::var("CORE_LP_STATUS_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        tracing::info!(%url, "polling fix-gateway session status");
+        admin_cfg.lp_status = Some(admin::lp_poll::spawn(
+            url,
+            std::time::Duration::from_secs(2),
+        ));
+    }
+    let app = admin::app(handle.clone(), auth, admin_cfg)?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("core-engine admin API on {addr}");
     axum::serve(listener, app)

@@ -38,6 +38,7 @@ Service wrapper around `oms::Engine`:
 | `CORE_DEV_AUTH=1` | enables `POST /auth/dev-token {role, name?}` with a random per-process key; refused with any `CORE_JWT_*` key or a non-loopback `CORE_ADMIN_ADDR`; `sub` = `dev-<role>` |
 | `CORE_DEV_AUTH_ADMIN=1` | dev tokens may carry `admin` |
 | `CORE_CORS_ORIGINS` | comma separated allowed origins (`*` = any); unset = no CORS |
+| `CORE_LP_STATUS_URL` | polls a separate fix-gateway's `GET /status` (its `FIX_STATUS_ADDR`) every 2 s for `/v1/lp/sessions`; unreachable keeps the last rows marked down |
 | `CORE_SEED=1` | seeds demo symbols/groups/accounts/positions into an empty engine |
 
 Startup fails without a JWT key unless `CORE_DEV_AUTH=1` (loopback only). Leeway on `exp` is 5 s.
