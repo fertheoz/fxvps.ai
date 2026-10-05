@@ -178,7 +178,12 @@ export function startIdentitySession() {
   const tick = async () => {
     const t = await identityRefresh();
     if (t) setToken(t);
-    else if (decodeToken(getToken()) === null) setToken(null);
+    else if (decodeToken(getToken()) === null) {
+      // No session any more: stop asking (a forgotten tab must not keep hitting the identity service).
+      setToken(null);
+      if (refresher) clearInterval(refresher);
+      refresher = null;
+    }
   };
   void tick();
   refresher = setInterval(() => void tick(), 30_000);

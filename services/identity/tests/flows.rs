@@ -420,6 +420,52 @@ async fn totp_lockout_on_guessing() {
     assert!(locked, "second-factor guessing must lock the account");
 }
 
+/// Every allowed origin after the first has its own refresh cookie, so two web apps
+/// in one browser never rotate each other's session.
+#[tokio::test]
+async fn cookie_is_per_origin() {
+    let h = H::new();
+    h.register_verified("olga@example.com").await;
+    let second = [("x-fxvps-csrf", "1"), ("origin", "http://127.0.0.1:5173")];
+    let r = h
+        .req(
+            "POST",
+            "/v1/login",
+            Some(json!({"email": "olga@example.com", "password": PW, "session": "cookie"})),
+            &second,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    let sc = r.headers.get("set-cookie").unwrap().to_str().unwrap();
+    assert!(sc.starts_with("fxvps_rt_127_0_0_1_5173="), "{sc}");
+    let cookie = sc.split(';').next().unwrap().to_string();
+    // The first origin does not see the second app's session.
+    let r = h
+        .req(
+            "POST",
+            "/v1/token/refresh",
+            None,
+            &[
+                ("cookie", &cookie),
+                ("x-fxvps-csrf", "1"),
+                ("origin", "http://localhost:5173"),
+            ],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    let r = h
+        .req(
+            "POST",
+            "/v1/token/refresh",
+            None,
+            &[("cookie", &cookie), second[0], second[1]],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    let sc = r.headers.get("set-cookie").unwrap().to_str().unwrap();
+    assert!(sc.starts_with("fxvps_rt_127_0_0_1_5173="), "{sc}");
+}
+
 #[tokio::test]
 async fn cookie_mode_is_csrf_safe() {
     let h = H::new();

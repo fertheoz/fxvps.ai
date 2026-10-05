@@ -230,6 +230,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/passkeys/login/finish", post(passkey_login_finish))
         .layer(axum::middleware::from_fn_with_state(
             app.clone(),
+            origin_cookie,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            app.clone(),
             rate_limit,
         ));
     // Authenticated routes that change security state or are worth guessing
@@ -461,6 +465,58 @@ async fn new_session(
     )
     .await;
     Ok(token_response(app, user, access, accounts, refresh, mode))
+}
+
+/// Cookie name suffix for web apps other than the first allowed origin, e.g.
+/// `https://console.fxvps.ai` -> `console_fxvps_ai`.
+fn origin_cookie_suffix(app: &App, h: &HeaderMap) -> Option<String> {
+    let o = h.get(ORIGIN)?.to_str().ok()?;
+    let i = app.cfg.allowed_origins.iter().position(|a| a == o)?;
+    if i == 0 {
+        return None;
+    }
+    let host = o.split_once("://").map_or(o, |(_, h)| h);
+    Some(
+        host.chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect(),
+    )
+}
+
+/// One refresh cookie per web app: every allowed origin after the first gets its own
+/// cookie (`fxvps_rt_<host>`), so two apps open in one browser (terminal, console)
+/// hold separate sessions and never rotate each other's token. The handlers only
+/// ever see and set [`REFRESH_COOKIE`]; the name is mapped here.
+async fn origin_cookie(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Response {
+    let Some(suffix) = origin_cookie_suffix(&app, req.headers()) else {
+        return next.run(req).await;
+    };
+    let name = format!("{REFRESH_COOKIE}_{suffix}");
+    let own = req
+        .headers()
+        .get_all(COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .filter_map(|kv| kv.trim().split_once('='))
+        .find(|(k, _)| *k == name)
+        .and_then(|(_, v)| HeaderValue::from_str(&format!("{REFRESH_COOKIE}={v}")).ok());
+    req.headers_mut().remove(COOKIE);
+    if let Some(v) = own {
+        req.headers_mut().insert(COOKIE, v);
+    }
+    let mut res = next.run(req).await;
+    let renamed = res
+        .headers()
+        .get(SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix(REFRESH_COOKIE))
+        .filter(|rest| rest.starts_with('='))
+        .and_then(|rest| HeaderValue::from_str(&format!("{name}{rest}")).ok());
+    if let Some(v) = renamed {
+        res.headers_mut().insert(SET_COOKIE, v);
+    }
+    res
 }
 
 fn read_cookie(h: &HeaderMap) -> Option<String> {
