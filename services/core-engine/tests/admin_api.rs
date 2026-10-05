@@ -399,6 +399,13 @@ async fn rbac_matrix_is_enforced() {
         (Method::GET, "/v1/lp/config", None, "lp.view"),
         (Method::PUT, "/v1/lp/config", Some(json!({})), "lp.manage"),
         (Method::GET, "/v1/reports/statements", None, "reports.view"),
+        (
+            Method::GET,
+            "/v1/reports/lp-executions",
+            None,
+            "reports.view",
+        ),
+        (Method::GET, "/v1/reports/revenue", None, "reports.view"),
         (Method::GET, "/v1/audit", None, "audit.view"),
         (Method::GET, "/v1/admin-users", None, "users.view"),
         (Method::PUT, "/v1/admin-users/u1", Some(user), "users.edit"),

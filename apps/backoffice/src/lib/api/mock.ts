@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, LpConfig, BalanceOpResult, DashboardStats, MarginCallRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, LpConfig, BalanceOpResult, DashboardStats, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 export class ForbiddenError extends Error {
@@ -307,6 +307,42 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
 
     async listTrades() { return delay(s.trades); },
+    async listLpExecutions(): Promise<LpExecution[]> {
+      // Demo data: every A-book closed trade was hedged 1:1 at the LP, one pip inside the client price.
+      const rows: LpExecution[] = s.trades.filter((t) => t.book === "A").slice(0, 100).map((t) => {
+        const lpPrice = Number((t.closePrice + (t.side === "buy" ? 0.0001 : -0.0001)).toFixed(5));
+        const side = t.side === "buy" ? "sell" : "buy";
+        return {
+          id: `lp-${t.id}`, symbol: t.symbol, side, lots: t.lots, filledLots: t.lots, avgPrice: lpPrice, status: "filled", reason: null, createdAt: t.closedAt,
+          fills: [{ execId: `x-${t.id}`, lots: t.lots, price: lpPrice, at: t.closedAt }],
+          clients: [{ orderId: t.id, login: t.login, lots: t.lots, price: t.closePrice }],
+        };
+      });
+      return delay(rows);
+    },
+    async revenue(): Promise<RevenueReport> {
+      const dayAgo = Date.now() - 86_400_000;
+      const zero = () => ({ markup: 0, bBook: 0, commission: 0, lp: 0, total: 0 });
+      const total = zero(), last24h = zero();
+      const rows: RevenueRow[] = [];
+      for (const t of s.trades.slice(0, 200)) {
+        const aBook = t.book === "A";
+        // A-book: a markup of roughly 2% of the absolute client result; B-book: the broker is the counterparty.
+        const broker = aBook ? Math.round(Math.abs(t.pnl) * 0.02) : -t.pnl;
+        const lp = aBook ? t.pnl + broker : 0;
+        const fee = -t.commission;
+        for (const tot of [total, ...(new Date(t.closedAt).getTime() >= dayAgo ? [last24h] : [])]) {
+          if (aBook) tot.markup += broker; else tot.bBook += broker;
+          tot.commission += fee;
+          tot.lp += lp;
+          tot.total += broker + fee;
+        }
+        const base = { at: t.closedAt, book: t.book, login: t.login, symbol: t.symbol, lots: t.lots, price: t.closePrice, lpPrice: aBook ? t.closePrice : null, ref: `deal ${t.id}` };
+        rows.push({ ...base, id: `r-${t.id}`, kind: "pnl", client: t.pnl, broker, lp });
+        if (fee) rows.push({ ...base, id: `c-${t.id}`, kind: "commission", client: t.commission, broker: fee, lp: 0 });
+      }
+      return delay({ total, last24h, rows });
+    },
     async statements(): Promise<Statement[]> {
       const rows: Statement[] = s.clients.filter((c) => c.parentId === null).slice(0, 30).map((c) => {
         const ts = s.trades.filter((t) => t.login === c.login);

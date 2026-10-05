@@ -12,6 +12,7 @@ export default function DashboardPage() {
   const stats = useApiQuery("dashboard", [], { live: 5000 });
   const exp = useApiQuery("exposure", [], { live: 5000 });
   const fix = useApiQuery("listFixSessions", [], { live: 5000 });
+  const lpx = useApiQuery("listLpExecutions", [], { live: 5000 });
   const compact = (v: number) => f.money(v, "USD", { compact: true });
   const s = stats.data;
   const mismatches = (exp.data ?? []).filter((e) => Math.abs(e.aBookLots - e.lpLots) > 0.001);
@@ -56,6 +57,44 @@ export default function DashboardPage() {
         <Card className="xl:col-span-2">
           <CardHeader><CardTitle>{t("dash.pnlChart")}</CardTitle></CardHeader>
           <CardContent>{s ? <PnlChart data={s.pnlSeries} fmt={compact} /> : t("common.loading")}</CardContent>
+        </Card>
+        <Card className="xl:col-span-3" data-testid="dash-lp-executions">
+          <CardHeader><CardTitle>{t("dash.lpExecutions")}</CardTitle></CardHeader>
+          <CardContent className="overflow-x-auto">
+            {lpx.data && lpx.data.length === 0 && <div className="text-sm text-muted-foreground">{t("dash.noExecutions")}</div>}
+            {lpx.data && lpx.data.length > 0 && (
+              <table className="w-full text-sm tabular-nums">
+                <thead className="text-left text-xs text-muted-foreground">
+                  <tr>
+                    <th className="py-1 pr-3 font-normal">{t("audit.at")}</th>
+                    <th className="pr-3 font-normal">{t("positions.symbol")}</th>
+                    <th className="pr-3 font-normal">{t("positions.side")}</th>
+                    <th className="pr-3 font-normal">{t("positions.lots")}</th>
+                    <th className="pr-3 font-normal">{t("reports.lpPrice")}</th>
+                    <th className="pr-3 font-normal">{t("reports.clientPrice")}</th>
+                    <th className="pr-3 font-normal">{t("clients.login")}</th>
+                    <th className="pr-3 font-normal">{t("reports.status")}</th>
+                    <th className="font-normal">{t("reports.execId")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lpx.data.slice(0, 8).map((x) => (
+                    <tr key={x.id} className="border-t border-border/60">
+                      <td className="py-1.5 pr-3 text-muted-foreground">{f.date(x.createdAt)}</td>
+                      <td className="pr-3 font-medium">{x.symbol}</td>
+                      <td className={`pr-3 ${x.side === "buy" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{x.side}</td>
+                      <td className="pr-3">{x.filledLots} / {x.lots}</td>
+                      <td className="pr-3">{x.avgPrice || "—"}</td>
+                      <td className="pr-3">{x.clients.map((c) => c.price).join(", ") || "—"}</td>
+                      <td className="pr-3">{x.clients.map((c) => c.login).join(", ")}</td>
+                      <td className={`pr-3 ${x.status === "rejected" ? "text-red-600 dark:text-red-400" : ""}`} title={x.reason ?? undefined}>{x.status}</td>
+                      <td className="font-mono text-xs text-muted-foreground">{x.fills.map((y) => y.execId).join(", ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </CardContent>
         </Card>
         <Card>
           <CardHeader><CardTitle>{t("dash.depositChart")}</CardTitle></CardHeader>
