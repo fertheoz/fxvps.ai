@@ -82,8 +82,8 @@ async fn managed_mode(path: String) -> Result<(), Box<dyn std::error::Error>> {
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
     loop {
-        let Some(cfg) = managed.current() else {
-            tracing::info!("no LP configured yet; waiting for PUT /config");
+        let Some(cfg) = managed.current().filter(|c| c.enabled) else {
+            tracing::info!("no LP configured (or paused); waiting for PUT /config");
             if let Ok(mut t) = table.write() {
                 t.clear();
             }

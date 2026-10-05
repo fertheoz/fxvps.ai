@@ -302,12 +302,56 @@ async fn connect(
     }
 }
 
+/// Reconnect pacing and the logon-failure circuit breaker: a connection that
+/// ends before Logon succeeds counts as a failed logon (wrong credentials lock
+/// LP accounts), and after `max_logon_failures` in a row the session stops
+/// until the config is saved again. Delays double up to 60 s.
+#[derive(Default)]
+struct Retry {
+    failures: u32,
+    logon_failures: u32,
+}
+
+impl Retry {
+    fn ok(&mut self) {
+        *self = Retry::default();
+    }
+    /// Records a connection that ended; true when the session must halt.
+    fn ended(&mut self, logged_on: bool, max: u32) -> bool {
+        if logged_on {
+            self.ok();
+            return false;
+        }
+        self.failures += 1;
+        self.logon_failures += 1;
+        max > 0 && self.logon_failures >= max
+    }
+    fn connect_failed(&mut self) {
+        self.failures += 1;
+    }
+    fn delay(&self, base_ms: u64) -> Duration {
+        let ms = base_ms.saturating_mul(1u64 << self.failures.min(6));
+        Duration::from_millis(ms.min(60_000))
+    }
+}
+
 /// Sleeps; returns false on shutdown.
-async fn backoff(cfg: &GatewayConfig, sd: &mut watch::Receiver<bool>) -> bool {
+async fn backoff(cfg: &GatewayConfig, retry: &Retry, sd: &mut watch::Receiver<bool>) -> bool {
     tokio::select! {
-        _ = tokio::time::sleep(Duration::from_millis(cfg.reconnect_delay_ms)) => !*sd.borrow(),
+        _ = tokio::time::sleep(retry.delay(cfg.reconnect_delay_ms)) => !*sd.borrow(),
         _ = sd.changed() => false,
     }
+}
+
+fn halted(events: &broadcast::Sender<GatewayEvent>, session: SessionKind, n: u32) {
+    down(
+        events,
+        session,
+        format!(
+            "halted after {n} failed logons in a row (check username/password); \
+             no further attempts until the LP settings are saved again"
+        ),
+    );
 }
 
 async fn graceful_logout(
@@ -342,6 +386,7 @@ async fn md_task(
     let kind = SessionKind::MarketData;
     let mut session = Some(session);
     let mut req_counter = 0u64;
+    let mut retry = Retry::default();
     while let Some(s) = session.take() {
         let io = match connect(&cfg.md.addr, tls.as_ref(), &mut sd).await {
             None => break,
@@ -349,7 +394,8 @@ async fn md_task(
             Some(Err(e)) => {
                 down(&events, kind, format!("connect {}: {e}", cfg.md.addr));
                 session = Some(s);
-                if !backoff(&cfg, &mut sd).await {
+                retry.connect_failed();
+                if !backoff(&cfg, &retry, &mut sd).await {
                     break;
                 }
                 continue;
@@ -360,11 +406,13 @@ async fn md_task(
         let handle = tokio::spawn(run_session(io, s, cmd_rx, ev_tx));
         let mut books = Books::default();
         let mut stop = false;
+        let mut up = false;
         loop {
             tokio::select! {
                 e = ev.recv() => match e {
                     Some(SessionEvent::LoggedOn) => {
                         info!("MD session logged on, subscribing");
+                        up = true;
                         let _ = events.send(GatewayEvent::SessionUp { session: kind });
                         req_counter += 1;
                         let req = Body::MarketDataRequest(MarketDataRequest {
@@ -412,7 +460,14 @@ async fn md_task(
         }
         drop(cmd);
         session = handle.await.ok();
-        if stop || !backoff(&cfg, &mut sd).await {
+        if stop {
+            break;
+        }
+        if retry.ended(up, cfg.max_logon_failures) {
+            halted(&events, kind, retry.logon_failures);
+            break;
+        }
+        if !backoff(&cfg, &retry, &mut sd).await {
             break;
         }
     }
@@ -474,6 +529,7 @@ async fn trade_task(
     let kind = SessionKind::Trading;
     let mut session = Some(session);
     let mut orders_open = true;
+    let mut retry = Retry::default();
     while let Some(s) = session.take() {
         let io = match connect(&cfg.trade.addr, tls.as_ref(), &mut sd).await {
             None => break,
@@ -485,7 +541,8 @@ async fn trade_task(
                 while let Ok(c) = orders.try_recv() {
                     reject_cmd(&events, &c, "trading session down".into());
                 }
-                if !backoff(&cfg, &mut sd).await {
+                retry.connect_failed();
+                if !backoff(&cfg, &retry, &mut sd).await {
                     break;
                 }
                 continue;
@@ -547,7 +604,14 @@ async fn trade_task(
         }
         drop(cmd);
         session = handle.await.ok();
-        if stop || !backoff(&cfg, &mut sd).await {
+        if stop {
+            break;
+        }
+        if retry.ended(up, cfg.max_logon_failures) {
+            halted(&events, kind, retry.logon_failures);
+            break;
+        }
+        if !backoff(&cfg, &retry, &mut sd).await {
             break;
         }
     }
@@ -602,5 +666,31 @@ mod status_tests {
         assert_eq!(t[1].rejects, 1);
         assert_eq!(t[1].last_down_reason.as_deref(), Some("eof"));
         assert_eq!(t[0].rejects, 0);
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::Retry;
+    use std::time::Duration;
+
+    #[test]
+    fn halts_after_failed_logons_and_backs_off() {
+        let mut r = Retry::default();
+        assert!(!r.ended(false, 3));
+        assert!(!r.ended(false, 3));
+        assert!(r.ended(false, 3), "third failed logon halts");
+        // Delays double, capped at 60 s.
+        assert_eq!(r.delay(1000), Duration::from_secs(8));
+        r.failures = 20;
+        assert_eq!(r.delay(1000), Duration::from_secs(60));
+        // A successful logon resets everything; connect errors never halt.
+        assert!(!r.ended(true, 3));
+        assert_eq!((r.failures, r.logon_failures), (0, 0));
+        for _ in 0..10 {
+            r.connect_failed();
+        }
+        assert_eq!(r.logon_failures, 0);
+        assert!(!Retry::default().ended(false, 0), "0 = never halt");
     }
 }

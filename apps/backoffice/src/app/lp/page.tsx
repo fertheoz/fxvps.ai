@@ -1,6 +1,6 @@
 "use client";
 import * as React from "react";
-import { RefreshCw } from "lucide-react";
+import { Play, RefreshCw, Square } from "lucide-react";
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader } from "@/components/ui/primitives";
 import { NumField, SelectField, TextField } from "@/components/form";
 import type { LpConfig, LpEndpoint } from "@/lib/api/types";
@@ -30,7 +30,10 @@ export default function LpPage() {
                 <td className="px-3 py-2 font-medium">{s.lp}</td>
                 <td className="px-3">{s.kind}</td>
                 <td className="px-3 font-mono text-xs">{s.senderCompId} → {s.targetCompId}</td>
-                <td className="px-3"><FixBadge status={s.status} /></td>
+                <td className="px-3">
+                  <FixBadge status={s.status} />
+                  {s.status !== "logged_on" && s.lastError && <div className="mt-1 max-w-xs text-xs text-red-600 dark:text-red-400" data-testid="lp-error">{s.lastError}</div>}
+                </td>
                 <td className="px-3">{s.inSeq.toLocaleString()}</td>
                 <td className="px-3">{s.outSeq.toLocaleString()}</td>
                 <td className="px-3">{s.status === "logged_on" ? `${f.num(s.latencyMs)} ms` : "—"}</td>
@@ -77,7 +80,50 @@ function LpConfigCard() {
   const q = useApiQuery("getLpConfig");
   if (q.isLoading) return <Card className="mt-4 p-4">{t("common.loading")}</Card>;
   if (q.error) return <Card className="mt-4 p-4 text-sm text-muted-foreground">{t("lp.notManaged")}</Card>;
-  return <LpConfigForm key={JSON.stringify(q.data ?? null)} initial={q.data ?? blankConfig()} />;
+  return (
+    <>
+      {q.data && <LpRunControl config={q.data} />}
+      <LpConfigForm key={JSON.stringify(q.data ?? null)} initial={q.data ?? blankConfig()} />
+    </>
+  );
+}
+
+/** Stop = no logon attempts at all (protects the LP account); Play = connect again. */
+function LpRunControl({ config }: { config: LpConfig }) {
+  const t = useT();
+  const actor = useActor();
+  const toast = useToast();
+  const mfaOk = useMfaOk();
+  const running = config.enabled !== false;
+  const mut = useApiMutation(
+    (enabled: boolean) => api().saveLpConfig(withoutSecrets({ ...config, enabled }), actor),
+    (c) => toast(c.enabled === false ? t("lp.stopped") : t("lp.started")),
+  );
+  const can = actor.can("lp.manage") && mfaOk;
+  return (
+    <Card className="mt-4 flex flex-wrap items-center gap-3 p-4" data-testid="lp-run">
+      <span className="text-sm font-medium">{running ? t("lp.running") : t("lp.paused")}</span>
+      <span className="text-xs text-muted-foreground">{t("lp.runHint")}</span>
+      <div className="ml-auto flex gap-2">
+        <Button variant="outline" onClick={() => mut.mutate(false)} disabled={!can || !running || mut.isPending} data-testid="lp-stop">
+          <Square className="h-3 w-3" />{t("lp.stop")}
+        </Button>
+        <Button onClick={() => mut.mutate(true)} disabled={!can || running || mut.isPending} data-testid="lp-play">
+          <Play className="h-3 w-3" />{t("lp.play")}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+/** Never resend redacted fields; empty password = keep the stored one. */
+function withoutSecrets(c: LpConfig): LpConfig {
+  const strip = (e: LpEndpoint): LpEndpoint => {
+    const rest = { ...e, password: e.password || null };
+    delete rest.password_set;
+    return rest;
+  };
+  return { ...c, md: strip(c.md), trade: strip(c.trade) };
 }
 
 function EndpointFields({ title, ep, onChange, disabled, extra }: { title: string; ep: LpEndpoint; onChange: (e: LpEndpoint) => void; disabled: boolean; extra?: React.ReactNode }) {
@@ -109,15 +155,7 @@ function LpConfigForm({ initial }: { initial: LpConfig }) {
   const [c, setC] = React.useState<LpConfig>(initial);
   const [instr, setInstr] = React.useState(instrumentsText(initial));
   const mut = useApiMutation((v: LpConfig) => api().saveLpConfig(v, actor), () => toast(t("lp.saved")));
-  const save = () => {
-    // Never resend redacted fields; empty password = keep stored one.
-    const strip = (e: LpEndpoint): LpEndpoint => {
-      const rest = { ...e, password: e.password || null };
-      delete rest.password_set;
-      return rest;
-    };
-    mut.mutate({ ...c, md: strip(c.md), trade: strip(c.trade), instruments: parseInstruments(instr) });
-  };
+  const save = () => mut.mutate({ ...withoutSecrets(c), instruments: parseInstruments(instr) });
   return (
     <Card className="mt-4" data-testid="lp-config">
       <CardHeader><CardTitle>{t("lp.config")}</CardTitle></CardHeader>
