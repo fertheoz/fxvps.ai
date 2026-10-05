@@ -74,6 +74,8 @@ fn config(md: String, trade: String, server_name: &str) -> GatewayConfig {
         heartbeat_secs: 30,
         market_depth: 3,
         reconnect_delay_ms: 100,
+        max_logon_failures: 3,
+        enabled: true,
         security_id_source: "8".into(),
         store_dir: None,
         md: ep(md, "FXVPS-MD", "LMXBDM"),

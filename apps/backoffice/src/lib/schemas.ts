@@ -138,6 +138,8 @@ export const FixSession = z.object({
   latencyMs: z.number().nonnegative(),
   rejects24h: z.number().int().nonnegative(),
   lastHeartbeat: z.string(),
+  /** Last disconnect / halt reason (e.g. repeated failed logons). */
+  lastError: z.string().nullable().optional(),
 });
 export type FixSession = z.infer<typeof FixSession>;
 

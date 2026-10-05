@@ -14,6 +14,13 @@ pub struct GatewayConfig {
     pub market_depth: u64,
     #[serde(default = "default_reconnect")]
     pub reconnect_delay_ms: u64,
+    /// Failed logons in a row after which a session stops retrying (protects
+    /// the LP account from lock-outs on wrong credentials); 0 = never stop.
+    #[serde(default = "default_max_logon_failures")]
+    pub max_logon_failures: u32,
+    /// false: configured but paused, no connection attempts at all.
+    #[serde(default = "yes")]
+    pub enabled: bool,
     /// SecurityIDSource(22). Assumption for LMAX: `8`.
     #[serde(default = "default_source")]
     pub security_id_source: String,
@@ -65,6 +72,9 @@ fn default_hb() -> u64 {
 }
 fn default_depth() -> u64 {
     5
+}
+fn default_max_logon_failures() -> u32 {
+    3
 }
 fn default_reconnect() -> u64 {
     1000

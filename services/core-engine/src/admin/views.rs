@@ -411,7 +411,7 @@ pub fn lp_sessions(rows: &[fix_gateway::SessionStatus]) -> Value {
                 };
                 let status = if r.logged_on {
                     "logged_on"
-                } else if r.since_ms == 0 {
+                } else if r.since_ms == 0 && r.last_down_reason.is_none() {
                     "connecting"
                 } else {
                     "disconnected"
@@ -428,6 +428,7 @@ pub fn lp_sessions(rows: &[fix_gateway::SessionStatus]) -> Value {
                     "latencyMs": 0,
                     "rejects24h": r.rejects,
                     "lastHeartbeat": iso(r.since_ms.saturating_mul(1_000_000)),
+                    "lastError": r.last_down_reason,
                 })
             })
             .collect(),

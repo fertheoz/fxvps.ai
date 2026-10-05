@@ -183,4 +183,8 @@ export interface LpConfig {
   trade: LpEndpoint;
   instruments: LpInstrument[];
   nats: unknown;
+  /** false = paused (Stop): no connection attempts. */
+  enabled?: boolean;
+  /** Failed logons in a row before a session stops retrying. */
+  max_logon_failures?: number;
 }

@@ -75,6 +75,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         Some(p) => Some(fix_gateway::GatewayConfig::load(p)?),
     };
+    // Paused from the console (Stop): no LP connection at all until Play.
+    let gw_cfg = gw_cfg.filter(|c| {
+        if !c.enabled {
+            tracing::warn!("LP connection paused (enabled=false): no logon attempts");
+        }
+        c.enabled
+    });
 
     let mut demo_handle = None;
     let mut fix_handle = None;
