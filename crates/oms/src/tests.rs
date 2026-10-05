@@ -651,19 +651,19 @@ fn abook_limit_goes_to_lp_as_limit_and_waits_when_unfilled() {
         "lim2",
         Side::Sell,
         OrderType::Limit,
-        Some("1.09930"),
+        Some("1.09920"),
         None,
     );
     let (_, id2) = h.order(o2);
     let sent = h.router.take();
-    assert_eq!(sent[0].limit, Some(px("1.09935")));
+    assert_eq!(sent[0].limit, Some(px("1.09925")));
     h.cmd(Command::LpReject {
         lp_order_id: sent[0].lp_order_id,
         reason: "ioc".into(),
     });
     assert!(h.e.order(id2).unwrap().rearm_px.is_some());
     let mut c = change(h.e.order(id2).unwrap());
-    c.limit_price = Some(px("1.09920"));
+    c.limit_price = Some(px("1.09910"));
     h.cmd(Command::ModifyOrder {
         account: 1,
         order_id: id2,
