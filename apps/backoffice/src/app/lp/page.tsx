@@ -6,7 +6,7 @@ import { NumField, SelectField, TextField } from "@/components/form";
 import type { LpConfig, LpEndpoint } from "@/lib/api/types";
 import { FixBadge } from "@/components/badges";
 import { useToast } from "@/components/shell/providers";
-import { api, useApiMutation, useApiQuery } from "@/lib/queries";
+import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 
 export default function LpPage() {
@@ -104,7 +104,8 @@ function LpConfigForm({ initial }: { initial: LpConfig }) {
   const t = useT();
   const actor = useActor();
   const toast = useToast();
-  const editable = actor.can("lp.manage");
+  const mfaOk = useMfaOk();
+  const editable = actor.can("lp.manage") && mfaOk;
   const [c, setC] = React.useState<LpConfig>(initial);
   const [instr, setInstr] = React.useState(instrumentsText(initial));
   const mut = useApiMutation((v: LpConfig) => api().saveLpConfig(v, actor), () => toast(t("lp.saved")));

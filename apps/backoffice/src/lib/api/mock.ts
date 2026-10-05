@@ -332,6 +332,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
 
     async getSettings() { return delay(s.settings); },
+    async getMe() { return delay({ sub: "mock", name: "mock", role: "admin", permissions: [], mfaOk: true }); },
     async saveSettings(v: Settings, actor) {
       guard(actor, "settings.edit");
       s.settings = SettingsSchema.parse(v);

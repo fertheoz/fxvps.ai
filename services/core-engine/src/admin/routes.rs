@@ -228,7 +228,9 @@ async fn me(actor: Actor) -> ApiResult {
         .filter(|p| actor.can(p))
         .collect();
     Ok(Json(
-        json!({ "sub": actor.sub, "name": actor.name, "role": actor.role, "permissions": perms }),
+        json!({ "sub": actor.sub, "name": actor.name, "role": actor.role, "permissions": perms,
+                // false: mutating permissions answer `mfa_required` until a 2FA login
+                "mfaOk": actor.mfa_ok }),
     ))
 }
 

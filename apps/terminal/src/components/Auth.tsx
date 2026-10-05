@@ -615,7 +615,8 @@ export function UserMenu() {
   const claims = useSession((s) => s.claims);
   const status = useSession((s) => s.status);
   const logout = useSession((s) => s.logout);
-  const [open, setOpen] = useState(false);
+  // `?security=1` (link from the back office): open "Account security" once.
+  const [open, setOpen] = useState(() => typeof location !== 'undefined' && new URLSearchParams(location.search).get('security') === '1');
   if (status !== 'authenticated' || !claims) return null;
   return (
     <>

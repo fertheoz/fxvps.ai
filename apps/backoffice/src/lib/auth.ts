@@ -190,3 +190,11 @@ export async function identityLogout() {
   await idCall("/v1/token/revoke").catch(() => undefined);
   setToken(null);
 }
+
+/** NEXT_PUBLIC_TERMINAL_URL: client terminal (2FA is set up there, in "Account security"). */
+export const terminalUrl = (): string | undefined => process.env.NEXT_PUBLIC_TERMINAL_URL?.replace(/\/+$/, "") || undefined;
+/** Terminal link that opens the account-security dialog. */
+export const securityUrl = (): string | undefined => {
+  const t = terminalUrl();
+  return t ? `${t}/?security=1` : undefined;
+};

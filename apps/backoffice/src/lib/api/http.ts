@@ -102,6 +102,7 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     listUsers: () => call("GET", "/v1/admin-users"),
     saveUser: (u, actor) => call("PUT", `/v1/admin-users/${enc(u.id)}`, u, actor),
     getSettings: () => call("GET", "/v1/settings"),
+    getMe: () => call("GET", "/v1/me"),
     saveSettings: (s, actor) => call("PUT", "/v1/settings", s, actor),
 
     subscribe(onTopics, onStatus) {

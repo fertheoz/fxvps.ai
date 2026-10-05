@@ -220,3 +220,13 @@ describe("identity login (console)", () => {
     expect(decodeToken(client)).toBeNull();
   });
 });
+
+describe("human error text", () => {
+  it("hides permission ids behind plain words", async () => {
+    const { humanError } = await import("@/lib/queries");
+    const t = (k: string) => `T:${k}`;
+    expect(humanError(new ApiError(403, "mfa_required", "lp.manage requires a multi-factor login", "lp.manage"), t)).toBe("T:mfa.error");
+    expect(humanError(new ApiError(403, "forbidden", "x", "lp.manage"), t)).toBe("T:err.forbidden");
+    expect(humanError(new Error("boom"), t)).toBe("boom");
+  });
+});

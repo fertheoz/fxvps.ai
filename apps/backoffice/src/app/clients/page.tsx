@@ -6,7 +6,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { Badge, Button, Dialog, FieldError, Input, Label, PageHeader, Pnl, Select, Sheet, Tabs } from "@/components/ui/primitives";
 import { BookBadge, KycBadge, marginLevel, SideBadge, StatusBadge } from "@/components/badges";
 import { useToast } from "@/components/shell/providers";
-import { api, useApiMutation, useApiQuery } from "@/lib/queries";
+import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import { usePrefs } from "@/lib/prefs";
 import { BalanceOpRequest, KycStatus, type Client } from "@/lib/schemas";
@@ -24,6 +24,7 @@ export default function ClientsPage() {
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [opening, setOpening] = React.useState(false);
   const actor = useActor();
+  const mfaOk = useMfaOk();
 
   // Order masters followed by their sub-accounts (tree view).
   const ordered = React.useMemo(() => {
@@ -62,7 +63,7 @@ export default function ClientsPage() {
 
   return (
     <div data-testid="page-clients">
-      <PageHeader title={t("clients.title")}>{actor.can("clients.edit") && <Button onClick={() => setOpening(true)} data-testid="open-account">{t("clients.open")}</Button>}</PageHeader>
+      <PageHeader title={t("clients.title")}>{actor.can("clients.edit") && <Button onClick={() => setOpening(true)} disabled={!mfaOk} data-testid="open-account">{t("clients.open")}</Button>}</PageHeader>
       <DataTable
         data={ordered}
         columns={columns}
