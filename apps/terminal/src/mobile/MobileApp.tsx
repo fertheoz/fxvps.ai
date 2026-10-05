@@ -20,6 +20,7 @@ import { getApi, trade as tradeApi } from '../store/api';
 import { useSession } from '../store/session';
 import { selectActiveAccount, selectHistory, selectOrders, selectPositions, useTerminal } from '../store/terminal';
 import { ChartAttribution, ChartPanel } from '../components/ChartPanel';
+import { ObjectList } from '../components/ObjectList';
 import { OrderTicket } from '../components/OrderTicket';
 
 /** Phone layout: one view at a time, bottom tab bar, order ticket as a bottom sheet. */
@@ -249,6 +250,10 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
   // Quick order: Sell / Buy send a market order of the shown size at once (no ticket).
   const [quick, setQuick] = useState(() => readQuick());
   const [busy, setBusy] = useState(false);
+  // Chart tools sheet (lines, alerts) and the armed tool.
+  const [tools, setTools] = useState(false);
+  const setChartTool = useTerminal((s) => s.setChartTool);
+  const chartTool = useTerminal((s) => s.chartTool);
   // Pending order from the chart: drag the line to a price, then place.
   const [limit, setLimit] = useState<number | null>(null);
   const [lineType, setLineType] = useState<'limit' | 'stop'>('limit');
@@ -330,6 +335,17 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
           </svg>
         </button>
         <button
+          onClick={() => setTools(true)}
+          aria-label={t('obj.tools')}
+          title={t('obj.tools')}
+          data-testid="m-tools"
+          className={`ml-2 h-10 w-10 rounded-full grid place-items-center ${chartTool ? 'bg-accent text-white' : 'bg-panel-2 text-muted'}`}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+            <path d="M4 20l4-1 11-11-3-3L5 16l-1 4zM14 7l3 3" />
+          </svg>
+        </button>
+        <button
           onClick={toggleLimit}
           aria-pressed={limit !== null}
           aria-label={t('m.limitLine')}
@@ -369,6 +385,35 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
           draft={limit !== null && spec ? { price: limit, label: `${limitName} ${formatPrice(limit, spec.digits)}`, tone: limitSide === 'buy' ? 'up' : 'down', onMove: setLimit } : undefined}
         />
       </div>
+      {tools && (
+        <div className="fixed inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setTools(false)} data-testid="m-tools-sheet">
+          <div className="fx-sheet bg-panel rounded-t-[28px] max-h-[80dvh] overflow-y-auto pb-[env(safe-area-inset-bottom)]" onClick={(e) => e.stopPropagation()}>
+            <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-line" />
+            <h2 className="px-5 pt-2 pb-3 text-[17px] font-semibold">
+              {t('obj.tools')} · {slot.symbol}
+            </h2>
+            <div className="flex gap-2 px-5 pb-4">
+              {(['hline', 'alert'] as const).map((k) => (
+                <button
+                  key={k}
+                  className="flex-1 h-12 rounded-2xl bg-panel-2 border border-line/60 font-medium"
+                  onClick={() => {
+                    setChartTool(k);
+                    setTools(false);
+                  }}
+                  data-testid={`m-tool-${k}`}
+                >
+                  {k === 'hline' ? '—' : '🔔'} {t(k === 'hline' ? 'obj.hline' : 'obj.alert')}
+                </button>
+              ))}
+            </div>
+            <div className="px-2 pb-4 text-[14px]">
+              <div className="px-3 pb-1 text-[11px] uppercase tracking-wider text-muted">{t('obj.objects')}</div>
+              <ObjectList symbol={slot.symbol} />
+            </div>
+          </div>
+        </div>
+      )}
       {limit !== null && spec && (
         <div className="mx-4 mt-2 p-1 rounded-full bg-panel-2 flex" role="radiogroup" aria-label={t('ticket.type')}>
           {(['limit', 'stop'] as const).map((x) => (

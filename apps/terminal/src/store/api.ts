@@ -4,8 +4,8 @@ import { WsTradingApi } from '../api/ws';
 import { isAllowedWsUrl, resolveGateway } from './connection';
 import { sessionToken } from './session';
 import { RafBatcher } from '@fxvps/trading-core';
-import type { Quote } from '@fxvps/trading-core';
-import { useTerminal } from './terminal';
+import type { ChartObjects, Quote } from '@fxvps/trading-core';
+import { setObjectsSaver, useTerminal } from './terminal';
 import { translate } from '../i18n';
 import { volumeToLots } from '@fxvps/trading-core';
 
@@ -53,6 +53,15 @@ export async function bootstrap(instance: TradingApi): Promise<() => void> {
   await Promise.all(
     accounts.map(async (a) => useTerminal.getState().setHistory(a.id, await instance.getHistory(a.id))),
   );
+  // Chart objects (lines, alerts) come from the server-side preferences of each account.
+  setObjectsSaver((accountId, json) => instance.setPrefs(accountId, json));
+  await Promise.all(
+    accounts.map(async (a) => {
+      const raw = await instance.getPrefs(a.id).catch(() => null);
+      const parsed = parseObjects(raw);
+      if (parsed) useTerminal.getState().setObjects(a.id, parsed, false);
+    }),
+  );
   // Ticks are conflated per symbol and flushed once per animation frame.
   const batcher = new RafBatcher<Quote>((qs) => useTerminal.getState().applyQuotes(qs));
   const offQuotes = instance.subscribeQuotes(
@@ -62,9 +71,24 @@ export async function bootstrap(instance: TradingApi): Promise<() => void> {
   return () => {
     offQuotes();
     offEvents();
+    setObjectsSaver(null);
     instance.disconnect();
     api = null;
   };
+}
+
+/** Stored preferences -> chart objects (unknown fields are ignored, bad JSON = nothing). */
+export function parseObjects(raw: string | null): ChartObjects | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as Partial<ChartObjects>;
+    return {
+      lines: Array.isArray(v.lines) ? v.lines.filter((l) => l && typeof l.symbol === 'string' && typeof l.price === 'number') : [],
+      alerts: Array.isArray(v.alerts) ? v.alerts.filter((a) => a && typeof a.symbol === 'string' && typeof a.price === 'number') : [],
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Helpers that call the API and surface the result as a toast. */

@@ -44,6 +44,11 @@ message Envelope {
     DealUpdate deal_update = 43;
     Ack ack = 60;
     Error error = 61;
+    // Added in v1.3: per-account client preferences (chart objects, alerts,
+    // templates) stored on the server as an opaque JSON document.
+    PrefsRequest prefs_request = 80;
+    Prefs prefs = 81;
+    PrefsSet prefs_set = 82;
     Heartbeat heartbeat = 70;
     Ping ping = 71;
     Pong pong = 72;
@@ -452,6 +457,26 @@ message DealUpdate {
 
 message Ack {
   string request_id = 1;
+}
+
+// Client -> server: the stored preferences of an account (answer: Prefs).
+message PrefsRequest {
+  string request_id = 1;
+  string account_id = 2;
+}
+
+message Prefs {
+  string request_id = 1;
+  string account_id = 2;
+  // Opaque JSON (empty = nothing stored).
+  string json = 3;
+}
+
+// Client -> server: replaces the stored preferences (answer: Ack). At most 64 KiB.
+message PrefsSet {
+  string request_id = 1;
+  string account_id = 2;
+  string json = 3;
 }
 
 enum ErrorCode {

@@ -139,6 +139,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Hub::new(cfg, auth, Vec::new(), None)
     };
 
+    // Client preferences (chart objects, alerts) live next to the engine data.
+    let prefs_file = std::path::Path::new(&data_dir).join("prefs.json");
+    match hub.use_prefs_file(prefs_file) {
+        Ok(n) => tracing::info!(accounts = n, "client preferences loaded"),
+        Err(e) => tracing::warn!("client preferences not loaded: {e}"),
+    }
     tracing::info!(%addr, "client-gateway listening (ws://{addr}/ws, /healthz, /metrics)");
     // Machine-readable line for scripts/tests (e.g. with `--listen 127.0.0.1:0`).
     println!("FXVPS_WS_URL=ws://{addr}/ws");

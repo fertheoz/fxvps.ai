@@ -87,6 +87,9 @@ pub struct Hub {
     quotes: broadcast::Sender<Arc<QuoteMsg>>,
     accounts: broadcast::Sender<Arc<AccountEvent>>,
     candles: Mutex<CandleStore>,
+    /// Per-account client preferences (opaque JSON) and the file they persist to.
+    prefs: Mutex<HashMap<String, String>>,
+    prefs_path: Mutex<Option<std::path::PathBuf>>,
     /// Latest quote per (group, symbol): sent on subscribe so a new connection shows
     /// every price at once instead of waiting for each instrument's next tick.
     last_quotes: Mutex<LastQuotes>,
@@ -349,6 +352,8 @@ impl Hub {
             specs,
             candles: Mutex::new(CandleStore::new(cfg.candle_capacity)),
             last_quotes: Mutex::new(HashMap::new()),
+            prefs: Mutex::new(HashMap::new()),
+            prefs_path: Mutex::new(None),
             limiter: RateLimiter::keyed(Quota::per_second(rate).allow_burst(burst)),
             symbols,
             candle_group: core.as_ref().and_then(|c| c.groups().into_iter().next()),
@@ -452,6 +457,59 @@ impl Hub {
     /// alternative feeds).
     pub fn publish_client_quote(&self, q: ClientQuote) {
         self.publish(None, q, true);
+    }
+
+    /// Loads the preferences file (if any) and persists every later change to it.
+    pub fn use_prefs_file(&self, path: std::path::PathBuf) -> std::io::Result<usize> {
+        let n = match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let map: HashMap<String, String> =
+                    serde_json::from_str(&text).map_err(std::io::Error::other)?;
+                let n = map.len();
+                if let Ok(mut p) = self.prefs.lock() {
+                    *p = map;
+                }
+                n
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => return Err(e),
+        };
+        if let Ok(mut p) = self.prefs_path.lock() {
+            *p = Some(path);
+        }
+        Ok(n)
+    }
+
+    /// Stored preferences of an account (empty when none).
+    pub fn prefs(&self, account_id: &str) -> String {
+        self.prefs
+            .lock()
+            .ok()
+            .and_then(|p| p.get(account_id).cloned())
+            .unwrap_or_default()
+    }
+
+    /// Replaces an account's preferences and writes the file (temp + rename).
+    pub fn set_prefs(&self, account_id: &str, json: String) -> std::io::Result<()> {
+        let snapshot = {
+            let mut p = self
+                .prefs
+                .lock()
+                .map_err(|_| std::io::Error::other("prefs lock"))?;
+            if json.is_empty() {
+                p.remove(account_id);
+            } else {
+                p.insert(account_id.to_string(), json);
+            }
+            serde_json::to_vec(&*p).map_err(std::io::Error::other)?
+        };
+        let path = self.prefs_path.lock().ok().and_then(|p| p.clone());
+        if let Some(path) = path {
+            let tmp = path.with_extension("tmp");
+            std::fs::write(&tmp, snapshot)?;
+            std::fs::rename(tmp, path)?;
+        }
+        Ok(())
     }
 
     /// Restores the candle history saved by [`Hub::save_candles`]; returns the bar count.

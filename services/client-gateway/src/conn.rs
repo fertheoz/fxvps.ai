@@ -24,6 +24,9 @@ use crate::auth::Claims;
 use crate::conflate::Conflator;
 use crate::hub::{AccountEvent, CmdError, Hub, NewOrder};
 
+/// Upper bound of a stored preferences document.
+const PREFS_MAX_BYTES: usize = 64 * 1024;
+
 /// Application close codes (4000-4999 are reserved for applications by RFC 6455).
 pub mod close_code {
     pub const NORMAL: u16 = 1000;
@@ -624,6 +627,45 @@ async fn handle(
             request_id: r.request_id,
             instruments: hub.instruments(),
         })),
+        Body::PrefsRequest(r) => {
+            if !st.claims.may_access(&r.account_id) {
+                return out.error(
+                    &r.request_id,
+                    ErrorCode::Forbidden,
+                    "account not authorized",
+                );
+            }
+            out.send(Body::Prefs(Prefs {
+                request_id: r.request_id,
+                json: hub.prefs(&r.account_id),
+                account_id: r.account_id,
+            }))
+        }
+        Body::PrefsSet(r) => {
+            if !st.claims.may_access(&r.account_id) {
+                return out.error(
+                    &r.request_id,
+                    ErrorCode::Forbidden,
+                    "account not authorized",
+                );
+            }
+            if r.json.len() > PREFS_MAX_BYTES {
+                return out.error(
+                    &r.request_id,
+                    ErrorCode::BadRequest,
+                    "preferences too large",
+                );
+            }
+            match hub.set_prefs(&r.account_id, r.json) {
+                Ok(()) => out.send(Body::Ack(Ack {
+                    request_id: r.request_id,
+                })),
+                Err(e) => {
+                    tracing::warn!(error = %e, "preferences not saved");
+                    out.error(&r.request_id, ErrorCode::Internal, "preferences not saved")
+                }
+            }
+        }
         Body::Ping(p) => out.send(Body::Pong(Pong {
             nonce: p.nonce,
             ts_ns: domain::now_ns(),

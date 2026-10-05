@@ -94,6 +94,10 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const indicators = useTerminal((s) => s.indicators);
   const positions = useTerminal(selectPositions);
   const orders = useTerminal(selectOrders);
+  const objects = useTerminal((s) => (s.activeAccountId ? s.objects[s.activeAccountId] : undefined));
+  const chartTool = useTerminal((s) => s.chartTool);
+  const setChartTool = useTerminal((s) => s.setChartTool);
+  const setObjects = useTerminal((s) => s.setObjects);
   const oneClickVolume = useTerminal((s) => s.oneClickVolume);
   const setOneClickVolume = useTerminal((s) => s.setOneClickVolume);
   const setActive = useTerminal((s) => s.setActiveChart);
@@ -113,7 +117,9 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const dragRef = useRef<{ line: IPriceLine; positionId: string; kind: 'sl' | 'tp'; price: number } | null>(null);
   const draftEl = useRef<HTMLDivElement>(null);
   /** Pending order being moved after a long press (price = where the line is now). */
-  const [edit, setEdit] = useState<{ id: string; price: number } | null>(null);
+  const [edit, setEdit] = useState<{ kind: 'order' | 'line' | 'alert'; id: string; price: number } | null>(null);
+  /** Price of the line being placed with the armed chart tool. */
+  const [toolPrice, setToolPrice] = useState<number | null>(null);
   const pressRef = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
   const activeAccountId = useTerminal((s) => s.activeAccountId);
   const toast = useTerminal((s) => s.toast);
@@ -292,12 +298,18 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
         protRef.current.push({ line: linesRef.current[linesRef.current.length - 1]!, positionId: p.id, kind: 'tp' });
       }
     }
+    for (const l of objects?.lines ?? []) {
+      if (l.symbol === spec.name) add(l.price, cssVar('--accent'), l.note ?? '', LineStyle.Dashed);
+    }
+    for (const a of objects?.alerts ?? []) {
+      if (a.symbol === spec.name) add(a.price, a.firedAt ? cssVar('--muted') : '#f59e0b', a.firedAt ? '🔔 ✓' : '🔔', LineStyle.LargeDashed);
+    }
     for (const o of orders) {
       if (o.symbol !== spec.name) continue;
       add(o.price, '#f59e0b', `${o.side.toUpperCase()} ${o.type.replace('_', ' ').toUpperCase()} ${volumeToLots(o.volume)}`, LineStyle.Dotted);
       if (o.limitPrice !== undefined) add(o.limitPrice, '#f59e0b', `LMT #${o.id}`, LineStyle.SparseDotted);
     }
-  }, [positions, orders, spec, loading, theme]);
+  }, [positions, orders, objects, spec, loading, theme]);
 
   // Drag SL/TP lines -> modifyPosition (server-side protection).
   const lineAt = (clientY: number) => {
@@ -363,17 +375,53 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     e.currentTarget.style.cursor = lineAt(e.clientY) ? 'ns-resize' : '';
   };
 
-  // The movable line: a pending order picked up by a long press, else the caller's draft.
-  const editOrder = edit ? orders.find((o) => o.id === edit.id) : undefined;
-  const line: DraftLine | undefined =
-    edit && editOrder && spec
-      ? {
-          price: edit.price,
-          label: `${editOrder.side.toUpperCase()} ${editOrder.type.replace('_', ' ').toUpperCase()} ${volumeToLots(editOrder.volume)} ${formatPrice(edit.price, spec.digits)}`,
-          tone: editOrder.side === 'buy' ? 'up' : 'down',
-          onMove: (price) => setEdit({ id: edit.id, price }),
-        }
-      : draft;
+  // The movable line: an object picked up by a long press, a tool being placed, else the caller's draft.
+  const editOrder = edit?.kind === 'order' ? orders.find((o) => o.id === edit.id) : undefined;
+  const editObject = edit && edit.kind !== 'order' ? (edit.kind === 'line' ? objects?.lines : objects?.alerts)?.find((x) => x.id === edit.id) : undefined;
+  // An armed tool starts its line at the market (toolPrice follows the drag).
+  const toolArmed = !!chartTool && isActive && !!spec && !!quote;
+  const toolLinePrice = toolArmed ? (toolPrice ?? roundPrice(quote!.bid, spec!.digits)) : null;
+  let line: DraftLine | undefined = draft;
+  if (edit && spec && (editOrder || editObject)) {
+    const label = editOrder
+      ? `${editOrder.side.toUpperCase()} ${editOrder.type.replace('_', ' ').toUpperCase()} ${volumeToLots(editOrder.volume)}`
+      : edit.kind === 'line'
+        ? t('obj.hline')
+        : t('obj.alert');
+    line = {
+      price: edit.price,
+      label: `${label} ${formatPrice(edit.price, spec.digits)}`,
+      tone: editOrder ? (editOrder.side === 'buy' ? 'up' : 'down') : 'up',
+      onMove: (price) => setEdit({ ...edit, price }),
+    };
+  } else if (toolLinePrice !== null && spec) {
+    line = {
+      price: toolLinePrice,
+      label: `${chartTool === 'hline' ? t('obj.hline') : t('obj.alert')} ${formatPrice(toolLinePrice, spec.digits)}`,
+      tone: 'up',
+      onMove: setToolPrice,
+    };
+  }
+  /** Confirms the armed tool: the line becomes a stored object of the active account. */
+  const placeTool = () => {
+    if (!chartTool || !spec || toolLinePrice === null || !activeAccountId || !quote) return;
+    const cur = objects ?? { lines: [], alerts: [] };
+    const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const next =
+      chartTool === 'hline'
+        ? { ...cur, lines: [...cur.lines, { id, symbol: spec.name, price: toolLinePrice }] }
+        : {
+            ...cur,
+            alerts: [...cur.alerts, { id, symbol: spec.name, price: toolLinePrice, direction: toolLinePrice >= quote.bid ? ('above' as const) : ('below' as const), createdAt: Date.now() }],
+          };
+    setObjects(activeAccountId, next);
+    setChartTool(null);
+    setToolPrice(null);
+  };
+  const cancelTool = () => {
+    setChartTool(null);
+    setToolPrice(null);
+  };
   // The line follows the price scale: placed after every render (ticks re-render the panel).
   useEffect(() => {
     const el = draftEl.current;
@@ -384,17 +432,21 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     if (y !== null) el.style.top = `${y - DRAFT_HANDLE / 2}px`;
   });
   useEffect(() => {
-    // Moving a line must not scroll the chart; Esc puts it back; the press timer dies with the panel.
-    chartRef.current?.applyOptions({ handleScroll: !edit, handleScale: !edit });
+    // Moving or placing a line must not scroll the chart; Esc puts it back / cancels the tool.
+    const hold = !!edit || (!!chartTool && isActive);
+    chartRef.current?.applyOptions({ handleScroll: !hold, handleScale: !hold });
     const esc = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') setEdit(null);
+      if (ev.key !== 'Escape') return;
+      setEdit(null);
+      setChartTool(null);
+      setToolPrice(null);
     };
-    if (edit) window.addEventListener('keydown', esc);
+    if (hold) window.addEventListener('keydown', esc);
     return () => {
       window.removeEventListener('keydown', esc);
       if (pressRef.current) clearTimeout(pressRef.current.timer);
     };
-  }, [edit]);
+  }, [edit, chartTool, isActive, setChartTool]);
   const dragDraft = (e: React.PointerEvent<HTMLDivElement>) => {
     const el = host.current;
     const series = candleRef.current;
@@ -402,39 +454,56 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     const p = series.coordinateToPrice(e.clientY - el.getBoundingClientRect().top);
     if (p !== null && p > 0) line.onMove(roundPrice(p, spec.digits));
   };
-  /** Releasing a moved pending order sends the new trigger price. */
+  /** Releasing a moved line: a pending order gets its new trigger price, an object is re-saved. */
   const dropEdit = async () => {
     const e = edit;
     setEdit(null);
-    if (!e || !editOrder || !activeAccountId || e.price === editOrder.price) return;
-    const r = await getApi().modifyOrder(activeAccountId, e.id, { price: e.price });
-    if (!r.ok) toast('error', t('toast.rejected', { error: r.error ?? '' }));
+    if (!e || !activeAccountId) return;
+    if (e.kind === 'order') {
+      if (!editOrder || e.price === editOrder.price) return;
+      const r = await getApi().modifyOrder(activeAccountId, e.id, { price: e.price });
+      if (!r.ok) toast('error', t('toast.rejected', { error: r.error ?? '' }));
+      return;
+    }
+    if (!objects || !quote) return;
+    if (e.kind === 'line') setObjects(activeAccountId, { ...objects, lines: objects.lines.map((l) => (l.id === e.id ? { ...l, price: e.price } : l)) });
+    else
+      setObjects(activeAccountId, {
+        ...objects,
+        alerts: objects.alerts.map((a) => (a.id === e.id ? { ...a, price: e.price, direction: e.price >= quote.bid ? 'above' : 'below', firedAt: undefined } : a)),
+      });
   };
-  /** The pending order whose line is within reach of `clientY`. */
-  const orderAt = (clientY: number) => {
+  /** The movable line (pending order, drawn line, alert) within reach of `clientY`. */
+  const lineObjectAt = (clientY: number): { kind: 'order' | 'line' | 'alert'; id: string; price: number } | undefined => {
     const series = candleRef.current;
     const el = host.current;
-    if (edit || draft || !series || !el || !spec) return undefined;
+    if (edit || draft || chartTool || !series || !el || !spec) return undefined;
     const y = clientY - el.getBoundingClientRect().top;
-    return orders.find((o) => {
-      if (o.symbol !== spec.name) return false;
-      const c = series.priceToCoordinate(o.price);
+    const near = (price: number) => {
+      const c = series.priceToCoordinate(price);
       return c !== null && Math.abs(c - y) <= PRESS_HIT_PX;
-    });
+    };
+    const o = orders.find((x) => x.symbol === spec.name && near(x.price));
+    if (o) return { kind: 'order', id: o.id, price: o.price };
+    const a = objects?.alerts.find((x) => x.symbol === spec.name && near(x.price));
+    if (a) return { kind: 'alert', id: a.id, price: a.price };
+    const l = objects?.lines.find((x) => x.symbol === spec.name && near(x.price));
+    if (l) return { kind: 'line', id: l.id, price: l.price };
+    return undefined;
   };
-  /** Double-click (desktop) picks a pending order line up. */
+  /** Double-click (desktop) picks a line up. */
   const pickDouble = (e: React.MouseEvent<HTMLDivElement>) => {
-    const hit = orderAt(e.clientY);
-    if (hit) setEdit({ id: hit.id, price: hit.price });
+    const hit = lineObjectAt(e.clientY);
+    if (hit) setEdit(hit);
   };
-  /** Long press on a pending order line picks it up (touch and mouse). */
+  /** Long press on a line picks it up (touch and mouse). */
   const pressStart = (e: React.PointerEvent<HTMLDivElement>) => {
-    const hit = orderAt(e.clientY);
+    const hit = lineObjectAt(e.clientY);
     if (!hit) return;
     const timer = setTimeout(() => {
       pressRef.current = null;
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate(15);
-      setEdit({ id: hit.id, price: hit.price });
+      setEdit(hit);
     }, PRESS_MS);
     pressRef.current = { timer, x: e.clientX, y: e.clientY };
   };
@@ -523,12 +592,22 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
             onPointerMove={dragDraft}
             onPointerUp={() => void dropEdit()}
             onPointerCancel={() => void dropEdit()}
-            data-testid={edit ? `chart-move-${index}` : `chart-draft-${index}`}
+            data-testid={edit ? `chart-move-${index}` : chartTool ? `chart-tool-${index}` : `chart-draft-${index}`}
           >
-            <span className={`h-7 px-3 ml-2 rounded-full grid place-items-center text-[12px] font-semibold text-white shadow-lg ${line.tone === 'up' ? 'bg-up' : 'bg-down'}`}>
+            <span className={`h-7 px-3 ml-2 rounded-full grid place-items-center text-[12px] font-semibold text-white shadow-lg ${chartTool ? 'bg-accent' : line.tone === 'up' ? 'bg-up' : 'bg-down'}`}>
               ↕ {line.label}
             </span>
-            <span className={`flex-1 border-t-2 border-dashed ${line.tone === 'up' ? 'border-up' : 'border-down'}`} />
+            <span className={`flex-1 border-t-2 border-dashed ${chartTool ? 'border-accent' : line.tone === 'up' ? 'border-up' : 'border-down'}`} />
+            {chartTool && !edit && (
+              <span className="flex gap-1 mr-2" onPointerDown={(e) => e.stopPropagation()}>
+                <button className="h-9 px-3 rounded-full bg-accent text-white text-[13px] font-semibold shadow-lg" onClick={placeTool} data-testid={`chart-tool-place-${index}`}>
+                  ✓ {t('obj.place')}
+                </button>
+                <button className="h-9 w-9 rounded-full bg-panel border border-line text-muted shadow-lg" onClick={cancelTool} aria-label={t('tb.cancel')}>
+                  ✕
+                </button>
+              </span>
+            )}
           </div>
         )}
         {spec && quote && !bare && (
