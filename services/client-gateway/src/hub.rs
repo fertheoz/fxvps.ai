@@ -76,6 +76,9 @@ impl AccountEvent {
     }
 }
 
+/// Latest quote per (group, client symbol).
+type LastQuotes = HashMap<(Option<Arc<str>>, Arc<str>), Arc<ClientQuote>>;
+
 pub struct Hub {
     pub cfg: ClientGatewayConfig,
     pub auth: Authenticator,
@@ -86,7 +89,7 @@ pub struct Hub {
     candles: Mutex<CandleStore>,
     /// Latest quote per (group, symbol): sent on subscribe so a new connection shows
     /// every price at once instead of waiting for each instrument's next tick.
-    last_quotes: Mutex<HashMap<(Option<Arc<str>>, Arc<str>), Arc<ClientQuote>>>,
+    last_quotes: Mutex<LastQuotes>,
     /// Client symbol -> internal symbol.
     symbols: BTreeMap<String, String>,
     /// Client symbol -> instrument spec (for `SymbolList`).
