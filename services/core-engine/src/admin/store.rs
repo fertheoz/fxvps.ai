@@ -170,6 +170,11 @@ pub enum AdminCmd {
     LpConfigSaved {
         details: String,
     },
+    AccountGroupSet {
+        account: u64,
+        group: String,
+        old: String,
+    },
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -345,6 +350,16 @@ impl AdminState {
             AdminCmd::LpConfigSaved { details } => {
                 self.audit(r, "lp.config".into(), "fix-gateway".into(), details.clone())
             }
+            AdminCmd::AccountGroupSet {
+                account,
+                group,
+                old,
+            } => self.audit(
+                r,
+                "account.group".into(),
+                format!("#{account}"),
+                format!("{old} → {group}"),
+            ),
             AdminCmd::GroupSaved { group, details } => {
                 self.audit(r, "group.update".into(), group.clone(), details.clone())
             }

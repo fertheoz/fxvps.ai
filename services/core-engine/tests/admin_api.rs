@@ -375,6 +375,12 @@ async fn rbac_matrix_is_enforced() {
             Some(json!({"kyc": "approved"})),
             "clients.edit",
         ),
+        (
+            Method::PATCH,
+            "/v1/accounts/7/group",
+            Some(json!({"group": "a"})),
+            "clients.edit",
+        ),
         (Method::PUT, "/v1/groups/a", Some(group), "groups.edit"),
         (
             Method::PUT,

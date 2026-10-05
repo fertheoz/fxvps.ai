@@ -125,6 +125,8 @@ function ClientDrawer({ client, all, onClose }: { client: Client | null; all: Cl
   const actor = useActor();
   const positions = useApiQuery("listPositions", [], { live: client ? 5000 : undefined });
   const kycMut = useApiMutation((k: Client["kyc"]) => api().setKyc(client!.id, k, actor));
+  const groups = useApiQuery("listGroups", [], { enabled: !!client });
+  const groupMut = useApiMutation((g: string) => api().setGroup(client!.id, g, actor));
   if (!client) return null;
   const subs = all.filter((c) => c.parentId === client.id);
   const ml = marginLevel(client.equity, client.margin);
@@ -167,6 +169,23 @@ function ClientDrawer({ client, all, onClose }: { client: Client | null; all: Cl
               {KycStatus.options.map((k) => <option key={k} value={k}>{k}</option>)}
             </Select>
           </div>
+        </section>
+
+        <section className="grid gap-2">
+          <h3 className="text-sm font-semibold">{t("clients.group")}</h3>
+          <div className="flex items-center gap-2">
+            <Select
+              aria-label={t("clients.setGroup")}
+              value={client.group}
+              disabled={!actor.can("clients.edit") || groupMut.isPending}
+              onChange={(e) => groupMut.mutate(e.target.value)}
+              data-testid="client-group"
+            >
+              {(groups.data ?? []).map((g) => <option key={g.id} value={g.name}>{g.name} · {g.marginMode === "retail_netting" ? "netting" : "hedging"} · 1:{g.leverage}</option>)}
+            </Select>
+          </div>
+          <p className="text-xs text-muted-foreground">{t("clients.groupHint")}</p>
+          {groupMut.error && <p className="text-xs text-red-600 dark:text-red-400">{String((groupMut.error as Error).message ?? groupMut.error)}</p>}
         </section>
 
         <BalanceOps client={client} />

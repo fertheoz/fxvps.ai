@@ -380,6 +380,30 @@ impl Engine {
                 );
                 self.events.push(Event::AccountOpened { account: *account });
             }
+            Command::SetAccountGroup { account, group } => {
+                let acc = self.st.accounts.get(account).ok_or("unknown account")?;
+                let old = self.st.groups.get(&acc.group).ok_or("unknown group")?;
+                let new = self.st.groups.get(group).ok_or("unknown group")?;
+                if new.currency != old.currency {
+                    return Err("group currency differs".into());
+                }
+                if self.st.positions.values().any(|p| p.account == *account) {
+                    return Err("account has open positions".into());
+                }
+                if self
+                    .st
+                    .orders
+                    .values()
+                    .any(|o| o.req.account == *account && !o.status.is_terminal())
+                {
+                    return Err("account has working orders".into());
+                }
+                self.st.accounts.get_mut(account).expect("account").group = group.clone();
+                self.events.push(Event::AccountGroupChanged {
+                    account: *account,
+                    group: group.clone(),
+                });
+            }
             Command::Deposit {
                 account,
                 amount,

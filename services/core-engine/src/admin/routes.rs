@@ -31,6 +31,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/accounts/{id}/positions", get(account_positions))
         .route("/v1/accounts/{id}/balance-ops", post(balance_op))
         .route("/v1/accounts/{id}/kyc", patch(set_kyc))
+        .route("/v1/accounts/{id}/group", patch(set_group))
         .route("/v1/approvals", get(list_approvals))
         .route("/v1/approvals/{id}/approve", post(approve))
         .route("/v1/approvals/{id}/reject", post(reject))
@@ -766,6 +767,47 @@ async fn set_kyc(
         AdminCmd::KycSet {
             account,
             kyc: req.kyc,
+        },
+    )?;
+    ctx.notify(&["listClients", "getClient", "listAudit"]);
+    let st = ctx.view_state().await;
+    ctx.q(move |e| views::client(e, account, &st))
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("unknown account"))
+}
+
+#[derive(Deserialize)]
+struct GroupReq {
+    group: String,
+}
+
+/// Moves an account to another group (margin mode / routing); the engine
+/// refuses while the account has open positions or working orders.
+async fn set_group(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(req): Json<GroupReq>,
+) -> ApiResult {
+    need(&actor, "clients.edit")?;
+    let account = parse_id(&id)?;
+    let group = req.group.clone();
+    let old = ctx
+        .q(move |e| e.account(account).map(|a| a.group.clone()))
+        .await?
+        .ok_or_else(|| ApiError::not_found("unknown account"))?;
+    ctx.cmd(Command::SetAccountGroup {
+        account,
+        group: group.clone(),
+    })
+    .await?;
+    ctx.store.lock().await.append(
+        &actor,
+        AdminCmd::AccountGroupSet {
+            account,
+            group,
+            old,
         },
     )?;
     ctx.notify(&["listClients", "getClient", "listAudit"]);

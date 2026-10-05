@@ -79,6 +79,7 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     balanceOp: (req, actor) =>
       call("POST", `/v1/accounts/${enc(req.clientId)}/balance-ops`, req, actor, { "idempotency-key": req.idempotencyKey }),
     setKyc: (id, kyc, actor) => call("PATCH", `/v1/accounts/${enc(id)}/kyc`, { kyc }, actor),
+    setGroup: (id, group, actor) => call("PATCH", `/v1/accounts/${enc(id)}/group`, { group }, actor),
     listGroups: () => call("GET", "/v1/groups"),
     saveGroup: (g, actor) => call("PUT", `/v1/groups/${enc(g.id)}`, g, actor),
     listSymbols: () => call("GET", "/v1/symbols"),
