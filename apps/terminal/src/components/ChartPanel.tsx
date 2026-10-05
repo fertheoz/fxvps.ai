@@ -18,11 +18,14 @@ import { selectOrders, selectPositions, useTerminal, type Indicators } from '../
 import { useT } from '../hooks';
 import { applyTick } from '@fxvps/trading-core';
 import { bollinger, ema, rsi, sma } from '@fxvps/trading-core';
-import { formatPrice, lotsToVolume, volumeToLots } from '@fxvps/trading-core';
+import { formatPrice, lotsToVolume, roundPrice, volumeToLots } from '@fxvps/trading-core';
 import { isTauri, openChartWindow } from '../native';
 import { dragProtection, hitLine } from '../lib/chartDrag';
 
 type Line = ISeriesApi<'Line'>;
+
+/** Height of the draft line's touch target (px). */
+const DRAFT_HANDLE = 44;
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
@@ -47,8 +50,19 @@ function lineData(bars: Bar[], values: (number | null)[]) {
   return out;
 }
 
-/** `bare`: canvas only (the mobile shell brings its own symbol / timeframe / trade controls). */
-export function ChartPanel({ index, detached = false, bare = false }: { index: number; detached?: boolean; bare?: boolean }) {
+/** A price line the user drags to choose an order price (phone: place a limit order from the chart). */
+export interface DraftLine {
+  price: number;
+  label: string;
+  tone: 'up' | 'down';
+  onMove: (price: number) => void;
+}
+
+/**
+ * `bare`: canvas only (the mobile shell brings its own symbol / timeframe / trade controls).
+ * `draft`: draggable order line drawn over the chart.
+ */
+export function ChartPanel({ index, detached = false, bare = false, draft }: { index: number; detached?: boolean; bare?: boolean; draft?: DraftLine }) {
   const t = useT();
   const slot = useTerminal((s) => s.charts[index]);
   const spec = useTerminal((s) => (slot ? s.symbols[slot.symbol] : undefined));
@@ -75,6 +89,7 @@ export function ChartPanel({ index, detached = false, bare = false }: { index: n
   /** Draggable SL/TP lines of open positions. */
   const protRef = useRef<{ line: IPriceLine; positionId: string; kind: 'sl' | 'tp' }[]>([]);
   const dragRef = useRef<{ line: IPriceLine; positionId: string; kind: 'sl' | 'tp'; price: number } | null>(null);
+  const draftEl = useRef<HTMLDivElement>(null);
   const [loadedKey, setLoadedKey] = useState('');
   const [lotsText, setLotsText] = useState(volumeToLots(oneClickVolume));
   const [busy, setBusy] = useState(false);
@@ -321,6 +336,23 @@ export function ChartPanel({ index, detached = false, bare = false }: { index: n
     e.currentTarget.style.cursor = lineAt(e.clientY) ? 'ns-resize' : '';
   };
 
+  // The draft line follows the price scale: placed after every render (ticks re-render the panel).
+  useEffect(() => {
+    const el = draftEl.current;
+    const series = candleRef.current;
+    if (!el || !series || !draft) return;
+    const y = series.priceToCoordinate(draft.price);
+    el.style.display = y === null ? 'none' : '';
+    if (y !== null) el.style.top = `${y - DRAFT_HANDLE / 2}px`;
+  });
+  const dragDraft = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = host.current;
+    const series = candleRef.current;
+    if (!draft || !spec || !el || !series || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    const p = series.coordinateToPrice(e.clientY - el.getBoundingClientRect().top);
+    if (p !== null && p > 0) draft.onMove(roundPrice(p, spec.digits));
+  };
+
   if (!slot) return null;
 
   const oneClick = async (side: 'buy' | 'sell') => {
@@ -377,6 +409,21 @@ export function ChartPanel({ index, detached = false, bare = false }: { index: n
       <div className="relative flex-1 min-h-0">
         <div ref={host} className="absolute inset-0" onMouseDownCapture={onPointerDown} onMouseMove={onHover} data-testid={`chart-canvas-${index}`} />
         {loading && <div className="absolute inset-0 grid place-items-center text-muted">{t('chart.loading')}</div>}
+        {draft && (
+          <div
+            ref={draftEl}
+            className="absolute left-0 right-0 z-20 flex items-center touch-none cursor-ns-resize select-none"
+            style={{ height: DRAFT_HANDLE }}
+            onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
+            onPointerMove={dragDraft}
+            data-testid={`chart-draft-${index}`}
+          >
+            <span className={`h-7 px-3 ml-2 rounded-full grid place-items-center text-[12px] font-semibold text-white shadow-lg ${draft.tone === 'up' ? 'bg-up' : 'bg-down'}`}>
+              ↕ {draft.label}
+            </span>
+            <span className={`flex-1 border-t-2 border-dashed ${draft.tone === 'up' ? 'border-up' : 'border-down'}`} />
+          </div>
+        )}
         {spec && quote && !bare && (
           <div className="absolute top-2 left-2 z-10 flex items-stretch rounded-md overflow-hidden shadow-lg border border-line text-[12px] select-none" data-testid={`oneclick-${index}`}>
             <button
