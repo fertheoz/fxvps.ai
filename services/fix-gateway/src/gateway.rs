@@ -88,6 +88,8 @@ impl OrderCommand {
 pub enum GatewayError {
     #[error("message store: {0}")]
     Store(#[from] std::io::Error),
+    #[error("tls: {0}")]
+    Tls(#[from] crate::tls::TlsError),
 }
 
 pub struct GatewayHandle {
@@ -197,6 +199,14 @@ pub fn start(cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
     let (events, _) = broadcast::channel(4096);
     let (orders, orders_rx) = mpsc::channel(1024);
     let (shutdown, sd) = watch::channel(false);
+    let tls_for = |ep: &SessionEndpoint| -> Result<Option<crate::tls::Tls>, GatewayError> {
+        Ok(match &ep.tls {
+            Some(t) => Some(crate::tls::build(t, &ep.addr)?),
+            None => None,
+        })
+    };
+    let md_tls = tls_for(&cfg.md)?;
+    let trade_tls = tls_for(&cfg.trade)?;
     let md_session = session_for(&cfg, &cfg.md, store_for(&cfg, "md")?);
     let trade_session = session_for(&cfg, &cfg.trade, store_for(&cfg, "trade")?);
     let status = Arc::new(std::sync::RwLock::new(
@@ -238,9 +248,16 @@ pub fn start(cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
     });
     let tasks = vec![
         tracker,
-        tokio::spawn(md_task(cfg.clone(), md_session, events.clone(), sd.clone())),
+        tokio::spawn(md_task(
+            cfg.clone(),
+            md_tls,
+            md_session,
+            events.clone(),
+            sd.clone(),
+        )),
         tokio::spawn(trade_task(
             cfg,
+            trade_tls,
             trade_session,
             events.clone(),
             orders_rx,
@@ -256,10 +273,31 @@ pub fn start(cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
     })
 }
 
-/// Connects or returns `None` on shutdown.
-async fn connect(addr: &str, sd: &mut watch::Receiver<bool>) -> Option<std::io::Result<TcpStream>> {
+/// Byte stream to the LP: plain TCP or TLS.
+trait Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Io for T {}
+
+async fn open(addr: &str, tls: Option<&crate::tls::Tls>) -> std::io::Result<Box<dyn Io>> {
+    Ok(match tls {
+        Some(t) => {
+            Box::new(fix_session::tls::connect_tls(addr, &t.server_name, t.config.clone()).await?)
+        }
+        None => {
+            let s = TcpStream::connect(addr).await?;
+            s.set_nodelay(true)?;
+            Box::new(s)
+        }
+    })
+}
+
+/// Connects (TCP, then TLS when configured) or returns `None` on shutdown.
+async fn connect(
+    addr: &str,
+    tls: Option<&crate::tls::Tls>,
+    sd: &mut watch::Receiver<bool>,
+) -> Option<std::io::Result<Box<dyn Io>>> {
     tokio::select! {
-        r = TcpStream::connect(addr) => Some(r.and_then(|s| { s.set_nodelay(true)?; Ok(s) })),
+        r = open(addr, tls) => Some(r),
         _ = sd.changed() => None,
     }
 }
@@ -296,6 +334,7 @@ fn down(events: &broadcast::Sender<GatewayEvent>, session: SessionKind, reason: 
 
 async fn md_task(
     cfg: Arc<GatewayConfig>,
+    tls: Option<crate::tls::Tls>,
     session: Session<Store>,
     events: broadcast::Sender<GatewayEvent>,
     mut sd: watch::Receiver<bool>,
@@ -304,7 +343,7 @@ async fn md_task(
     let mut session = Some(session);
     let mut req_counter = 0u64;
     while let Some(s) = session.take() {
-        let io = match connect(&cfg.md.addr, &mut sd).await {
+        let io = match connect(&cfg.md.addr, tls.as_ref(), &mut sd).await {
             None => break,
             Some(Ok(io)) => io,
             Some(Err(e)) => {
@@ -426,6 +465,7 @@ fn reject_cmd(events: &broadcast::Sender<GatewayEvent>, c: &OrderCommand, reason
 
 async fn trade_task(
     cfg: Arc<GatewayConfig>,
+    tls: Option<crate::tls::Tls>,
     session: Session<Store>,
     events: broadcast::Sender<GatewayEvent>,
     mut orders: mpsc::Receiver<OrderCommand>,
@@ -435,7 +475,7 @@ async fn trade_task(
     let mut session = Some(session);
     let mut orders_open = true;
     while let Some(s) = session.take() {
-        let io = match connect(&cfg.trade.addr, &mut sd).await {
+        let io = match connect(&cfg.trade.addr, tls.as_ref(), &mut sd).await {
             None => break,
             Some(Ok(io)) => io,
             Some(Err(e)) => {
