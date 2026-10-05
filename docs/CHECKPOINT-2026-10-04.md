@@ -52,7 +52,7 @@ Ayrıntı: kök `README.md`, `docs/04-operasyon.md`.
 2. **Depo görünürlüğü:** şu an public; private için Settings → Danger Zone.
 3. **Güvenlik:** G14, G15, G17 ertelendi; G8, G10, G13 kısmi (`docs/07`).
 4. **Ürün eksikleri:**
-   - Admin API'de LP oturumları ve işlem geçmişi boş.
+   - ~~Admin API'de LP oturumları ve işlem geçmişi boş~~ (tamam: #25, #26; ayrı süreçte `FIX_STATUS_ADDR` + `CORE_LP_STATUS_URL`).
    - NATS tabanlı `CoreApi` yok.
    - Terminal henüz `packages/trading-core`'u kullanmıyor (kopya kod).
    - Mobil EAS native derleme ve push bildirimi yok.

@@ -17,6 +17,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("[nats] configured but binary built without the `nats` feature");
     }
     let gw = fix_gateway::start(cfg)?;
+    if let Some(addr) = std::env::var("FIX_STATUS_ADDR")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        let local = fix_gateway::status_http::spawn(&addr, gw.status_source()).await?;
+        tracing::info!(%local, "session status endpoint: GET /status");
+    }
     #[cfg(feature = "nats")]
     if let Some(n) = nats_cfg {
         let rx = gw.subscribe();

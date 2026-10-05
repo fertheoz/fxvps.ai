@@ -8,6 +8,7 @@
 //! deterministically.
 
 pub mod auth;
+pub mod lp_poll;
 mod routes;
 pub mod seed;
 pub mod store;
@@ -37,7 +38,8 @@ pub struct AdminConfig {
     pub cors_origins: Option<Vec<String>>,
     /// Interval of the engine-change ticker that feeds the live stream.
     pub live_interval_ms: u64,
-    /// FIX session table of an in-process fix-gateway (`GatewayHandle::status_source`).
+    /// FIX session table: of an in-process fix-gateway (`GatewayHandle::status_source`)
+    /// or polled from a remote one ([`lp_poll::spawn`], `CORE_LP_STATUS_URL`).
     /// `None`: `/v1/lp/sessions` returns an empty list.
     pub lp_status: Option<LpStatus>,
 }

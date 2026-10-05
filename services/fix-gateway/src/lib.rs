@@ -6,6 +6,7 @@
 pub mod config;
 pub mod gateway;
 pub mod normalize;
+pub mod status_http;
 
 #[cfg(feature = "nats")]
 pub mod nats;
