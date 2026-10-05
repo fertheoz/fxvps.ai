@@ -32,6 +32,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::time::Duration::from_secs(2),
         ));
     }
+    if let Some(url) = std::env::var("CORE_LP_ADMIN_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        let token = std::env::var("CORE_LP_ADMIN_TOKEN").map_err(|_| {
+            "CORE_LP_ADMIN_URL needs CORE_LP_ADMIN_TOKEN (= the gateway's FIX_ADMIN_TOKEN)"
+        })?;
+        admin_cfg.lp_admin = Some(admin::LpAdmin { url, token });
+    }
     let app = admin::app(handle.clone(), auth, admin_cfg)?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("core-engine admin API on {addr}");

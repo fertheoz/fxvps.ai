@@ -122,6 +122,10 @@ export interface AdminApi {
 
   listFixSessions(): Promise<FixSession[]>;
   reconnect(sessionId: string, actor: Actor): Promise<FixSession>;
+  /** Managed fix-gateway config; passwords are never returned (`password_set` instead). */
+  getLpConfig(): Promise<LpConfig | null>;
+  /** Empty/absent password keeps the stored one. Restarts the FIX sessions. */
+  saveLpConfig(c: LpConfig, actor: Actor): Promise<LpConfig>;
 
   listTrades(): Promise<Trade[]>;
   statements(): Promise<Statement[]>;
@@ -140,4 +144,37 @@ export interface AdminApi {
 
   /** Server push (SSE). Adapters without push omit it and the UI polls. */
   subscribe?(onTopics: (topics: string[]) => void, onStatus?: (connected: boolean) => void): Unsubscribe;
+}
+
+/** One FIX session of the LP (fix-gateway `SessionEndpoint`, snake_case as on the wire). */
+export interface LpEndpoint {
+  addr: string;
+  sender_comp_id: string;
+  target_comp_id: string;
+  username: string | null;
+  password: string | null;
+  password_set?: boolean;
+  reset_on_logon: boolean;
+  tls: { server_name?: string | null; ca_file?: string | null; client_cert_file?: string | null; client_key_file?: string | null } | null;
+}
+
+export interface LpInstrument {
+  symbol: string;
+  security_id: string;
+  tick_size: string;
+  qty_step?: string;
+}
+
+/** fix-gateway `GatewayConfig`. */
+export interface LpConfig {
+  lp: string;
+  heartbeat_secs: number;
+  market_depth: number;
+  reconnect_delay_ms: number;
+  security_id_source: string;
+  store_dir: string | null;
+  md: LpEndpoint;
+  trade: LpEndpoint;
+  instruments: LpInstrument[];
+  nats: unknown;
 }

@@ -44,6 +44,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/risk/margin-calls", get(margin_calls))
         .route("/v1/risk/presets", get(presets))
         .route("/v1/lp/sessions", get(lp_sessions))
+        .route("/v1/lp/config", get(lp_config_get).put(lp_config_put))
         .route("/v1/lp/sessions/{id}/reconnect", post(lp_reconnect))
         .route("/v1/reports/trades", get(trades))
         .route("/v1/reports/statements", get(statements))
@@ -1046,6 +1047,86 @@ async fn lp_sessions(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
         .and_then(|s| s.read().ok().map(|t| t.clone()))
         .unwrap_or_default();
     Ok(Json(views::lp_sessions(&rows)))
+}
+
+fn lp_admin(ctx: &AdminCtx) -> Result<&super::LpAdmin, ApiError> {
+    ctx.lp_admin.as_ref().ok_or_else(|| {
+        ApiError::not_found("LP config is not managed here (CORE_LP_ADMIN_URL unset)")
+    })
+}
+
+/// Forwards to the gateway; maps its JSON error to an API error.
+async fn gateway_call(ctx: &AdminCtx, put_body: Option<&Value>) -> Result<Value, ApiError> {
+    let a = lp_admin(ctx)?;
+    let url = format!("{}/config", a.url.trim_end_matches('/'));
+    let req = match put_body {
+        Some(b) => ctx.http.put(&url).json(b),
+        None => ctx.http.get(&url),
+    };
+    let res = req.bearer_auth(&a.token).send().await.map_err(|e| {
+        ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "lp_unreachable",
+            format!("fix-gateway: {e}"),
+        )
+    })?;
+    let status = res.status();
+    let v: Value = res.json().await.unwrap_or(Value::Null);
+    if status.is_success() {
+        return Ok(v);
+    }
+    let msg = v["error"]
+        .as_str()
+        .unwrap_or("fix-gateway error")
+        .to_string();
+    Err(if status == StatusCode::BAD_REQUEST {
+        ApiError::bad(msg)
+    } else {
+        ApiError::new(StatusCode::BAD_GATEWAY, "lp_error", msg)
+    })
+}
+
+async fn lp_config_get(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "lp.view")?;
+    Ok(Json(gateway_call(&ctx, None).await?))
+}
+
+/// Audit text without secrets: endpoints, CompIDs and whether passwords changed.
+fn lp_config_details(v: &Value) -> String {
+    let ep = |k: &str| {
+        let e = &v[k];
+        let pw = e["password"].as_str().is_some_and(|p| !p.is_empty());
+        format!(
+            "{k} {} {}->{}{}{}",
+            e["addr"].as_str().unwrap_or("?"),
+            e["sender_comp_id"].as_str().unwrap_or("?"),
+            e["target_comp_id"].as_str().unwrap_or("?"),
+            if e["tls"].is_object() { " tls" } else { "" },
+            if pw { " (password changed)" } else { "" }
+        )
+    };
+    format!(
+        "{}; {}; {} instruments",
+        ep("md"),
+        ep("trade"),
+        v["instruments"].as_array().map_or(0, Vec::len)
+    )
+}
+
+async fn lp_config_put(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    need(&actor, "lp.manage")?;
+    let details = lp_config_details(&body);
+    let saved = gateway_call(&ctx, Some(&body)).await?;
+    ctx.store
+        .lock()
+        .await
+        .append(&actor, AdminCmd::LpConfigSaved { details })?;
+    ctx.notify(&["getLpConfig", "listFixSessions", "listAudit"]);
+    Ok(Json(saved))
 }
 
 async fn lp_reconnect(actor: Actor, Path(_id): Path<String>) -> ApiResult {

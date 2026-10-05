@@ -21,6 +21,7 @@ export const PERMISSIONS = [
   "risk.edit",
   "lp.view",
   "lp.reconnect",
+  "lp.manage",
   "reports.view",
   "reports.export",
   "audit.view",

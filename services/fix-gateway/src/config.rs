@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use domain::Instrument;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GatewayConfig {
     /// LP name stamped on normalized events.
     #[serde(default = "default_lp")]
@@ -25,7 +25,7 @@ pub struct GatewayConfig {
     pub nats: Option<NatsConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionEndpoint {
     pub addr: String,
     pub sender_comp_id: String,
@@ -40,7 +40,7 @@ pub struct SessionEndpoint {
 }
 
 /// `[md.tls]` / `[trade.tls]`.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TlsEndpoint {
     /// Name checked against the certificate; default: host part of `addr`.
     pub server_name: Option<String>,
@@ -51,7 +51,7 @@ pub struct TlsEndpoint {
     pub client_key_file: Option<PathBuf>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NatsConfig {
     pub url: String,
     pub subject_prefix: String,
