@@ -80,6 +80,46 @@ body {
 .flash-up { animation: flash-up 600ms ease-out; color: var(--up); }
 .flash-down { animation: flash-down 600ms ease-out; color: var(--down); }
 
+/* ---- mobile shell (src/mobile) ---- */
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.fx-mobile {
+  font-size: 14px;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+  background:
+    radial-gradient(120% 60% at 100% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+    radial-gradient(90% 50% at 0% 0%, color-mix(in srgb, var(--up) 10%, transparent), transparent 55%),
+    var(--bg);
+}
+.fx-mobile input,
+.fx-mobile select {
+  font-size: 16px; /* below 16px iOS zooms the page on focus */
+}
+.fx-mobile .fx-view { animation: fade-in 180ms ease-out; }
+.fx-mobile .fx-sheet { animation: sheet-up 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.fx-mobile .fx-glass {
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+}
+.fx-mobile .fx-card {
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 18px;
+}
+.fx-mobile .fx-ticket { zoom: 1.12; }
+@media (prefers-reduced-motion: reduce) {
+  .fx-mobile .fx-view,
+  .fx-mobile .fx-sheet { animation: none; }
+}
+
 [data-separator] {
   background: var(--border);
   transition: background 120ms;
