@@ -186,6 +186,11 @@ impl Engine {
         self.st.lp_orders.get(&id)
     }
     /// Net omnibus LP position per symbol (raw lots, signed).
+    /// Every order sent to the LP, oldest first.
+    pub fn lp_orders(&self) -> impl Iterator<Item = &LpOrder> {
+        self.st.lp_orders.values()
+    }
+
     pub fn omnibus_net(&self, symbol: &str) -> i64 {
         *self.st.omnibus_net.get(symbol).unwrap_or(&0)
     }
@@ -827,6 +832,9 @@ impl Engine {
                 filled: Qty::ZERO,
                 children,
                 done: false,
+                fills: Vec::new(),
+                created_ts: self.st.now,
+                reject_reason: None,
             },
         );
         self.router.send(&req);
@@ -874,6 +882,12 @@ impl Engine {
             let lp = self.st.lp_orders.get_mut(&lp_id).expect("lp");
             lp.filled = Qty::from_raw(lp.filled.raw() + allocated);
             lp.done = lp.filled >= lp.volume;
+            lp.fills.push(LpExec {
+                exec_id: exec_id.to_string(),
+                volume,
+                price,
+                ts: self.st.now,
+            });
         }
         *self.st.omnibus_net.entry(symbol.clone()).or_default() += side.sign() * allocated;
         for (oid, q) in allocs {
@@ -900,6 +914,7 @@ impl Engine {
             return Err("LP order already complete".into());
         }
         lp.done = true;
+        lp.reject_reason = Some(reason.to_string());
         let children = lp.children.clone();
         for c in children {
             let o = &self.st.orders[&c];
@@ -985,17 +1000,23 @@ impl Engine {
         let routing = self.st.orders[&id].routing;
         let mut left = v;
         // the fill's commission is attributed to its first deal
-        let mut deal = |e: &mut Engine, pid: PositionId, entry: DealEntry, vol: Qty, pnl: Money| {
+        let lp_px = (routing == Routing::ABook).then_some(lp_price);
+        let mut deal = |e: &mut Engine,
+                        pid: PositionId,
+                        entry: DealEntry,
+                        vol: Qty,
+                        pnl: Money,
+                        legs: (i128, i128)| {
             let c = std::mem::replace(&mut commission, Money::zero(g.currency));
-            e.add_deal(id, pid, entry, vol, price, pnl, c);
+            e.add_deal(id, pid, entry, vol, price, pnl, c, lp_px, legs);
         };
         if let Some(pid) = close {
             if let Some(p) = self.st.positions.get_mut(&pid) {
                 p.closing = Qty::from_raw((p.closing.raw() - v.raw()).max(0));
             }
             if self.st.positions.contains_key(&pid) {
-                let pnl = self.reduce_position(pid, v, price, lp_price, exec);
-                deal(self, pid, DealEntry::Out, v, pnl);
+                let (pnl, broker, lp) = self.reduce_position(pid, v, price, lp_price, exec);
+                deal(self, pid, DealEntry::Out, v, pnl, (broker, lp));
             }
             left = Qty::ZERO;
         } else if g.margin_mode == MarginMode::Netting {
@@ -1008,19 +1029,19 @@ impl Engine {
             if let Some((pid, pside, pvol)) = existing {
                 if pside != side {
                     let r = v.min(pvol);
-                    let pnl = self.reduce_position(pid, r, price, lp_price, exec);
-                    deal(self, pid, DealEntry::Out, r, pnl);
+                    let (pnl, broker, lp) = self.reduce_position(pid, r, price, lp_price, exec);
+                    deal(self, pid, DealEntry::Out, r, pnl, (broker, lp));
                     left = Qty::from_raw(v.raw() - r.raw());
                 } else {
                     self.increase_position(pid, v, price, lp_price);
-                    deal(self, pid, DealEntry::In, v, Money::zero(g.currency));
+                    deal(self, pid, DealEntry::In, v, Money::zero(g.currency), (0, 0));
                     left = Qty::ZERO;
                 }
             }
         } else if let Some(pid) = self.st.orders[&id].position {
             if self.st.positions.contains_key(&pid) {
                 self.increase_position(pid, v, price, lp_price);
-                deal(self, pid, DealEntry::In, v, Money::zero(g.currency));
+                deal(self, pid, DealEntry::In, v, Money::zero(g.currency), (0, 0));
                 left = Qty::ZERO;
             }
         }
@@ -1046,7 +1067,14 @@ impl Engine {
             self.st.positions.insert(pid, pos);
             self.st.orders.get_mut(&id).expect("order").position = Some(pid);
             self.events.push(Event::PositionOpened { position_id: pid });
-            deal(self, pid, DealEntry::In, left, Money::zero(g.currency));
+            deal(
+                self,
+                pid,
+                DealEntry::In,
+                left,
+                Money::zero(g.currency),
+                (0, 0),
+            );
         }
         self.balance_event(account);
     }
@@ -1061,6 +1089,8 @@ impl Engine {
         price: Price,
         pnl: Money,
         commission: Money,
+        lp_price: Option<Price>,
+        legs: (i128, i128),
     ) {
         let o = &self.st.orders[&order_id];
         let id = self.st.deals.len() as u64 + 1;
@@ -1078,6 +1108,9 @@ impl Engine {
             commission,
             ts: self.st.now,
             reason: o.origin,
+            lp_price,
+            broker_pnl: legs.0,
+            lp_pnl: legs.1,
         });
         self.events.push(Event::DealAdded { deal_id: id });
     }
@@ -1100,7 +1133,8 @@ impl Engine {
         p.volume = Qty::from_raw((a + b) as i64);
     }
 
-    /// Closes `v` lots of a position and books realized P&L.
+    /// Closes `v` lots of a position and books realized P&L. Returns the client
+    /// P&L and the broker and LP legs (minor units of the account currency).
     fn reduce_position(
         &mut self,
         pid: PositionId,
@@ -1108,7 +1142,7 @@ impl Engine {
         price: Price,
         lp_price: Price,
         exec: u64,
-    ) -> Money {
+    ) -> (Money, i128, i128) {
         let p = self.st.positions[&pid].clone();
         let acc = self.st.accounts[&p.account].clone();
         let g = self.st.groups[&acc.group].clone();
@@ -1117,6 +1151,7 @@ impl Engine {
         let pnl = risk::pnl_money(&spec, p.side, p.open_price, price, v, g.currency, q)
             .unwrap_or(Money::zero(g.currency));
         let mut postings = vec![(acc.ledger_id, pnl)];
+        let mut legs = (-pnl.minor, 0i128);
         match p.routing {
             Routing::BBook => postings.push((BROKER_BOOK, Money::new(-pnl.minor, pnl.currency))),
             Routing::ABook => {
@@ -1128,6 +1163,7 @@ impl Engine {
                     Money::new(lp_pnl.minor - pnl.minor, pnl.currency),
                 ));
                 postings.push((LP_COUNTERPARTY, Money::new(-lp_pnl.minor, pnl.currency)));
+                legs = (lp_pnl.minor - pnl.minor, lp_pnl.minor);
             }
         }
         let _ = self.post(TxnKind::RealizedPnl, format!("pnl:{exec}:{pid}"), postings);
@@ -1147,7 +1183,7 @@ impl Engine {
             remaining,
         });
         self.negative_balance_protection(p.account);
-        pnl
+        (pnl, legs.0, legs.1)
     }
 
     fn negative_balance_protection(&mut self, account: AccountNo) {

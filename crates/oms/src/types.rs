@@ -168,6 +168,16 @@ pub struct Deal {
     pub commission: Money,
     pub ts: u64,
     pub reason: OrderOrigin,
+    /// Price of this execution at the LP (A-book only).
+    #[serde(default)]
+    pub lp_price: Option<Price>,
+    /// Broker result of a closing deal, minor units of the account currency: the
+    /// markup on the A-book, the opposite of the client P&L on the B-book.
+    #[serde(default)]
+    pub broker_pnl: i128,
+    /// Our own result at the LP for a closing A-book deal (minor units).
+    #[serde(default)]
+    pub lp_pnl: i128,
 }
 
 /// New parameters of a pending order (`Command::ModifyOrder`); every field
@@ -247,6 +257,22 @@ pub struct LpOrder {
     pub filled: Qty,
     pub children: Vec<OrderId>,
     pub done: bool,
+    /// Executions reported by the LP (back office execution log).
+    #[serde(default)]
+    pub fills: Vec<LpExec>,
+    #[serde(default)]
+    pub created_ts: u64,
+    #[serde(default)]
+    pub reject_reason: Option<String>,
+}
+
+/// One LP execution report applied to an [`LpOrder`].
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub struct LpExec {
+    pub exec_id: String,
+    pub volume: Qty,
+    pub price: Price,
+    pub ts: u64,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]

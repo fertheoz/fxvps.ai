@@ -84,6 +84,8 @@ auth and seeded data and runs `e2e-live/` against it.
 | POST | `/v1/lp/sessions/{id}/reconnect` | `reconnect(id)` | lp.reconnect | sends Logon (35=A) |
 | GET | `/v1/reports/trades` | `listTrades()` | reports.view | `Trade[]` |
 | GET | `/v1/reports/statements` | `statements()` | reports.view | `Statement[]` |
+| GET | `/v1/reports/lp-executions` | `listLpExecutions()` | reports.view | `LpExecution[]` newest first: LP order, fills (exec id, price), allocated client orders |
+| GET | `/v1/reports/revenue` | `revenue()` | reports.view | `RevenueReport`: ledger legs per realized P&L / commission entry (client, broker, LP), totals all time and last 24 h |
 | GET | `/v1/audit` | `listAudit()` | audit.view | `AuditEntry[]` newest first, append-only |
 | GET | `/v1/admin-users` | `listUsers()` | users.view | `AdminUser[]` |
 | PUT | `/v1/admin-users/{id}` | `saveUser(u)` | users.edit | `AdminUser` |

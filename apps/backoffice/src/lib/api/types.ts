@@ -92,6 +92,52 @@ export interface Statement {
   closing: number;
 }
 
+/** An order sent to the LP, its executions and the client orders it was allocated to. */
+export interface LpExecution {
+  id: string;
+  symbol: string;
+  side: "buy" | "sell";
+  lots: number;
+  filledLots: number;
+  avgPrice: number;
+  status: "working" | "partial" | "filled" | "rejected";
+  reason: string | null;
+  createdAt: string;
+  fills: { execId: string; lots: number; price: number; at: string }[];
+  clients: { orderId: string; login: number; lots: number; price: number }[];
+}
+
+/** Broker revenue legs (minor units). `lp` is our own result at the LP. */
+export interface RevenueTotals {
+  markup: number;
+  bBook: number;
+  commission: number;
+  lp: number;
+  total: number;
+}
+
+export interface RevenueRow {
+  id: string;
+  at: string;
+  kind: "pnl" | "commission";
+  ref: string;
+  book: "A" | "B";
+  login: number;
+  symbol: string;
+  lots: number;
+  price: number;
+  lpPrice: number | null;
+  client: number;
+  broker: number;
+  lp: number;
+}
+
+export interface RevenueReport {
+  total: RevenueTotals;
+  last24h: RevenueTotals;
+  rows: RevenueRow[];
+}
+
 /**
  * The back-office contract. The mock adapter implements it in-browser;
  * the HTTP adapter maps 1:1 to the future backoffice-api REST endpoints
@@ -131,6 +177,10 @@ export interface AdminApi {
 
   listTrades(): Promise<Trade[]>;
   statements(): Promise<Statement[]>;
+  /** Orders routed to the LP with their fills, newest first. */
+  listLpExecutions(): Promise<LpExecution[]>;
+  /** Realized broker revenue from the ledger (markup, B-book, commission). */
+  revenue(): Promise<RevenueReport>;
 
   listAudit(): Promise<AuditEntry[]>;
 

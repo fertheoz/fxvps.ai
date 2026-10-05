@@ -49,6 +49,8 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/lp/sessions/{id}/reconnect", post(lp_reconnect))
         .route("/v1/reports/trades", get(trades))
         .route("/v1/reports/statements", get(statements))
+        .route("/v1/reports/lp-executions", get(lp_executions))
+        .route("/v1/reports/revenue", get(revenue))
         .route("/v1/audit", get(audit))
         .route("/v1/admin-users", get(list_users))
         .route("/v1/admin-users/{id}", put(save_user))
@@ -123,8 +125,10 @@ fn parse_ccy(s: &str) -> Result<Currency, ApiError> {
         .map_err(|_| ApiError::bad(format!("invalid currency {s:?}")))
 }
 
+const DAY_NS: u64 = 86_400_000_000_000;
+
 fn day(ns: u64) -> u64 {
-    ns / 86_400_000_000_000
+    ns / DAY_NS
 }
 
 fn now_ns() -> u64 {
@@ -272,6 +276,13 @@ async fn dashboard(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
         sum(BalanceKind::Deposit, today),
         sum(BalanceKind::Withdraw, today),
     );
+    let (lp_up, lp_total) = ctx
+        .lp_status
+        .as_ref()
+        .and_then(|s| s.read().ok().map(|t| t.clone()))
+        .map(|rows| (rows.iter().filter(|r| r.logged_on).count(), rows.len()))
+        .unwrap_or((0, 0));
+    let since = now_ns().saturating_sub(DAY_NS);
     let v = ctx
         .q(move |e| {
             let ps = views::all_positions(e);
@@ -284,18 +295,23 @@ async fn dashboard(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
                     Routing::BBook => b += pnl,
                 }
             }
-            let _ = a; // A-book client P&L is hedged at the LP; broker revenue is markup only
+            // A-book client P&L is hedged at the LP: broker revenue is the realized
+            // markup (plus commission) booked in the ledger over the last 24 h.
+            let _ = a;
+            let rev = views::revenue(e, since);
+            let a_rev = rev["last24h"]["markup"].as_i64().unwrap_or(0)
+                + rev["last24h"]["commission"].as_i64().unwrap_or(0);
             json!({
                 "activeAccounts": active.len(),
                 "totalAccounts": e.accounts().count(),
                 "depositsToday": dep,
                 "withdrawalsToday": wd,
-                "aBookPnl": 0,
+                "aBookPnl": a_rev,
                 // broker is the counterparty of B-book client P&L
                 "bBookPnl": -(b as i64),
                 "openPositions": ps.len(),
-                "lpUp": 0,
-                "lpTotal": 0,
+                "lpUp": lp_up,
+                "lpTotal": lp_total,
                 "pnlSeries": [],
                 "depositSeries": series,
             })
@@ -1247,6 +1263,17 @@ async fn lp_reconnect(actor: Actor, Path(_id): Path<String>) -> ApiResult {
 async fn trades(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "reports.view")?;
     Ok(Json(ctx.q(views::trades).await?))
+}
+
+async fn lp_executions(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "reports.view")?;
+    Ok(Json(ctx.q(views::lp_executions).await?))
+}
+
+async fn revenue(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "reports.view")?;
+    let since = now_ns().saturating_sub(DAY_NS);
+    Ok(Json(ctx.q(move |e| views::revenue(e, since)).await?))
 }
 
 async fn statements(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

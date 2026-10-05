@@ -2,6 +2,7 @@
 //! Money is emitted in integer minor units, prices/lots as display floats.
 
 use super::store::AdminState;
+use ledger::TxnKind;
 use money::{Price, Qty};
 use oms::{Engine, OrderStatus, OrderType, Position};
 use risk::{AssetClass, EsmaPreset, GroupConfig, MarginMode, Routing, Side, SymbolSpec};
@@ -397,6 +398,150 @@ pub fn trades(e: &Engine) -> Value {
         .collect();
     rows.reverse();
     Value::Array(rows)
+}
+
+/// Orders sent to the LP with their executions and the client orders they were
+/// allocated to, newest first.
+pub fn lp_executions(e: &Engine) -> Value {
+    let mut rows: Vec<Value> = e
+        .lp_orders()
+        .map(|l| {
+            let (mut lots, mut notional) = (0f64, 0f64);
+            for f in &l.fills {
+                lots += qty_f(f.volume);
+                notional += qty_f(f.volume) * price_f(f.price);
+            }
+            let status = if l.reject_reason.is_some() {
+                "rejected"
+            } else if l.done {
+                "filled"
+            } else if lots > 0.0 {
+                "partial"
+            } else {
+                "working"
+            };
+            let clients: Vec<Value> = l
+                .children
+                .iter()
+                .filter_map(|c| e.order(*c))
+                .map(|o| {
+                    json!({
+                        "orderId": o.id.to_string(),
+                        "login": o.req.account,
+                        "lots": qty_f(o.filled),
+                        "price": price_f(o.avg_price),
+                    })
+                })
+                .collect();
+            let fills: Vec<Value> = l
+                .fills
+                .iter()
+                .map(|f| {
+                    json!({
+                        "execId": f.exec_id,
+                        "lots": qty_f(f.volume),
+                        "price": price_f(f.price),
+                        "at": iso(f.ts),
+                    })
+                })
+                .collect();
+            json!({
+                "id": l.id.to_string(),
+                "symbol": l.symbol,
+                "side": side_str(l.side),
+                "lots": qty_f(l.volume),
+                "filledLots": lots,
+                "avgPrice": if lots > 0.0 { notional / lots } else { 0.0 },
+                "status": status,
+                "reason": l.reject_reason,
+                "createdAt": iso(l.created_ts),
+                "fills": fills,
+                "clients": clients,
+            })
+        })
+        .collect();
+    rows.reverse();
+    Value::Array(rows)
+}
+
+#[derive(Default, Clone, Copy)]
+struct RevenueTotals {
+    markup: i128,
+    b_book: i128,
+    commission: i128,
+    lp: i128,
+}
+
+impl RevenueTotals {
+    fn add(&mut self, kind: TxnKind, a_book: bool, broker: i128, lp: i128) {
+        match (kind, a_book) {
+            (TxnKind::Commission, _) => self.commission += broker,
+            (_, true) => self.markup += broker,
+            (_, false) => self.b_book += broker,
+        }
+        self.lp += lp;
+    }
+
+    fn json(self) -> Value {
+        json!({
+            "markup": minor(self.markup),
+            "bBook": minor(self.b_book),
+            "commission": minor(self.commission),
+            "lp": minor(self.lp),
+            "total": minor(self.markup + self.b_book + self.commission),
+        })
+    }
+}
+
+/// Broker revenue per deal (minor units of the account currency), newest first, with
+/// totals overall and since `since_ns`: the markup of closing A-book deals (LP result
+/// minus client result), the result of closing B-book deals (the broker is the
+/// counterparty) and commission. `lp` is our own result at the LP.
+pub fn revenue(e: &Engine, since_ns: u64) -> Value {
+    let (mut all, mut recent) = (RevenueTotals::default(), RevenueTotals::default());
+    let mut rows = Vec::new();
+    for d in e.deals() {
+        let a_book = d.lp_price.is_some()
+            || e.account(d.account)
+                .and_then(|a| e.group(&a.group))
+                .is_some_and(|g| g.routing == Routing::ABook);
+        let mut row = |kind: TxnKind, client: i128, broker: i128, lp: i128| {
+            all.add(kind, a_book, broker, lp);
+            if d.ts >= since_ns {
+                recent.add(kind, a_book, broker, lp);
+            }
+            let commission = kind == TxnKind::Commission;
+            rows.push(json!({
+                "id": format!("{}{}", if commission { "c" } else { "d" }, d.id),
+                "at": iso(d.ts),
+                "kind": if commission { "commission" } else { "pnl" },
+                "ref": format!("deal {} · position {}", d.id, d.position_id),
+                "book": if a_book { "A" } else { "B" },
+                "login": d.account,
+                "symbol": d.symbol,
+                "lots": qty_f(d.volume),
+                "price": price_f(d.price),
+                "lpPrice": d.lp_price.map(price_f),
+                "client": minor(client),
+                "broker": minor(broker),
+                "lp": minor(lp),
+            }));
+        };
+        if d.entry == oms::DealEntry::Out {
+            row(TxnKind::RealizedPnl, d.pnl.minor, d.broker_pnl, d.lp_pnl);
+        }
+        if d.commission.minor != 0 {
+            row(
+                TxnKind::Commission,
+                d.commission.minor,
+                -d.commission.minor,
+                0,
+            );
+        }
+    }
+    rows.reverse();
+    rows.truncate(500);
+    json!({ "total": all.json(), "last24h": recent.json(), "rows": rows })
 }
 
 /// FIX session rows in the back office `FixSession` shape. Sequence numbers

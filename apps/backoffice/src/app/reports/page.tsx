@@ -3,25 +3,65 @@ import * as React from "react";
 import { createColumnHelper } from "@tanstack/react-table";
 import { Download } from "lucide-react";
 import { DataTable } from "@/components/ui/data-table";
-import { Button, PageHeader, Pnl, Tabs } from "@/components/ui/primitives";
+import { Button, PageHeader, Pnl, Stat, Tabs } from "@/components/ui/primitives";
 import { BookBadge, SideBadge } from "@/components/badges";
 import { useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { Trade } from "@/lib/schemas";
-import type { Statement } from "@/lib/api";
+import type { LpExecution, RevenueRow, RevenueTotals, Statement } from "@/lib/api";
 import { formatMinorPlain } from "@/lib/money";
 import { downloadCsv, toCsv } from "@/lib/utils";
 
 const tc = createColumnHelper<Trade>();
 const sc = createColumnHelper<Statement>();
+const lc = createColumnHelper<LpExecution>();
+const rc = createColumnHelper<RevenueRow>();
+type Tab = "trades" | "statements" | "lp" | "revenue";
 
 export default function ReportsPage() {
   const t = useT();
   const f = useFormat();
   const actor = useActor();
-  const [tab, setTab] = React.useState<"trades" | "statements">("trades");
+  const [tab, setTab] = React.useState<Tab>("trades");
   const trades = useApiQuery("listTrades");
   const statements = useApiQuery("statements");
+  const lp = useApiQuery("listLpExecutions", [], { live: 5000 });
+  const revenue = useApiQuery("revenue", [], { live: 5000 });
+
+  const lpCols = [
+    lc.accessor("createdAt", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
+    lc.accessor("symbol", { header: t("positions.symbol") }),
+    lc.accessor("side", { header: t("positions.side"), cell: (c) => <SideBadge side={c.getValue()} /> }),
+    lc.accessor("lots", { header: t("positions.lots") }),
+    lc.accessor("filledLots", { header: t("reports.filled") }),
+    lc.accessor("avgPrice", { header: t("reports.lpPrice"), cell: (c) => <span className="tabular-nums">{c.getValue() || "—"}</span> }),
+    lc.display({ id: "clientPrice", header: t("reports.clientPrice"), cell: (c) => <span className="tabular-nums">{c.row.original.clients.map((x) => x.price).join(", ") || "—"}</span> }),
+    lc.display({ id: "clients", header: t("reports.clients"), cell: (c) => c.row.original.clients.map((x) => `${x.login} · ${x.lots}`).join(", ") }),
+    lc.accessor("status", { header: t("reports.status"), cell: (c) => <span className={c.getValue() === "rejected" ? "text-red-600 dark:text-red-400" : undefined} title={c.row.original.reason ?? undefined}>{c.getValue()}</span> }),
+    lc.display({ id: "execId", header: t("reports.execId"), cell: (c) => <span className="font-mono text-xs">{c.row.original.fills.map((x) => x.execId).join(", ")}</span> }),
+  ];
+  const leg = (k: "client" | "broker" | "lp", label: "reports.clientLeg" | "reports.brokerLeg" | "reports.lpLeg") =>
+    rc.accessor(k, { header: t(label), cell: (c) => <Pnl value={c.getValue()}>{f.money(c.getValue())}</Pnl> });
+  const revCols = [
+    rc.accessor("at", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
+    rc.accessor("login", { header: t("clients.login") }),
+    rc.accessor("symbol", { header: t("positions.symbol") }),
+    rc.accessor("lots", { header: t("positions.lots") }),
+    rc.accessor("kind", { header: t("reports.kind") }),
+    rc.accessor("book", { header: t("groups.book"), cell: (c) => <BookBadge book={c.getValue()} /> }),
+    rc.accessor("price", { header: t("reports.clientPrice"), cell: (c) => <span className="tabular-nums">{c.getValue()}</span> }),
+    rc.accessor("lpPrice", { header: t("reports.lpPrice"), cell: (c) => <span className="tabular-nums">{c.getValue() ?? "—"}</span> }),
+    leg("client", "reports.clientLeg"), leg("broker", "reports.brokerLeg"), leg("lp", "reports.lpLeg"),
+    rc.accessor("ref", { header: t("reports.ref"), cell: (c) => <span className="font-mono text-xs">{c.getValue()}</span> }),
+  ];
+  const totals = (x: RevenueTotals | undefined, sub: string) => (
+    <>
+      <Stat label={t("reports.markup")} value={x ? f.money(x.markup) : "…"} sub={sub} tone={x && x.markup < 0 ? "down" : "up"} />
+      <Stat label={t("reports.commission")} value={x ? f.money(x.commission) : "…"} sub={sub} />
+      <Stat label={t("reports.bBook")} value={x ? f.money(x.bBook) : "…"} sub={sub} tone={x && x.bBook < 0 ? "down" : "up"} />
+      <Stat label={t("reports.totalRevenue")} value={x ? f.money(x.total) : "…"} sub={sub} tone={x && x.total < 0 ? "down" : "up"} />
+    </>
+  );
 
   const tradeCols = [
     tc.accessor("closedAt", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
@@ -46,7 +86,13 @@ export default function ReportsPage() {
   ];
 
   const exportCsv = () => {
-    if (tab === "trades") {
+    if (tab === "lp") {
+      const rows = (lp.data ?? []).map((x) => [x.id, x.createdAt, x.symbol, x.side, x.lots, x.filledLots, x.avgPrice, x.status, x.fills.map((y) => y.execId).join(" "), x.clients.map((y) => `${y.login}@${y.price}`).join(" ")]);
+      downloadCsv("lp-executions.csv", toCsv(["id", "created_at", "symbol", "side", "lots", "filled", "lp_price", "status", "exec_ids", "clients"], rows));
+    } else if (tab === "revenue") {
+      const rows = (revenue.data?.rows ?? []).map((x) => [x.id, x.at, x.login, x.symbol, x.lots, x.price, x.lpPrice ?? "", x.kind, x.book, formatMinorPlain(x.client, "USD"), formatMinorPlain(x.broker, "USD"), formatMinorPlain(x.lp, "USD"), x.ref]);
+      downloadCsv("revenue.csv", toCsv(["id", "at", "login", "symbol", "lots", "client_price", "lp_price", "kind", "book", "client", "broker", "lp", "ref"], rows));
+    } else if (tab === "trades") {
       const rows = (trades.data ?? []).map((x) => [x.id, x.closedAt, x.login, x.symbol, x.side, x.lots, x.openPrice, x.closePrice, formatMinorPlain(x.pnl, "USD"), formatMinorPlain(x.commission, "USD"), formatMinorPlain(x.swap, "USD"), x.book]);
       downloadCsv("trades.csv", toCsv(["id", "closed_at", "login", "symbol", "side", "lots", "open", "close", "pnl", "commission", "swap", "book"], rows));
     } else {
@@ -61,11 +107,18 @@ export default function ReportsPage() {
         {actor.can("reports.export") && <Button variant="outline" onClick={exportCsv} data-testid="export-csv"><Download className="h-4 w-4" />{t("common.export")}</Button>}
       </PageHeader>
       <div className="mb-3">
-        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }]} />
+        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "revenue", label: t("reports.revenue") }]} />
       </div>
-      {tab === "trades"
-        ? <DataTable data={trades.data ?? []} columns={tradeCols} getRowId={(x) => x.id} />
-        : <DataTable data={statements.data ?? []} columns={stmtCols} getRowId={(x) => String(x.login)} />}
+      {tab === "trades" && <DataTable data={trades.data ?? []} columns={tradeCols} getRowId={(x) => x.id} />}
+      {tab === "statements" && <DataTable data={statements.data ?? []} columns={stmtCols} getRowId={(x) => String(x.login)} />}
+      {tab === "lp" && <DataTable data={lp.data ?? []} columns={lpCols} getRowId={(x) => x.id} />}
+      {tab === "revenue" && (
+        <div data-testid="revenue-report">
+          <div className="mb-3 grid grid-cols-2 gap-3 xl:grid-cols-4">{totals(revenue.data?.last24h, t("reports.last24h"))}</div>
+          <div className="mb-3 grid grid-cols-2 gap-3 xl:grid-cols-4">{totals(revenue.data?.total, t("reports.allTime"))}</div>
+          <DataTable data={revenue.data?.rows ?? []} columns={revCols} getRowId={(x) => x.id} />
+        </div>
+      )}
     </div>
   );
 }
