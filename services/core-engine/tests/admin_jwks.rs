@@ -136,3 +136,96 @@ async fn identity_jwks_iss_aud_and_mfa() {
     h.shutdown();
     join.join().unwrap();
 }
+
+/// Cloudflare Access: role-less RS256 assertion (e-mail only) mapped to admin by
+/// e-mail, exchanged at `/auth/access-token` for a console session token.
+#[tokio::test(flavor = "multi_thread")]
+async fn cloudflare_access_login() {
+    let ring = KeyRing::ephemeral().unwrap(); // stands in for Cloudflare's signing key
+    let set: JwkSet = serde_json::from_value(ring.jwks()).unwrap();
+    let iss = "https://team.cloudflareaccess.com";
+    let auth = Authenticator::jwks(&set)
+        .unwrap()
+        .with_validation(Some(iss.into()), Some("aud-tag".into()))
+        .with_email_roles([(
+            "Boss@Example.com".to_string(),
+            core_engine::admin::auth::Role::Admin,
+        )])
+        .with_session_signer();
+    let dir = tempfile::tempdir().unwrap();
+    let (h, join) = spawn(Settings::new(dir.path())).unwrap();
+    let app = admin::app(h.clone(), auth, AdminConfig::new(dir.path())).unwrap();
+    let cf = |email: &str, aud: &str| {
+        ring.sign(&json!({
+            "iss": iss, "aud": [aud], "sub": "cf-user", "email": email,
+            "exp": unix_now() + 60, "iat": unix_now(), "type": "app",
+        }))
+        .unwrap()
+    };
+    let exchange = |assertion: Option<String>| {
+        let app = app.clone();
+        async move {
+            let mut b = Request::builder()
+                .method(Method::POST)
+                .uri("/auth/access-token");
+            if let Some(a) = assertion {
+                b = b.header("cf-access-jwt-assertion", a);
+            }
+            let res = app.oneshot(b.body(Body::empty()).unwrap()).await.unwrap();
+            let st = res.status();
+            let bytes = res.into_body().collect().await.unwrap().to_bytes();
+            (
+                st,
+                serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
+            )
+        }
+    };
+
+    assert_eq!(exchange(None).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        exchange(Some(cf("stranger@example.com", "aud-tag")))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        exchange(Some(cf("boss@example.com", "other-app"))).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let (s, v) = exchange(Some(cf("boss@example.com", "aud-tag"))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let session = v["token"].as_str().unwrap().to_string();
+    let (s, me) = call(&app, Method::GET, "/v1/me", &session, None).await;
+    assert_eq!(s, StatusCode::OK, "{me}");
+    assert_eq!(me["role"], "admin");
+    assert_eq!(me["name"], "boss@example.com");
+    // The Access assertion itself is also a valid bearer; dev tokens stay off.
+    assert_eq!(
+        call(
+            &app,
+            Method::GET,
+            "/v1/me",
+            &cf("boss@example.com", "aud-tag"),
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/auth/dev-token")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"role":"admin"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    h.shutdown();
+    let _ = join.join();
+}

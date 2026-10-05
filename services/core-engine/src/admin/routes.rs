@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub fn router() -> Router<AdminCtx> {
     Router::new()
         .route("/auth/dev-token", post(dev_token))
+        .route("/auth/access-token", post(access_token))
         .route("/v1/me", get(me))
         .route("/v1/stream", get(super::stream::stream))
         .route("/v1/stream/ticket", post(super::stream::ticket))
@@ -173,6 +174,46 @@ async fn dev_token(State(ctx): State<AdminCtx>, Json(req): Json<DevTokenReq>) ->
     let token = ctx
         .auth
         .sign_dev(&claims)
+        .ok_or_else(|| ApiError::internal("signing failed"))?;
+    Ok(Json(
+        json!({ "token": token, "expiresAt": views::iso(claims.exp * 1_000_000_000) }),
+    ))
+}
+
+/// Header Cloudflare adds to every request that passed an Access policy.
+pub const CF_ACCESS_HEADER: &str = "cf-access-jwt-assertion";
+
+/// Exchanges a verified Cloudflare Access assertion for a 1 h console session
+/// token (role from `CORE_CF_ACCESS_ADMINS`). Only with `CORE_CF_ACCESS_TEAM`.
+async fn access_token(State(ctx): State<AdminCtx>, headers: HeaderMap) -> ApiResult {
+    if !ctx.auth.session_enabled() {
+        return Err(ApiError::not_found("Cloudflare Access login disabled"));
+    }
+    let assertion = headers
+        .get(CF_ACCESS_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            ApiError::unauthorized(
+                "no Cloudflare Access assertion (open the console through its Access URL)",
+            )
+        })?;
+    let actor = ctx
+        .auth
+        .verify(assertion)
+        .map_err(|e| ApiError::unauthorized(format!("Access assertion rejected: {}", e.0)))?;
+    let now = auth::unix_now();
+    let claims = Claims {
+        sub: actor.sub,
+        name: Some(actor.name),
+        role: actor.role,
+        exp: now + 3600,
+        iat: Some(now),
+        amr: vec!["cf-access".into()],
+        iss: None,
+    };
+    let token = ctx
+        .auth
+        .sign_session(&claims)
         .ok_or_else(|| ApiError::internal("signing failed"))?;
     Ok(Json(
         json!({ "token": token, "expiresAt": views::iso(claims.exp * 1_000_000_000) }),
