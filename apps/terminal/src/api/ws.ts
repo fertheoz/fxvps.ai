@@ -195,6 +195,8 @@ export class WsTradingApi implements TradingApi {
   private state: ConnectionState = 'disconnected';
   /** Last connection-level (no request id) gateway error, reported on close. */
   private lastError: string | undefined;
+  /** Token sent in the last Auth frame (to tell an expired one from a bad one). */
+  private sentToken = '';
 
   private accountIds: string[] = [];
   private accounts = new Map<string, Account>();
@@ -270,6 +272,12 @@ export class WsTradingApi implements TradingApi {
         this.lastError = undefined;
         if (this.closedByUser) {
           this.setState('disconnected');
+          return;
+        }
+        // Expired session token: the identity session has refreshed it by now, so reconnect with the new one.
+        if (ev.code === 4001 && this.sentToken && this.opts.token?.() && this.opts.token() !== this.sentToken) {
+          this.emitJournal('info', 'Session token renewed; reconnecting');
+          this.scheduleReconnect();
           return;
         }
         // Bad credentials will not get better by retrying.
@@ -559,7 +567,8 @@ export class WsTradingApi implements TradingApi {
     });
     snapshots.catch(() => undefined);
     const authOk = this.awaitBody((b) => b.case === 'authOk' || b.case === 'error');
-    this.sendBody({ case: 'auth', value: { token: this.opts.token?.() ?? '' } });
+    this.sentToken = this.opts.token?.() ?? '';
+    this.sendBody({ case: 'auth', value: { token: this.sentToken } });
     const a = await authOk;
     if (a.case === 'error') throw new Error(errorText(a.value.code, a.value.message));
     if (a.case !== 'authOk') throw new Error('unexpected handshake reply');

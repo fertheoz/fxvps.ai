@@ -64,7 +64,7 @@ const gateway: Server = (env, ws) => {
       ws.push({ case: 'hello', value: { protocolVersion: 1, maxQuoteHz: 10 } });
       return;
     case 'auth':
-      if (b.value.token !== 'good') {
+      if (!b.value.token.startsWith('good')) {
         ws.push({ case: 'error', value: { code: ErrorCode.UNAUTHENTICATED, message: 'invalid token' } });
         ws.close(4001, 'unauthenticated');
         return;
@@ -153,6 +153,23 @@ describe('WsTradingApi against the client-gateway protocol', () => {
     const { api, lastConn } = setup('bad');
     await expect(api.connect()).rejects.toThrow(/UNAUTHENTICATED/);
     expect(lastConn()).toMatchObject({ state: 'disconnected' });
+  });
+
+  it('reconnects with the refreshed token when the session token expires', async () => {
+    let token = 'good';
+    const api = new WsTradingApi({ url: 'ws://gw/ws', token: () => token, WebSocketImpl: FakeWs as unknown as typeof WebSocket });
+    const states: string[] = [];
+    api.onEvent((e) => e.type === 'connection' && states.push(e.state));
+    await api.connect();
+    const first = FakeWs.last!;
+    token = 'good-refreshed';
+    first.close(4001, 'token expired');
+    await vi.advanceTimersByTimeAsync(600);
+    const second = FakeWs.last!;
+    expect(second).not.toBe(first);
+    expect(second.sent[1]!.body).toMatchObject({ case: 'auth', value: { token: 'good-refreshed' } });
+    expect(states.at(-1)).toBe('connected');
+    api.disconnect();
   });
 
   it('subscribes, maps quote batches and resubscribes after a reconnect', async () => {
