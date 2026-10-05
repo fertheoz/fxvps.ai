@@ -227,5 +227,5 @@ export const tr: Record<MessageKey, string> = {
   'm.protect': 'Z/D · K/A',
   'm.spread': 'Makas',
   'm.quick': 'Hızlı emir: Sat ve Al anında işlem açar',
-  'm.limitLine': 'Grafikten limit emir: çizgiyi sürükleyin, sonra yerleştirin',
+  'm.limitLine': 'Grafikten limit / stop emir: çizgiyi sürükleyin, sonra yerleştirin',
 };

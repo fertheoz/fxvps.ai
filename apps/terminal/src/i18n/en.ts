@@ -225,7 +225,7 @@ export const en = {
   'm.protect': 'S/L · T/P',
   'm.spread': 'Spread',
   'm.quick': 'Quick order: Sell and Buy trade at once',
-  'm.limitLine': 'Limit order from the chart: drag the line, then place',
+  'm.limitLine': 'Limit / stop order from the chart: drag the line, then place',
 } as const;
 
 export type MessageKey = keyof typeof en;

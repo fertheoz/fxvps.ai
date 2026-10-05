@@ -201,8 +201,9 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
   // Quick order: Sell / Buy send a market order of the shown size at once (no ticket).
   const [quick, setQuick] = useState(() => readQuick());
   const [busy, setBusy] = useState(false);
-  // Limit from the chart: drag the line to a price, then place.
+  // Pending order from the chart: drag the line to a price, then place.
   const [limit, setLimit] = useState<number | null>(null);
+  const [lineType, setLineType] = useState<'limit' | 'stop'>('limit');
   const accountId = useTerminal((s) => s.activeAccountId);
   const toast = useTerminal((s) => s.toast);
   if (!slot) return null;
@@ -211,9 +212,10 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
     if (!spec) return;
     setVolume(Math.min(spec.maxVolume, Math.max(spec.minVolume, volume + dir * spec.volumeStep)));
   };
-  // Below the market a limit buys, above it sells.
-  const limitSide: Side = limit !== null && q && limit >= q.bid ? 'sell' : 'buy';
-  const limitName = `${t(limitSide === 'buy' ? 'ticket.buy' : 'ticket.sell')} ${t('ticket.limit')}`;
+  // Below the market a limit buys and a stop sells; above it the other way round.
+  const above = limit !== null && !!q && limit >= q.bid;
+  const limitSide: Side = above === (lineType === 'limit') ? 'sell' : 'buy';
+  const limitName = `${t(limitSide === 'buy' ? 'ticket.buy' : 'ticket.sell')} ${t(lineType === 'limit' ? 'ticket.limit' : 'ticket.stop')}`;
   const toggleLimit = () => {
     if (limit !== null || !q || !spec) return setLimit(null);
     // Start a little below the market so the line is easy to grab.
@@ -223,7 +225,7 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
     if (limit === null || !accountId || busy) return;
     setBusy(true);
     try {
-      const r = await getApi().placeOrder({ accountId, symbol: slot.symbol, side: limitSide, type: 'limit', volume, price: limit });
+      const r = await getApi().placeOrder({ accountId, symbol: slot.symbol, side: limitSide, type: lineType, volume, price: limit });
       if (r.ok) {
         toast('ok', t('toast.placed', { id: r.orderId ?? '' }));
         setLimit(null);
@@ -332,6 +334,22 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
           draft={limit !== null && spec ? { price: limit, label: `${limitName} ${formatPrice(limit, spec.digits)}`, tone: limitSide === 'buy' ? 'up' : 'down', onMove: setLimit } : undefined}
         />
       </div>
+      {limit !== null && spec && (
+        <div className="mx-4 mt-2 p-1 rounded-full bg-panel-2 flex" role="radiogroup" aria-label={t('ticket.type')}>
+          {(['limit', 'stop'] as const).map((x) => (
+            <button
+              key={x}
+              role="radio"
+              aria-checked={lineType === x}
+              onClick={() => setLineType(x)}
+              data-testid={`m-line-${x}`}
+              className={`flex-1 h-8 rounded-full text-[13px] font-medium ${lineType === x ? 'bg-panel text-fg shadow' : 'text-muted'}`}
+            >
+              {t(`ticket.${x}`)}
+            </button>
+          ))}
+        </div>
+      )}
       {limit !== null && spec ? (
         <div className="flex gap-2 px-4 py-3" data-testid="m-limit-bar">
           <button className="w-12 h-14 rounded-2xl bg-panel-2 border border-line/60 text-muted" onClick={() => setLimit(null)} aria-label={t('tb.cancel')}>
