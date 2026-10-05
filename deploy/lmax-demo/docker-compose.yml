@@ -35,9 +35,12 @@ services:
       IDENTITY_RP_ORIGIN: https://trade.fxvps.ai
       IDENTITY_ALLOWED_ORIGINS: https://trade.fxvps.ai,https://console.fxvps.ai
       IDENTITY_TRUST_PROXY: "1"            # cloudflared adds X-Forwarded-For
-      # No SMTP on the demo: verification links go to the log; the operator
-      # verifies with `identity verify-email <email>` instead (see BRIFING).
-      IDENTITY_DEV_MAILER: "1"
+      # Mail: set IDENTITY_SMTP_URL + IDENTITY_MAIL_FROM in .env for real
+      # verification / password-reset mails. Without SMTP: IDENTITY_DEV_MAILER=1
+      # (links only in the log; operator runs `identity verify-email <email>`).
+      IDENTITY_SMTP_URL: ${IDENTITY_SMTP_URL:-}
+      IDENTITY_MAIL_FROM: ${IDENTITY_MAIL_FROM:-}
+      IDENTITY_DEV_MAILER: ${IDENTITY_DEV_MAILER:-1}
       RUST_LOG: ${RUST_LOG:-info}
     volumes: ["./keys:/keys:ro"]
     depends_on: [postgres]
