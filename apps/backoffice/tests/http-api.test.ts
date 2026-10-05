@@ -183,3 +183,16 @@ describe("mock 4-eyes approvals", () => {
     expect((await api.listApprovals("all")).length).toBe(2);
   });
 });
+
+describe("same-origin console build (NEXT_PUBLIC_API_URL=/)", () => {
+  it("dev token and API calls stay on the page origin", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (u: RequestInfo | URL) => {
+      urls.push(String(u));
+      return new Response(JSON.stringify({ token: "t", items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    await fetchDevToken("/", "admin", undefined, fetchImpl).catch(() => undefined);
+    await createHttpApi("/", () => "t", { fetchImpl }).getLpConfig().catch(() => undefined);
+    expect(urls).toEqual(["/auth/dev-token", "/v1/lp/config"]);
+  });
+});
