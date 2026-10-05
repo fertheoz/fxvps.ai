@@ -161,6 +161,10 @@ pub enum AdminCmd {
     SettingsSaved {
         settings: SettingsRec,
     },
+    /// LP connection settings stored on the fix-gateway (no secrets in `details`).
+    LpConfigSaved {
+        details: String,
+    },
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -310,6 +314,9 @@ impl AdminState {
                     format!("#{account}"),
                     format!("{old} → {kyc}"),
                 );
+            }
+            AdminCmd::LpConfigSaved { details } => {
+                self.audit(r, "lp.config".into(), "fix-gateway".into(), details.clone())
             }
             AdminCmd::GroupSaved { group, details } => {
                 self.audit(r, "group.update".into(), group.clone(), details.clone())

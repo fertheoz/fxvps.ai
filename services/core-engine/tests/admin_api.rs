@@ -17,6 +17,7 @@ use std::thread::JoinHandle;
 use tower::ServiceExt;
 
 const SECRET: &[u8] = b"test-secret-not-used-anywhere-else";
+const LP_TOKEN: &str = "lp-admin-token-for-tests";
 
 fn token(sub: &str, role: Role) -> String {
     sign_hs256(
@@ -93,6 +94,23 @@ impl T {
                 rejects: 2,
             },
         ])));
+        // Real fix-gateway admin endpoint with a managed config file.
+        let managed =
+            std::sync::Arc::new(fix_gateway::managed::Managed::open(dir.join("lp.json")).unwrap());
+        let gw = fix_gateway::status_http::spawn_with_admin(
+            "127.0.0.1:0",
+            std::sync::Arc::default(),
+            Some(fix_gateway::status_http::Admin {
+                token: LP_TOKEN.into(),
+                managed,
+            }),
+        )
+        .await
+        .unwrap();
+        cfg.lp_admin = Some(admin::LpAdmin {
+            url: format!("http://{gw}"),
+            token: LP_TOKEN.into(),
+        });
         let app = admin::app(h.clone(), Authenticator::hs256(SECRET), cfg).unwrap();
         T {
             app,
@@ -378,6 +396,8 @@ async fn rbac_matrix_is_enforced() {
         ),
         (Method::GET, "/v1/risk/margin-calls", None, "risk.view"),
         (Method::GET, "/v1/lp/sessions", None, "lp.view"),
+        (Method::GET, "/v1/lp/config", None, "lp.view"),
+        (Method::PUT, "/v1/lp/config", Some(json!({})), "lp.manage"),
         (Method::GET, "/v1/reports/statements", None, "reports.view"),
         (Method::GET, "/v1/audit", None, "audit.view"),
         (Method::GET, "/v1/admin-users", None, "users.view"),
@@ -1147,4 +1167,77 @@ async fn seed_populates_empty_engine_once() {
     assert_eq!(pos, 7);
     h.shutdown();
     join.join().unwrap();
+}
+
+fn lp_config(password: Option<&str>) -> Value {
+    let mut c = fix_gateway::GatewayConfig::from_toml(include_str!(
+        "../../fix-gateway/config/default.toml"
+    ))
+    .unwrap();
+    c.md.addr = "fix-md.example.com:443".into();
+    c.md.password = password.map(Into::into);
+    c.trade.password = password.map(Into::into);
+    serde_json::to_value(c).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lp_config_through_gateway() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), false).await;
+    let a = token("root", Role::Admin);
+    let d = token("dealer", Role::Dealer);
+
+    // Nothing stored yet.
+    let (s, v) = t.get("/v1/lp/config", &a).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(v.is_null());
+
+    // Dealer may view but not manage.
+    let (s, _) = t
+        .req(
+            Method::PUT,
+            "/v1/lp/config",
+            Some(&d),
+            Some(lp_config(None)),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+
+    // Gateway-side validation surfaces as 400.
+    let mut bad = lp_config(None);
+    bad["md"]["addr"] = json!("no-port");
+    let (s, v) = t
+        .req(Method::PUT, "/v1/lp/config", Some(&a), Some(bad), &[])
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+
+    let (s, v) = t
+        .req(
+            Method::PUT,
+            "/v1/lp/config",
+            Some(&a),
+            Some(lp_config(Some("pa55word"))),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(!v.to_string().contains("pa55word"));
+    assert_eq!(v["md"]["password_set"], true);
+
+    let (_, v) = t.get("/v1/lp/config", &d).await;
+    assert_eq!(v["md"]["addr"], "fix-md.example.com:443");
+    assert!(v["md"]["password"].is_null());
+
+    let (_, audit) = t.get("/v1/audit", &a).await;
+    let row = audit
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["action"] == "lp.config")
+        .expect("audit row");
+    let text = row["details"].as_str().unwrap();
+    assert!(text.contains("fix-md.example.com:443") && text.contains("password changed"));
+    assert!(!audit.to_string().contains("pa55word"));
+    t.stop();
 }

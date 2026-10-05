@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, BalanceOpResult, DashboardStats, MarginCallRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, LpConfig, BalanceOpResult, DashboardStats, MarginCallRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 export class ForbiddenError extends Error {
@@ -22,6 +22,12 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
   const delay = <T,>(v: T): Promise<T> =>
     latency > 0 ? new Promise((res) => setTimeout(() => res(clone(v)), latency * (0.5 + rnd()))) : Promise.resolve(clone(v));
 
+  let lpConfig: LpConfig | null = null;
+  const redactLp = (c: LpConfig): LpConfig => ({
+    ...c,
+    md: { ...c.md, password: null, password_set: !!c.md.password },
+    trade: { ...c.trade, password: null, password_set: !!c.trade.password },
+  });
   const guard = (actor: Actor, perm: Parameters<typeof can>[1]) => {
     if (!can(actor.role, perm)) throw new ForbiddenError(perm);
   };
@@ -270,6 +276,20 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       f.lastHeartbeat = new Date().toISOString();
       audit(actor, "lp.reconnect", `${f.lp} ${f.kind}`, `Logon sent, outSeq=${f.outSeq}`);
       return delay(f);
+    },
+
+    async getLpConfig() {
+      return delay(lpConfig ? redactLp(lpConfig) : null);
+    },
+    async saveLpConfig(c: LpConfig, actor) {
+      guard(actor, "lp.manage");
+      for (const k of ["md", "trade"] as const) {
+        if (!c[k].addr.includes(":") || !c[k].sender_comp_id.trim() || !c[k].target_comp_id.trim()) throw new Error(`${k}: host:port, SenderCompID and TargetCompID are required`);
+      }
+      const keep = (k: "md" | "trade") => (c[k].password ? c[k].password : (lpConfig?.[k].password ?? null));
+      lpConfig = { ...c, md: { ...c.md, password: keep("md") }, trade: { ...c.trade, password: keep("trade") } };
+      audit(actor, "lp.config", "fix-gateway", `md ${c.md.addr}; trade ${c.trade.addr}`);
+      return delay(redactLp(lpConfig));
     },
 
     async listTrades() { return delay(s.trades); },

@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod gateway;
+pub mod managed;
 pub mod normalize;
 pub mod status_http;
 pub mod tls;

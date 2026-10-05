@@ -1,6 +1,9 @@
 "use client";
+import * as React from "react";
 import { RefreshCw } from "lucide-react";
-import { Button, Card, PageHeader } from "@/components/ui/primitives";
+import { Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader } from "@/components/ui/primitives";
+import { NumField, SelectField, TextField } from "@/components/form";
+import type { LpConfig, LpEndpoint } from "@/lib/api/types";
 import { FixBadge } from "@/components/badges";
 import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery } from "@/lib/queries";
@@ -43,6 +46,103 @@ export default function LpPage() {
           </tbody>
         </table>
       </Card>
+      {actor.can("lp.view") && <LpConfigCard />}
     </div>
+  );
+}
+
+const emptyEndpoint = (): LpEndpoint => ({
+  addr: "", sender_comp_id: "", target_comp_id: "", username: "", password: null, reset_on_logon: true, tls: {},
+});
+
+const DEFAULT_INSTRUMENTS = "EUR/USD 4001 0.00001";
+
+/** Blank LMAX-style config used until the first save. */
+const blankConfig = (): LpConfig => ({
+  lp: "LMAX", heartbeat_secs: 30, market_depth: 5, reconnect_delay_ms: 5000, security_id_source: "8", store_dir: null,
+  md: emptyEndpoint(), trade: emptyEndpoint(), instruments: [], nats: null,
+});
+
+const instrumentsText = (c: LpConfig) => c.instruments.map((i) => `${i.symbol} ${i.security_id} ${i.tick_size}`).join("\n") || DEFAULT_INSTRUMENTS;
+
+function parseInstruments(text: string): LpConfig["instruments"] {
+  return text.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+    const [symbol = "", security_id = "", tick_size = "0.00001"] = l.split(/\s+/);
+    return { symbol, security_id, tick_size };
+  });
+}
+
+function LpConfigCard() {
+  const t = useT();
+  const q = useApiQuery("getLpConfig");
+  if (q.isLoading) return <Card className="mt-4 p-4">{t("common.loading")}</Card>;
+  if (q.error) return <Card className="mt-4 p-4 text-sm text-muted-foreground">{t("lp.notManaged")}</Card>;
+  return <LpConfigForm key={JSON.stringify(q.data ?? null)} initial={q.data ?? blankConfig()} />;
+}
+
+function EndpointFields({ title, ep, onChange, disabled, extra }: { title: string; ep: LpEndpoint; onChange: (e: LpEndpoint) => void; disabled: boolean; extra?: React.ReactNode }) {
+  const t = useT();
+  const set = <K extends keyof LpEndpoint>(k: K, v: LpEndpoint[K]) => onChange({ ...ep, [k]: v });
+  return (
+    <fieldset className="grid gap-3 sm:grid-cols-2">
+      <legend className="mb-1 flex items-center gap-2 text-sm font-medium">{title}{extra}</legend>
+      <TextField label={t("lp.addr")} value={ep.addr} onChange={(v) => set("addr", v.trim())} disabled={disabled} />
+      <TextField label={t("lp.username")} value={ep.username ?? ""} onChange={(v) => set("username", v || null)} disabled={disabled} />
+      <TextField label="SenderCompID" value={ep.sender_comp_id} onChange={(v) => set("sender_comp_id", v.trim())} disabled={disabled} />
+      <TextField label="TargetCompID" value={ep.target_comp_id} onChange={(v) => set("target_comp_id", v.trim())} disabled={disabled} />
+      <Label>
+        {t("lp.password")}
+        <Input type="password" autoComplete="new-password" value={ep.password ?? ""} placeholder={ep.password_set ? t("lp.passwordSet") : ""} onChange={(e) => set("password", e.target.value || null)} disabled={disabled} />
+      </Label>
+      <SelectField label={t("lp.tls")} value={ep.tls ? "on" : "off"} options={["on", "off"] as const} onChange={(v) => set("tls", v === "on" ? {} : null)} disabled={disabled} />
+      {ep.tls && <TextField label={t("lp.serverName")} value={ep.tls.server_name ?? ""} onChange={(v) => set("tls", { ...ep.tls, server_name: v.trim() || null })} disabled={disabled} />}
+    </fieldset>
+  );
+}
+
+function LpConfigForm({ initial }: { initial: LpConfig }) {
+  const t = useT();
+  const actor = useActor();
+  const toast = useToast();
+  const editable = actor.can("lp.manage");
+  const [c, setC] = React.useState<LpConfig>(initial);
+  const [instr, setInstr] = React.useState(instrumentsText(initial));
+  const mut = useApiMutation((v: LpConfig) => api().saveLpConfig(v, actor), () => toast(t("lp.saved")));
+  const save = () => {
+    // Never resend redacted fields; empty password = keep stored one.
+    const strip = (e: LpEndpoint): LpEndpoint => {
+      const rest = { ...e, password: e.password || null };
+      delete rest.password_set;
+      return rest;
+    };
+    mut.mutate({ ...c, md: strip(c.md), trade: strip(c.trade), instruments: parseInstruments(instr) });
+  };
+  return (
+    <Card className="mt-4" data-testid="lp-config">
+      <CardHeader><CardTitle>{t("lp.config")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-5">
+        <p className="text-xs text-muted-foreground">{t("lp.configHint")}</p>
+        <EndpointFields title={t("lp.md")} ep={c.md} onChange={(md) => setC({ ...c, md })} disabled={!editable} />
+        <EndpointFields
+          title={t("lp.trade")}
+          ep={c.trade}
+          onChange={(trade) => setC({ ...c, trade })}
+          disabled={!editable}
+          extra={editable && (
+            <Button size="sm" variant="outline" type="button" onClick={() => setC({ ...c, trade: { ...c.trade, username: c.md.username, tls: c.md.tls } })}>{t("lp.copyFromMd")}</Button>
+          )}
+        />
+        <div className="grid gap-3 sm:grid-cols-3">
+          <TextField label="LP" value={c.lp} onChange={(v) => setC({ ...c, lp: v })} disabled={!editable} />
+          <NumField label={t("lp.heartbeatSecs")} value={c.heartbeat_secs} onChange={(v) => setC({ ...c, heartbeat_secs: v })} step={1} disabled={!editable} />
+          <TextField label={t("lp.idSource")} value={c.security_id_source} onChange={(v) => setC({ ...c, security_id_source: v.trim() })} disabled={!editable} />
+        </div>
+        <Label>
+          {t("lp.instruments")}
+          <textarea className="min-h-24 rounded-md border border-border bg-background p-2 font-mono text-xs" value={instr} onChange={(e) => setInstr(e.target.value)} disabled={!editable} />
+        </Label>
+        {editable && <div><Button onClick={save} disabled={mut.isPending}>{t("common.save")}</Button></div>}
+      </CardContent>
+    </Card>
   );
 }

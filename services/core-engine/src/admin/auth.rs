@@ -72,7 +72,7 @@ impl Role {
     }
 }
 
-pub const PERMISSIONS: [&str; 24] = [
+pub const PERMISSIONS: [&str; 25] = [
     "dashboard.view",
     "clients.view",
     "clients.edit",
@@ -90,6 +90,7 @@ pub const PERMISSIONS: [&str; 24] = [
     "risk.edit",
     "lp.view",
     "lp.reconnect",
+    "lp.manage",
     "reports.view",
     "reports.export",
     "audit.view",

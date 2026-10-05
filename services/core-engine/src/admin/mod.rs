@@ -42,6 +42,17 @@ pub struct AdminConfig {
     /// or polled from a remote one ([`lp_poll::spawn`], `CORE_LP_STATUS_URL`).
     /// `None`: `/v1/lp/sessions` returns an empty list.
     pub lp_status: Option<LpStatus>,
+    /// Managed LP config of a fix-gateway (`GET|PUT <url>/config`, bearer token);
+    /// `None`: `/v1/lp/config` answers 404.
+    pub lp_admin: Option<LpAdmin>,
+}
+
+/// fix-gateway admin endpoint (`FIX_ADMIN_TOKEN` on the gateway side).
+#[derive(Clone, Debug)]
+pub struct LpAdmin {
+    /// Base URL, e.g. `http://127.0.0.1:9890`.
+    pub url: String,
+    pub token: String,
 }
 
 /// Shared FIX session table written by fix-gateway.
@@ -54,6 +65,7 @@ impl AdminConfig {
             cors_origins: None,
             live_interval_ms: 1_000,
             lp_status: None,
+            lp_admin: None,
         }
     }
 
@@ -90,6 +102,8 @@ pub struct AdminCtx {
     /// Single-use SSE tickets (`POST /v1/stream/ticket`).
     pub tickets: Arc<stream::Tickets>,
     pub lp_status: Option<LpStatus>,
+    pub lp_admin: Option<LpAdmin>,
+    pub http: reqwest::Client,
 }
 
 impl AdminCtx {
@@ -249,6 +263,11 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
         live,
         tickets: Arc::default(),
         lp_status: cfg.lp_status.clone(),
+        lp_admin: cfg.lp_admin.clone(),
+        http: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_default(),
     };
     stream::spawn_ticker(ctx.clone(), cfg.live_interval_ms);
     let legacy =
