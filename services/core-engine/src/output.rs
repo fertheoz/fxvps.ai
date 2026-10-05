@@ -142,7 +142,7 @@ pub fn order_history_view(
         .filter(|o| o.req.account == account && !o.is_pending())
         .filter_map(|o| order_view(e, o.id, None, names, o.created_ts))
         .collect();
-    v.sort_by(|a, b| b.order_id.cmp(&a.order_id));
+    v.sort_by_key(|o| std::cmp::Reverse(o.order_id));
     v.truncate(limit);
     v
 }
