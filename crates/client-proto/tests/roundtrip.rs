@@ -187,6 +187,7 @@ fn samples() -> Vec<Envelope> {
         Body::OrderListRequest(OrderListRequest {
             request_id: "ol".into(),
             account_id: "A1".into(),
+            include_history: false,
         }),
         Body::OrderList(OrderList {
             request_id: "ol".into(),

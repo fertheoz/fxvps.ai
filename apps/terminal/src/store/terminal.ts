@@ -5,6 +5,7 @@ import type {
   ConnectionState,
   Deal,
   JournalEntry,
+  OrderHistoryEntry,
   OrderType,
   PendingOrder,
   Position,
@@ -61,6 +62,8 @@ export interface TerminalState {
   positions: Record<string, Position[]>;
   orders: Record<string, PendingOrder[]>;
   history: Record<string, Deal[]>;
+  /** Finished orders per account (loaded on demand, newest first). */
+  orderHistory: Record<string, OrderHistoryEntry[]>;
   journal: JournalEntry[];
   // UI (persisted)
   theme: Theme;
@@ -83,6 +86,7 @@ export interface TerminalState {
   applyEvent(e: TradingEvent): void;
   setReference(symbols: SymbolSpec[], accounts: Account[]): void;
   setHistory(accountId: string, deals: Deal[]): void;
+  setOrderHistory(accountId: string, orders: OrderHistoryEntry[]): void;
   setActiveAccount(id: string): void;
   setTheme(t: Theme): void;
   toggleTheme(): void;
@@ -125,6 +129,7 @@ export const useTerminal = create<TerminalState>()(
       positions: {},
       orders: {},
       history: {},
+      orderHistory: {},
       journal: [],
       theme: 'dark',
       lang: 'en',
@@ -197,6 +202,9 @@ export const useTerminal = create<TerminalState>()(
       },
       setHistory(accountId, deals) {
         set({ history: { ...get().history, [accountId]: deals } });
+      },
+      setOrderHistory(accountId, orders) {
+        set({ orderHistory: { ...get().orderHistory, [accountId]: orders } });
       },
       setActiveAccount(id) {
         set({ activeAccountId: id });

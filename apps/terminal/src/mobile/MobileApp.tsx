@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Deal, PendingOrder, Position, Side, SymbolSpec } from '@fxvps/trading-core';
+import type { Deal, OrderHistoryEntry, PendingOrder, Position, Side, SymbolSpec } from '@fxvps/trading-core';
 import {
   TIMEFRAMES,
   big,
@@ -581,11 +581,105 @@ function TradeView() {
   );
 }
 
-/** Closed deals, newest first, with the realized total. */
+/** A closed position reconstructed from its deals. */
+interface ClosedPosition {
+  id: string;
+  symbol: string;
+  side: Side;
+  volume: number;
+  openPrice: number;
+  closePrice: number;
+  openTime: number;
+  closeTime: number;
+  profit: number;
+}
+
+function closedPositions(deals: Deal[]): ClosedPosition[] {
+  const byPos = new Map<string, Deal[]>();
+  for (const d of deals) byPos.set(d.positionId, [...(byPos.get(d.positionId) ?? []), d]);
+  const out: ClosedPosition[] = [];
+  for (const [id, ds] of byPos) {
+    const ins = ds.filter((d) => d.entry === 'in');
+    const outs = ds.filter((d) => d.entry === 'out');
+    if (!ins.length || !outs.length) continue;
+    const vwap = (xs: Deal[]) => xs.reduce((a, d) => a + d.price * d.volume, 0) / xs.reduce((a, d) => a + d.volume, 0);
+    out.push({
+      id,
+      symbol: ds[0]!.symbol,
+      side: ins[0]!.side,
+      volume: outs.reduce((a, d) => a + d.volume, 0),
+      openPrice: vwap(ins),
+      closePrice: vwap(outs),
+      openTime: Math.min(...ins.map((d) => d.time)),
+      closeTime: Math.max(...outs.map((d) => d.time)),
+      profit: ds.reduce((a, d) => a + d.profit + d.commission, 0),
+    });
+  }
+  return out.sort((x, y) => y.closeTime - x.closeTime);
+}
+
+function ClosedPositionRow({ p }: { p: ClosedPosition }) {
+  const digits = useTerminal((s) => s.symbols[p.symbol]?.digits ?? 5);
+  return (
+    <div className="flex items-center justify-between px-1 py-3 border-b border-line/40">
+      <div>
+        <div className="font-medium">
+          {p.symbol} <span className={`text-[11px] uppercase ${p.side === 'buy' ? 'text-up' : 'text-down'}`}>{p.side} {volumeToLots(p.volume)}</span>
+        </div>
+        <div className="num text-[11px] text-muted">
+          {formatPrice(p.openPrice, digits)} → {formatPrice(p.closePrice, digits)} · {formatTimeShort(p.closeTime)}
+        </div>
+      </div>
+      <span className={`num font-semibold ${tone(p.profit)}`}>
+        {p.profit > 0 ? '+' : ''}
+        {formatMoney(p.profit)}
+      </span>
+    </div>
+  );
+}
+
+function OrderHistoryRow({ o }: { o: OrderHistoryEntry }) {
+  const digits = useTerminal((s) => s.symbols[o.symbol]?.digits ?? 5);
+  const cls = o.status === 'filled' ? 'text-up' : o.status === 'working' ? 'text-accent' : 'text-muted';
+  return (
+    <div className="flex items-center justify-between px-1 py-3 border-b border-line/40" title={o.text}>
+      <div>
+        <div className="font-medium">
+          {o.symbol} <span className={`text-[11px] uppercase ${o.side === 'buy' ? 'text-up' : 'text-down'}`}>{o.side} {o.type.replace('_', ' ')}</span>
+        </div>
+        <div className="num text-[11px] text-muted">
+          {volumeToLots(o.filled)} / {volumeToLots(o.volume)}
+          {o.price !== undefined ? ` @ ${formatPrice(o.price, digits)}` : ''}
+          {o.avgPrice !== undefined ? ` → ${formatPrice(o.avgPrice, digits)}` : ''} · {formatTimeShort(o.time)}
+        </div>
+      </div>
+      <span className={`text-[11px] uppercase font-semibold ${cls}`}>{o.status}</span>
+    </div>
+  );
+}
+
+/** History in three views like MT5: closed positions, orders, deals. */
 function HistoryView() {
   const t = useT();
   const history = useTerminal(selectHistory);
+  const accountId = useTerminal((s) => s.activeAccountId);
+  const orderHistory = useTerminal((s) => (s.activeAccountId ? s.orderHistory[s.activeAccountId] : undefined));
+  const setOrderHistory = useTerminal((s) => s.setOrderHistory);
+  const [seg, setSeg] = useState<'positions' | 'orders' | 'deals'>('positions');
   const total = useMemo(() => history.reduce((a, d) => a + d.profit + d.commission, 0), [history]);
+  const positions = useMemo(() => closedPositions(history), [history]);
+  // Orders are fetched when the view is opened (and whenever a deal arrives).
+  useEffect(() => {
+    if (seg !== 'orders' || !accountId) return;
+    let live = true;
+    void getApi()
+      .getOrderHistory(accountId)
+      .then((o) => live && setOrderHistory(accountId, o));
+    return () => {
+      live = false;
+    };
+  }, [seg, accountId, history.length, setOrderHistory]);
+  const empty = <div className="p-10 text-center text-muted">{t('tb.empty')}</div>;
   return (
     <div className="fx-view flex flex-col h-full" data-testid="m-history">
       <div className="fx-card mx-4 my-3 px-4 py-3 flex items-end justify-between">
@@ -596,16 +690,30 @@ function HistoryView() {
             {formatMoney(total)}
           </div>
         </div>
-        <div className="num text-[12px] text-muted">{history.length}</div>
+        <div className="num text-[12px] text-muted">{positions.length}</div>
+      </div>
+      <div className="mx-4 mb-3 p-1 rounded-full bg-panel-2 flex">
+        {(['positions', 'orders', 'deals'] as const).map((x) => (
+          <button
+            key={x}
+            onClick={() => setSeg(x)}
+            className={`flex-1 h-9 rounded-full text-[13px] font-medium ${seg === x ? 'bg-panel text-fg shadow' : 'text-muted'}`}
+            data-testid={`m-hist-${x}`}
+          >
+            {t(x === 'deals' ? 'm.deals' : `tb.${x}`)}
+          </button>
+        ))}
       </div>
       <div className="flex-1 overflow-y-auto px-4 pb-4">
-        {history.length === 0 && <div className="p-10 text-center text-muted">{t('tb.empty')}</div>}
-        {[...history]
-          .reverse()
-          .slice(0, 300)
-          .map((d) => (
-            <DealRow key={d.id} d={d} />
-          ))}
+        {seg === 'positions' && (positions.length ? positions.slice(0, 300).map((p) => <ClosedPositionRow key={p.id} p={p} />) : empty)}
+        {seg === 'orders' && (orderHistory === undefined ? <div className="p-10 text-center text-muted">…</div> : orderHistory.length ? orderHistory.map((o) => <OrderHistoryRow key={o.id} o={o} />) : empty)}
+        {seg === 'deals' &&
+          (history.length
+            ? [...history]
+                .reverse()
+                .slice(0, 300)
+                .map((d) => <DealRow key={d.id} d={d} />)
+            : empty)}
       </div>
     </div>
   );

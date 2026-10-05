@@ -372,6 +372,9 @@ message ClosePosition {
 message OrderListRequest {
   string request_id = 1;
   string account_id = 2;
+  // v1.3: also return finished orders (filled, cancelled, rejected, expired),
+  // newest first, at most 500.
+  bool include_history = 3;
 }
 
 message OrderList {

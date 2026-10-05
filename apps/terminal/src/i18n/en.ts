@@ -224,6 +224,7 @@ export const en = {
   'm.confirmClose': 'Tap again to close',
   'm.protect': 'S/L · T/P',
   'm.spread': 'Spread',
+  'm.deals': 'Deals',
   'm.quick': 'Quick order: Sell and Buy trade at once',
   'm.limitLine': 'Limit / stop order from the chart: drag the line, then place',
 } as const;

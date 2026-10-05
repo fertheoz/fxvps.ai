@@ -545,6 +545,7 @@ async fn order_types_protection_hedging_and_history() {
     c.send(Body::OrderListRequest(OrderListRequest {
         request_id: "ol".into(),
         account_id: "DEMO-2".into(),
+        include_history: false,
     }))
     .await;
     let list = c

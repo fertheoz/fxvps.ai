@@ -29,6 +29,7 @@ import type {
   Deal,
   Depth,
   OrderChanges,
+  OrderHistoryEntry,
   OrderRequest,
   OrderResult,
   PendingOrder,
@@ -360,6 +361,56 @@ export class WsTradingApi implements TradingApi {
       this.emitJournal('warn', `History unavailable: ${(e as Error).message}`);
     }
     return out;
+  }
+
+  /** Finished orders from the server (protocol v1.3), newest first. */
+  async getOrderHistory(accountId: string): Promise<OrderHistoryEntry[]> {
+    if (!this.v12) return [];
+    try {
+      const body = await this.request((requestId) => ({ case: 'orderListRequest', value: { requestId, accountId, includeHistory: true } }));
+      if (body.case !== 'orderList') return [];
+      return body.value.orders.map((u) => this.historyFromUpdate(u));
+    } catch (e) {
+      this.emitJournal('warn', `Order history unavailable: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  private historyFromUpdate(u: OrderUpdate): OrderHistoryEntry {
+    const spec = this.symbols.get(u.symbol);
+    const vol = (d: OrderUpdate['qty']) => {
+      const b = decimalToBig(d);
+      return b ? this.qtyToVolume(u.symbol, b) : 0;
+    };
+    const px = (d: OrderUpdate['avgPrice']) => {
+      const b = decimalToBig(d);
+      return b && b.gt(0) ? Number(b.toFixed(spec?.digits ?? 5)) : undefined;
+    };
+    const status: OrderHistoryEntry['status'] =
+      u.status === OrderStatus.FILLED
+        ? 'filled'
+        : u.status === OrderStatus.REJECTED
+          ? 'rejected'
+          : u.status === OrderStatus.EXPIRED
+            ? 'expired'
+            : u.status === OrderStatus.CANCELED
+              ? 'cancelled'
+              : 'working';
+    const type = FROM_WIRE_TYPE[u.orderType] ?? 'market';
+    return {
+      id: u.clientRequestId || u.orderId,
+      accountId: u.accountId,
+      symbol: u.symbol,
+      side: u.side === WireSide.SELL ? 'sell' : 'buy',
+      type,
+      volume: vol(u.qty),
+      filled: vol(u.filledQty),
+      price: type === 'limit' ? px(u.limitPrice) : type === 'market' ? undefined : px(u.stopPrice),
+      avgPrice: px(u.avgPrice),
+      status,
+      time: u.createdNs ? nsToMs(u.createdNs) : u.tsNs ? nsToMs(u.tsNs) : Date.now(),
+      text: u.text || undefined,
+    };
   }
 
   subscribeQuotes(symbols: string[], onQuotes: (quotes: Quote[]) => void): Unsubscribe {
