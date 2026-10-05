@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useT } from '../hooks';
-import { isValidWsUrl, loadGateway, saveGateway } from '../store/connection';
+import { defaultGateway, isValidWsUrl, loadGateway, saveGateway } from '../store/connection';
 import { Modal } from './Dialogs';
 
 /** Reload without query params so the stored choice (or the mock) is used. */
@@ -12,7 +12,7 @@ function reload(): void {
 export function ConnectDialog({ onClose }: { onClose: () => void }) {
   const t = useT();
   const saved = loadGateway();
-  const [url, setUrl] = useState(saved?.url ?? 'ws://localhost:8080/ws');
+  const [url, setUrl] = useState(saved?.url ?? defaultGateway()?.url ?? 'ws://localhost:8080/ws');
   const [token, setToken] = useState(saved?.token ?? '');
   const valid = isValidWsUrl(url.trim());
   const input = 'w-full bg-panel-2 border border-line rounded px-2 py-1.5 text-[12px] num';

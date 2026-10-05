@@ -80,7 +80,9 @@ let inflight: Promise<boolean> | null = null;
 function delayMs(c: AccessClaims, nowMs: number): number {
   const now = nowMs / 1000;
   const lifetime = c.iat ? c.exp - c.iat : c.exp - now;
-  const at = Math.min(c.exp - REFRESH_MARGIN_S, (c.iat ?? now) + lifetime * 0.8);
+  // Short-lived (privileged, 60 s) tokens: the margin must not swallow the whole lifetime.
+  const margin = Math.min(REFRESH_MARGIN_S, lifetime * 0.25);
+  const at = Math.min(c.exp - margin, (c.iat ?? now) + lifetime * 0.8);
   return Math.max(5_000, (at - now) * 1000);
 }
 

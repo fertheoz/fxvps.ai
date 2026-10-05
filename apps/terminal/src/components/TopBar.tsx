@@ -4,7 +4,7 @@ import { formatMoney } from '@fxvps/trading-core';
 import type { ConnectionState } from '@fxvps/trading-core';
 import { useState } from 'react';
 import { isGatewayApi } from '../store/api';
-import { loadGateway } from '../store/connection';
+import { defaultGateway, loadGateway } from '../store/connection';
 import { UserMenu } from './Auth';
 import { ConnectDialog } from './ConnectDialog';
 
@@ -41,7 +41,8 @@ export function TopBar() {
   const setShortcuts = useTerminal((s) => s.setShortcutsOpen);
   const m = useMetrics();
   const [gwOpen, setGwOpen] = useState(false);
-  const gateway = isGatewayApi() ? loadGateway() : null;
+  // The build-time default gateway is never written to sessionStorage.
+  const gateway = isGatewayApi() ? (loadGateway() ?? defaultGateway()) : null;
   const active = accounts.find((a) => a.id === activeId);
   const cur = active?.currency ?? 'USD';
 
