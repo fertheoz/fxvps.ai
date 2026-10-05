@@ -219,11 +219,13 @@ export const en = {
   'gw.failed': 'Could not connect: {error}',
   'm.markets': 'Markets',
   'm.chart': 'Chart',
-  'm.portfolio': 'Portfolio',
+  'm.trade': 'Trade',
   'm.account': 'Account',
   'm.confirmClose': 'Tap again to close',
   'm.protect': 'S/L · T/P',
   'm.spread': 'Spread',
+  'm.quick': 'Quick order: Sell and Buy trade at once',
+  'm.limitLine': 'Limit order from the chart: drag the line, then place',
 } as const;
 
 export type MessageKey = keyof typeof en;

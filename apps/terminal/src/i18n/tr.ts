@@ -221,9 +221,11 @@ export const tr: Record<MessageKey, string> = {
   'gw.failed': 'Bağlanılamadı: {error}',
   'm.markets': 'Piyasa',
   'm.chart': 'Grafik',
-  'm.portfolio': 'Portföy',
+  'm.trade': 'İşlem',
   'm.account': 'Hesap',
   'm.confirmClose': 'Kapatmak için tekrar dokunun',
   'm.protect': 'Z/D · K/A',
   'm.spread': 'Makas',
+  'm.quick': 'Hızlı emir: Sat ve Al anında işlem açar',
+  'm.limitLine': 'Grafikten limit emir: çizgiyi sürükleyin, sonra yerleştirin',
 };

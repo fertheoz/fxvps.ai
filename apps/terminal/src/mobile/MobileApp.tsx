@@ -7,6 +7,7 @@ import {
   formatMoney,
   formatPrice,
   formatTimeShort,
+  roundPrice,
   parseDecimal,
   positionProfit,
   spreadPoints,
@@ -14,7 +15,7 @@ import {
 } from '@fxvps/trading-core';
 import { useMetrics, useRates, useT } from '../hooks';
 import type { MessageKey } from '../i18n';
-import { getApi } from '../store/api';
+import { getApi, trade as tradeApi } from '../store/api';
 import { useSession } from '../store/session';
 import { selectActiveAccount, selectHistory, selectOrders, selectPositions, useTerminal } from '../store/terminal';
 import { ChartPanel } from '../components/ChartPanel';
@@ -22,11 +23,12 @@ import { OrderTicket } from '../components/OrderTicket';
 
 /** Phone layout: one view at a time, bottom tab bar, order ticket as a bottom sheet. */
 
-type Tab = 'markets' | 'chart' | 'portfolio' | 'account';
+type Tab = 'markets' | 'chart' | 'trade' | 'history' | 'account';
 const TABS: { id: Tab; label: MessageKey; icon: string }[] = [
   { id: 'markets', label: 'm.markets', icon: 'M4 6h16M4 12h16M4 18h10' },
   { id: 'chart', label: 'm.chart', icon: 'M4 19V5m0 14h16M8 15l3-4 3 2 4-6' },
-  { id: 'portfolio', label: 'm.portfolio', icon: 'M4 8h16v11H4zM9 8V5h6v3' },
+  { id: 'trade', label: 'm.trade', icon: 'M7 4v16m0 0-3-3m3 3 3-3M17 20V4m0 0-3 3m3-3 3 3' },
+  { id: 'history', label: 'tb.history', icon: 'M12 8v4l3 2M4 12a8 8 0 1 0 2.5-5.8M4 5v4h4' },
   { id: 'account', label: 'm.account', icon: 'M12 12a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 0114 0' },
 ];
 
@@ -45,6 +47,22 @@ function Price({ value, digits, className = '' }: { value: number; digits: numbe
       {frac && <sup className="text-[0.75em]">{s.slice(-1)}</sup>}
     </span>
   );
+}
+
+const QUICK_KEY = 'fxvps.quickOrder';
+function readQuick(): boolean {
+  try {
+    return localStorage.getItem(QUICK_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+function writeQuick(on: boolean): void {
+  try {
+    localStorage.setItem(QUICK_KEY, on ? '1' : '0');
+  } catch {
+    /* private mode: the choice lasts for this page only */
+  }
 }
 
 function changePct(bid: number, dayOpen?: number): number | null {
@@ -144,7 +162,7 @@ function Markets({ onOpen }: { onOpen: (s: string) => void }) {
   );
 }
 
-/** Equity card at the top of the markets and portfolio views. */
+/** Equity card at the top of the markets and trade views. */
 function Hero() {
   const t = useT();
   const m = useMetrics();
@@ -178,12 +196,75 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
   const q = useTerminal((s) => (slot ? s.quotes[slot.symbol] : undefined));
   const setTf = useTerminal((s) => s.setChartTimeframe);
   const openTicket = useTerminal((s) => s.openTicket);
+  const volume = useTerminal((s) => s.oneClickVolume);
+  const setVolume = useTerminal((s) => s.setOneClickVolume);
+  // Quick order: Sell / Buy send a market order of the shown size at once (no ticket).
+  const [quick, setQuick] = useState(() => readQuick());
+  const [busy, setBusy] = useState(false);
+  // Limit from the chart: drag the line to a price, then place.
+  const [limit, setLimit] = useState<number | null>(null);
+  const accountId = useTerminal((s) => s.activeAccountId);
+  const toast = useTerminal((s) => s.toast);
   if (!slot) return null;
   const chg = q ? changePct(q.bid, q.dayOpen) : null;
+  const step = (dir: 1 | -1) => {
+    if (!spec) return;
+    setVolume(Math.min(spec.maxVolume, Math.max(spec.minVolume, volume + dir * spec.volumeStep)));
+  };
+  // Below the market a limit buys, above it sells.
+  const limitSide: Side = limit !== null && q && limit >= q.bid ? 'sell' : 'buy';
+  const limitName = `${t(limitSide === 'buy' ? 'ticket.buy' : 'ticket.sell')} ${t('ticket.limit')}`;
+  const toggleLimit = () => {
+    if (limit !== null || !q || !spec) return setLimit(null);
+    // Start a little below the market so the line is easy to grab.
+    setLimit(roundPrice(q.bid * 0.9995, spec.digits));
+  };
+  const placeLimit = async () => {
+    if (limit === null || !accountId || busy) return;
+    setBusy(true);
+    try {
+      const r = await getApi().placeOrder({ accountId, symbol: slot.symbol, side: limitSide, type: 'limit', volume, price: limit });
+      if (r.ok) {
+        toast('ok', t('toast.placed', { id: r.orderId ?? '' }));
+        setLimit(null);
+      } else toast('error', t('toast.rejected', { error: r.error ?? '' }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const lotStepper = (
+    <div className="flex items-center rounded-2xl bg-panel-2 border border-line/60 px-1" data-testid="m-quick-volume">
+      <button className="w-9 h-14 text-[18px] text-muted" onClick={() => step(-1)} aria-label="-">
+        ▾
+      </button>
+      <div className="w-12 text-center">
+        <div className="text-[9px] uppercase tracking-wider text-muted">{t('chart.lots')}</div>
+        <div className="num text-[15px] font-semibold">{volumeToLots(volume)}</div>
+      </div>
+      <button className="w-9 h-14 text-[18px] text-muted" onClick={() => step(1)} aria-label="+">
+        ▴
+      </button>
+    </div>
+  );
+  const toggleQuick = () => {
+    writeQuick(!quick);
+    setQuick(!quick);
+  };
+  const send = async (side: Side) => {
+    if (!quick) return openTicket({ symbol: slot.symbol, side, type: 'market' });
+    if (busy) return;
+    setBusy(true);
+    try {
+      await tradeApi.market(slot.symbol, side, volume);
+    } finally {
+      setBusy(false);
+    }
+  };
   const trade = (side: Side, cls: string, label: MessageKey, px?: number) => (
     <button
-      onClick={() => openTicket({ symbol: slot.symbol, side, type: 'market' })}
-      className={`flex-1 h-14 rounded-2xl text-white flex flex-col items-center justify-center active:scale-[0.97] transition-transform ${cls}`}
+      onClick={() => void send(side)}
+      disabled={busy}
+      className={`flex-1 h-14 rounded-2xl text-white flex flex-col items-center justify-center active:scale-[0.97] transition-transform disabled:opacity-60 ${cls}`}
       data-testid={`m-${side}`}
     >
       <span className="text-[11px] uppercase tracking-wider opacity-85">{t(label)}</span>
@@ -198,6 +279,30 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
             {slot.symbol} <span className="text-muted text-[14px]">▾</span>
           </div>
           <div className="text-[11px] text-muted">{spec?.description}</div>
+        </button>
+        <button
+          onClick={toggleQuick}
+          aria-pressed={quick}
+          aria-label={t('m.quick')}
+          title={t('m.quick')}
+          data-testid="m-quick-toggle"
+          className={`ml-auto h-10 w-10 rounded-full grid place-items-center ${quick ? 'bg-accent text-white' : 'bg-panel-2 text-muted'}`}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+            <path d="M13 2 4 14h6l-1 8 9-12h-6z" />
+          </svg>
+        </button>
+        <button
+          onClick={toggleLimit}
+          aria-pressed={limit !== null}
+          aria-label={t('m.limitLine')}
+          title={t('m.limitLine')}
+          data-testid="m-limit-toggle"
+          className={`mx-2 h-10 w-10 rounded-full grid place-items-center ${limit !== null ? 'bg-accent text-white' : 'bg-panel-2 text-muted'}`}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+            <path d="M3 12h18M12 4v4m0 8v4M9 6l3-3 3 3M9 18l3 3 3-3" />
+          </svg>
         </button>
         <div className="text-right">
           {spec && q && <Price value={q.bid} digits={spec.digits} className="text-[20px]" />}
@@ -221,12 +326,35 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
         ))}
       </div>
       <div className="flex-1 min-h-0">
-        <ChartPanel index={0} bare />
+        <ChartPanel
+          index={0}
+          bare
+          draft={limit !== null && spec ? { price: limit, label: `${limitName} ${formatPrice(limit, spec.digits)}`, tone: limitSide === 'buy' ? 'up' : 'down', onMove: setLimit } : undefined}
+        />
       </div>
-      <div className="flex gap-3 px-4 py-3">
-        {trade('sell', 'bg-down', 'chart.sell', q?.bid)}
-        {trade('buy', 'bg-up', 'chart.buy', q?.ask)}
-      </div>
+      {limit !== null && spec ? (
+        <div className="flex gap-2 px-4 py-3" data-testid="m-limit-bar">
+          <button className="w-12 h-14 rounded-2xl bg-panel-2 border border-line/60 text-muted" onClick={() => setLimit(null)} aria-label={t('tb.cancel')}>
+            ✕
+          </button>
+          {lotStepper}
+          <button
+            onClick={() => void placeLimit()}
+            disabled={busy}
+            data-testid="m-limit-place"
+            className={`flex-1 h-14 rounded-2xl text-white flex flex-col items-center justify-center active:scale-[0.97] transition-transform disabled:opacity-60 ${limitSide === 'buy' ? 'bg-up' : 'bg-down'}`}
+          >
+            <span className="text-[11px] uppercase tracking-wider opacity-85">{limitName}</span>
+            <Price value={limit} digits={spec.digits} className="text-[15px]" />
+          </button>
+        </div>
+      ) : (
+        <div className={`flex px-4 py-3 ${quick ? 'gap-2' : 'gap-3'}`}>
+          {trade('sell', 'bg-down', 'chart.sell', q?.bid)}
+          {quick && lotStepper}
+          {trade('buy', 'bg-up', 'chart.buy', q?.ask)}
+        </div>
+      )}
     </div>
   );
 }
@@ -372,35 +500,59 @@ function DealRow({ d }: { d: Deal }) {
   );
 }
 
-function Portfolio() {
+/** Open positions and working orders (MT5 "Trade" tab). */
+function TradeView() {
   const t = useT();
   const positions = useTerminal(selectPositions);
   const orders = useTerminal(selectOrders);
-  const history = useTerminal(selectHistory);
-  const [seg, setSeg] = useState<'positions' | 'orders' | 'history'>('positions');
-  const count = { positions: positions.length, orders: orders.length, history: 0 };
-  const empty = <div className="p-10 text-center text-muted">{t('tb.empty')}</div>;
+  const title = (label: string, n: number) => (
+    <div className="px-1 pt-1 text-[11px] uppercase tracking-wider text-muted">
+      {label} <span className="num text-accent">{n}</span>
+    </div>
+  );
   return (
-    <div className="fx-view flex flex-col h-full">
+    <div className="fx-view flex flex-col h-full" data-testid="m-trade">
       <Hero />
-      <div className="mx-4 mb-3 p-1 rounded-full bg-panel-2 flex">
-        {(['positions', 'orders', 'history'] as const).map((s) => (
-          <button
-            key={s}
-            onClick={() => setSeg(s)}
-            className={`flex-1 h-9 rounded-full text-[13px] font-medium ${seg === s ? 'bg-panel text-fg shadow' : 'text-muted'}`}
-            data-testid={`m-seg-${s}`}
-          >
-            {t(`tb.${s}`)}
-            {count[s] > 0 && <span className="num ml-1 text-accent">{count[s]}</span>}
-          </button>
+      <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-3">
+        {positions.length === 0 && orders.length === 0 && <div className="p-10 text-center text-muted">{t('tb.empty')}</div>}
+        {positions.length > 0 && title(t('tb.positions'), positions.length)}
+        {positions.map((p) => (
+          <PositionCard key={p.id} p={p} />
+        ))}
+        {orders.length > 0 && title(t('tb.orders'), orders.length)}
+        {orders.map((o) => (
+          <OrderCard key={o.id} o={o} />
         ))}
       </div>
-      <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-3">
-        {seg === 'positions' && (positions.length ? positions.map((p) => <PositionCard key={p.id} p={p} />) : empty)}
-        {seg === 'orders' && (orders.length ? orders.map((o) => <OrderCard key={o.id} o={o} />) : empty)}
-        {seg === 'history' &&
-          (history.length ? <div>{[...history].reverse().slice(0, 200).map((d) => <DealRow key={d.id} d={d} />)}</div> : empty)}
+    </div>
+  );
+}
+
+/** Closed deals, newest first, with the realized total. */
+function HistoryView() {
+  const t = useT();
+  const history = useTerminal(selectHistory);
+  const total = useMemo(() => history.reduce((a, d) => a + d.profit + d.commission, 0), [history]);
+  return (
+    <div className="fx-view flex flex-col h-full" data-testid="m-history">
+      <div className="fx-card mx-4 my-3 px-4 py-3 flex items-end justify-between">
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-muted">{t('tb.total')}</div>
+          <div className={`num text-[24px] font-semibold leading-tight ${tone(total)}`}>
+            {total > 0 ? '+' : ''}
+            {formatMoney(total)}
+          </div>
+        </div>
+        <div className="num text-[12px] text-muted">{history.length}</div>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 pb-4">
+        {history.length === 0 && <div className="p-10 text-center text-muted">{t('tb.empty')}</div>}
+        {[...history]
+          .reverse()
+          .slice(0, 300)
+          .map((d) => (
+            <DealRow key={d.id} d={d} />
+          ))}
       </div>
     </div>
   );
@@ -562,7 +714,8 @@ export function MobileApp() {
       <main className="flex-1 min-h-0">
         {tab === 'markets' && <Markets onOpen={open} />}
         {tab === 'chart' && <ChartView onSymbols={() => setTab('markets')} />}
-        {tab === 'portfolio' && <Portfolio />}
+        {tab === 'trade' && <TradeView />}
+        {tab === 'history' && <HistoryView />}
         {tab === 'account' && <AccountView />}
       </main>
       <nav className="fx-glass shrink-0 flex border-t border-line/60 pb-[env(safe-area-inset-bottom)]" aria-label="Tabs">
@@ -578,7 +731,7 @@ export function MobileApp() {
               <path d={x.icon} />
             </svg>
             {t(x.label)}
-            {x.id === 'portfolio' && positions > 0 && (
+            {x.id === 'trade' && positions > 0 && (
               <span className="num absolute top-1.5 left-1/2 ml-2 min-w-4 h-4 px-1 rounded-full bg-accent text-white text-[10px] grid place-items-center">{positions}</span>
             )}
           </button>
