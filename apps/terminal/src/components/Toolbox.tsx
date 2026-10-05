@@ -1,8 +1,8 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import type { Deal, PendingOrder, Position } from '@fxvps/trading-core';
 import { useRates, useT } from '../hooks';
 import { getApi } from '../store/api';
-import { selectActiveAccount, selectHistory, selectOrders, selectPositions, useTerminal, type ToolboxTab } from '../store/terminal';
+import { bulkTargets, selectActiveAccount, selectHistory, selectOrders, selectPositions, useTerminal, type ToolboxTab } from '../store/terminal';
 import { closePrice, distanceToPips, formatMoney, formatPrice, lotsToVolume, pipsToDistance, positionProfit, volumeToLots } from '@fxvps/trading-core';
 import { formatTimeShort as formatTime, parseDecimal } from '@fxvps/trading-core';
 import { VirtualTable } from './VirtualTable';
@@ -316,7 +316,37 @@ export function Toolbox() {
   const nOrd = useTerminal((s) => selectOrders(s).length);
   const account = useTerminal(selectActiveAccount);
   const positions = useTerminal(selectPositions);
+  const quotes = useTerminal((s) => s.quotes);
+  const symbols = useTerminal((s) => s.symbols);
+  const toast = useTerminal((s) => s.toast);
+  const rates = useRates();
+  // Bulk close is armed by a first click and confirmed by a second within 3 s.
+  const [armed, setArmed] = useState<'all' | 'profit' | 'loss' | null>(null);
+  useEffect(() => {
+    if (!armed) return;
+    const id = setTimeout(() => setArmed(null), 3000);
+    return () => clearTimeout(id);
+  }, [armed]);
   const counts: Partial<Record<ToolboxTab, number>> = { positions: nPos, orders: nOrd };
+  const profitOf = (p: Position) => {
+    const spec = symbols[p.symbol];
+    const q = quotes[p.symbol];
+    try {
+      return spec && q && account ? positionProfit(p, spec, q, account.currency, rates) : 0;
+    } catch {
+      return 0;
+    }
+  };
+  const bulk = async (which: 'all' | 'profit' | 'loss') => {
+    if (!account) return;
+    const targets = bulkTargets(positions, profitOf, which);
+    if (!targets.length) return;
+    if (armed !== which) return setArmed(which);
+    setArmed(null);
+    const results = await Promise.all(targets.map((p) => getApi().closePosition(account.id, p.id)));
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length) toast('error', t('toast.rejected', { error: failed[0]!.error ?? '' }));
+  };
   return (
     <section className="flex flex-col h-full bg-panel">
       <div className="flex items-center h-8 border-b border-line shrink-0" role="tablist">
@@ -334,12 +364,22 @@ export function Toolbox() {
           </button>
         ))}
         {tab === 'positions' && positions.length > 0 && account && (
-          <button
-            className="ml-auto mr-2 px-2 py-0.5 rounded border border-line text-muted hover:text-fg"
-            onClick={() => positions.forEach((p) => void getApi().closePosition(account.id, p.id))}
-          >
-            {t('tb.closeAll')}
-          </button>
+          <span className="ml-auto mr-2 flex gap-1">
+            {(['profit', 'loss', 'all'] as const).map((w) => {
+              const n = bulkTargets(positions, profitOf, w).length;
+              return (
+                <button
+                  key={w}
+                  disabled={n === 0}
+                  data-testid={`close-${w}`}
+                  className={`px-2 py-0.5 rounded border disabled:opacity-40 ${armed === w ? 'bg-down text-white border-down' : `border-line ${w === 'profit' ? 'text-up' : w === 'loss' ? 'text-down' : 'text-muted hover:text-fg'}`}`}
+                  onClick={() => void bulk(w)}
+                >
+                  {armed === w ? t('tb.confirmBulk', { n }) : `${t(w === 'all' ? 'tb.closeAll' : w === 'profit' ? 'tb.closeProfit' : 'tb.closeLoss')} ${n}`}
+                </button>
+              );
+            })}
+          </span>
         )}
       </div>
       <div className="flex-1 min-h-0 overflow-x-auto">

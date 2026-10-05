@@ -18,7 +18,7 @@ import { useMetrics, useRates, useT } from '../hooks';
 import type { MessageKey } from '../i18n';
 import { getApi, trade as tradeApi } from '../store/api';
 import { useSession } from '../store/session';
-import { selectActiveAccount, selectHistory, selectOrders, selectPositions, useTerminal } from '../store/terminal';
+import { bulkTargets, selectActiveAccount, selectHistory, selectOrders, selectPositions, useTerminal } from '../store/terminal';
 import { ChartAttribution, ChartPanel } from '../components/ChartPanel';
 import { OrderTicket } from '../components/OrderTicket';
 
@@ -554,6 +554,62 @@ function DealRow({ d }: { d: Deal }) {
 }
 
 /** Open positions and working orders (MT5 "Trade" tab). */
+/** Close all / profitable / losing positions, each armed by a first tap. */
+function BulkClose({ positions }: { positions: Position[] }) {
+  const t = useT();
+  const account = useTerminal(selectActiveAccount);
+  const quotes = useTerminal((s) => s.quotes);
+  const symbols = useTerminal((s) => s.symbols);
+  const toast = useTerminal((s) => s.toast);
+  const rates = useRates();
+  const [armed, setArmed] = useState<'all' | 'profit' | 'loss' | null>(null);
+  useEffect(() => {
+    if (!armed) return;
+    const id = setTimeout(() => setArmed(null), 3000);
+    return () => clearTimeout(id);
+  }, [armed]);
+  if (!account || positions.length === 0) return null;
+  const profitOf = (p: Position) => {
+    const spec = symbols[p.symbol];
+    const q = quotes[p.symbol];
+    try {
+      return spec && q ? positionProfit(p, spec, q, account.currency, rates) : 0;
+    } catch {
+      return 0;
+    }
+  };
+  const run = async (which: 'all' | 'profit' | 'loss') => {
+    const targets = bulkTargets(positions, profitOf, which);
+    if (!targets.length) return;
+    if (armed !== which) return setArmed(which);
+    setArmed(null);
+    const results = await Promise.all(targets.map((p) => getApi().closePosition(account.id, p.id)));
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length) toast('error', t('toast.rejected', { error: failed[0]!.error ?? '' }));
+  };
+  const btn = (which: 'all' | 'profit' | 'loss', label: MessageKey, cls: string) => {
+    const n = bulkTargets(positions, profitOf, which).length;
+    return (
+      <button
+        key={which}
+        disabled={n === 0}
+        onClick={() => void run(which)}
+        data-testid={`m-bulk-${which}`}
+        className={`flex-1 h-10 rounded-xl text-[12px] font-medium transition-colors disabled:opacity-40 ${armed === which ? 'bg-down text-white' : cls}`}
+      >
+        {armed === which ? t('tb.confirmBulk', { n }) : `${t(label)} · ${n}`}
+      </button>
+    );
+  };
+  return (
+    <div className="flex gap-2" data-testid="m-bulk-close">
+      {btn('all', 'tb.closeAll', 'bg-panel-2 text-fg')}
+      {btn('profit', 'tb.closeProfit', 'bg-up-bg text-up')}
+      {btn('loss', 'tb.closeLoss', 'bg-down-bg text-down')}
+    </div>
+  );
+}
+
 function TradeView() {
   const t = useT();
   const positions = useTerminal(selectPositions);
@@ -569,6 +625,7 @@ function TradeView() {
       <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-3">
         {positions.length === 0 && orders.length === 0 && <div className="p-10 text-center text-muted">{t('tb.empty')}</div>}
         {positions.length > 0 && title(t('tb.positions'), positions.length)}
+        <BulkClose positions={positions} />
         {positions.map((p) => (
           <PositionCard key={p.id} p={p} />
         ))}
@@ -765,6 +822,7 @@ function AccountView() {
             {accounts.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.id} · 1:{a.leverage}
+                {a.marginMode ? ` · ${t(a.marginMode === 'hedging' ? 'top.hedging' : 'top.netting')}` : ''}
               </option>
             ))}
           </select>,
