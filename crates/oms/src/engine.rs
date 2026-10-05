@@ -585,6 +585,8 @@ impl Engine {
             self.st.orders.get_mut(&id).expect("order").req = old;
             return Err(e);
         }
+        // A new price is a new attempt.
+        self.st.orders.get_mut(&id).expect("order").rearm_px = None;
         self.events.push(Event::OrderModified { order_id: id });
         self.check_pending(&sym);
         Ok(())
@@ -624,6 +626,7 @@ impl Engine {
             reject_reason: None,
             created_ts: self.st.now,
             origin,
+            rearm_px: None,
         };
         self.st.orders.insert(id, order);
         if let Err(reason) = self.validate_order(id, &g) {
@@ -797,7 +800,13 @@ impl Engine {
                 self.fill_child(id, v, price, price);
             }
             Routing::ABook => {
-                if self.st.config.aggregate_a_book && o.close_position.is_none() {
+                if let Some(l) = o.limit_leg() {
+                    // "Limit or better" is guaranteed by the LP, not by us: the client
+                    // limit net of the markup goes out as an IOC limit order.
+                    let m = self.markup(&g, &o.req.symbol).raw() * o.req.side.sign();
+                    let lp_limit = Price::from_raw(l.raw() - m);
+                    self.send_lp_limit(o.req.symbol.clone(), o.req.side, vec![id], Some(lp_limit));
+                } else if self.st.config.aggregate_a_book && o.close_position.is_none() {
                     self.st.pending_lp.push(id);
                 } else {
                     self.send_lp(o.req.symbol.clone(), o.req.side, vec![id]);
@@ -807,6 +816,16 @@ impl Engine {
     }
 
     fn send_lp(&mut self, symbol: String, side: Side, children: Vec<OrderId>) {
+        self.send_lp_limit(symbol, side, children, None);
+    }
+
+    fn send_lp_limit(
+        &mut self,
+        symbol: String,
+        side: Side,
+        children: Vec<OrderId>,
+        limit: Option<Price>,
+    ) {
         let volume = Qty::from_raw(
             children
                 .iter()
@@ -820,7 +839,7 @@ impl Engine {
             symbol: symbol.clone(),
             side,
             volume,
-            limit: None,
+            limit,
         };
         self.st.lp_orders.insert(
             id,
@@ -835,6 +854,7 @@ impl Engine {
                 fills: Vec::new(),
                 created_ts: self.st.now,
                 reject_reason: None,
+                limit,
             },
         );
         self.router.send(&req);
@@ -916,9 +936,24 @@ impl Engine {
         lp.done = true;
         lp.reject_reason = Some(reason.to_string());
         let children = lp.children.clone();
+        let was_limit = lp.limit.is_some();
         for c in children {
             let o = &self.st.orders[&c];
             if o.status.is_terminal() {
+                continue;
+            }
+            if was_limit && o.limit_leg().is_some() {
+                // IOC limit not (fully) filled at the LP: keep waiting for the price.
+                let acc = &self.st.accounts[&o.req.account];
+                let g = self.st.groups[&acc.group].clone();
+                let px = self
+                    .client_quote(&g, &o.req.symbol)
+                    .ok()
+                    .map(|q| q.for_side(o.req.side));
+                let o = self.st.orders.get_mut(&c).expect("order");
+                o.working = false;
+                o.rearm_px = px;
+                self.st.pending_ids.insert(c);
                 continue;
             }
             if o.filled.is_zero() {
@@ -1239,6 +1274,10 @@ impl Engine {
             };
             let px = q.for_side(o.req.side);
             let s = o.req.side.sign();
+            // After an unfilled LP attempt the market must improve on that price first.
+            if o.rearm_px.is_some_and(|r| (r.raw() - px.raw()) * s <= 0) {
+                continue;
+            }
             // buy limit: ask <= limit; sell limit: bid >= limit
             let limit_hit = |l: Price| (l.raw() - px.raw()) * s >= 0;
             // buy stop: ask >= stop; sell stop: bid <= stop

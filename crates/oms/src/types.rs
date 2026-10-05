@@ -130,6 +130,10 @@ pub struct Order {
     /// Who created the order (client or a server-side close).
     #[serde(default)]
     pub origin: OrderOrigin,
+    /// Client price at which the last LP limit attempt went unfilled: the order
+    /// re-arms only when the market improves on it (no IOC storm on one tick).
+    #[serde(default)]
+    pub rearm_px: Option<Price>,
 }
 
 /// Origin of an order (deal reason in the history).
@@ -197,10 +201,23 @@ impl Order {
     pub fn remaining(&self) -> Qty {
         Qty::from_raw(self.req.volume.raw() - self.filled.raw())
     }
+    /// Waiting for its trigger price (also a limit that came back from the LP
+    /// partly filled: the remainder keeps waiting).
     pub fn is_pending(&self) -> bool {
         self.req.order_type != OrderType::Market
             && !self.working
-            && matches!(self.status, OrderStatus::Accepted)
+            && matches!(
+                self.status,
+                OrderStatus::Accepted | OrderStatus::PartiallyFilled
+            )
+    }
+
+    /// The order's limit price, if it has a limit leg (limit, stop-limit).
+    pub fn limit_leg(&self) -> Option<Price> {
+        match self.req.order_type {
+            OrderType::Limit | OrderType::StopLimit => self.req.limit_price,
+            _ => None,
+        }
     }
 }
 
@@ -264,6 +281,9 @@ pub struct LpOrder {
     pub created_ts: u64,
     #[serde(default)]
     pub reject_reason: Option<String>,
+    /// Limit sent to the LP (IOC); `None` = market order.
+    #[serde(default)]
+    pub limit: Option<Price>,
 }
 
 /// One LP execution report applied to an [`LpOrder`].
