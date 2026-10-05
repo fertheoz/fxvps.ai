@@ -58,17 +58,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;
     let addr = listener.local_addr()?;
 
+    // Managed LP config (written by the back office through the admin API).
+    let managed_path = std::env::var("FIX_CONFIG_FILE")
+        .ok()
+        .filter(|v| !v.is_empty());
+    let fix_cfg = fix_cfg.or_else(|| managed_path.clone());
+    let gw_cfg = match &fix_cfg {
+        None => None,
+        Some(p) if p.ends_with(".json") => match std::fs::read(p) {
+            Ok(b) => Some(serde_json::from_slice::<fix_gateway::GatewayConfig>(&b)?),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::warn!(path = %p, "no LP configured yet: trading disabled until the console saves one");
+                None
+            }
+            Err(e) => return Err(e.into()),
+        },
+        Some(p) => Some(fix_gateway::GatewayConfig::load(p)?),
+    };
+
     let mut demo_handle = None;
     let mut fix_handle = None;
+    let mut admin_engine = None;
+    let mut lp_status = None;
     let hub: Arc<Hub> = if demo {
         let d = Demo::start(cfg, auth, None).await?;
         let hub = d.hub.clone();
         demo_handle = Some(d);
         hub
-    } else if let Some(p) = fix_cfg {
+    } else if let Some(gw_cfg) = gw_cfg {
         // fix-gateway + core-engine in-process against a configured LP; the
         // journal lives in --data-dir. Fresh journals get the demo seed (dev use).
-        let gw_cfg = fix_gateway::GatewayConfig::load(p)?;
         let instruments = gw_cfg.instruments.clone();
         let mut st = StackConfig::new(gw_cfg.clone(), &data_dir);
         st.seed = Some(demo_seed(&cfg, &gw_cfg)?);
@@ -76,6 +95,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let core: Arc<dyn CoreApi> = stack.core.clone();
         let hub = Hub::with_instruments(cfg, auth, &instruments, Some(core.clone()));
         tokio::spawn(hub.clone().run_core_bridge(core.subscribe()));
+        admin_engine = Some(stack.engine.clone());
+        lp_status = Some(stack.lp_status());
         fix_handle = Some(stack);
         hub
     } else {
@@ -97,9 +118,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("demo token (accounts DEMO-1, DEMO-H1, dev key): {t}");
         println!("FXVPS_DEMO_TOKEN={t}");
     }
+    // Back office admin API on the same engine (`CORE_ADMIN_ADDR`).
+    let restart = Arc::new(tokio::sync::Notify::new());
+    let mut standalone = None;
+    if let Some(addr) = std::env::var("CORE_ADMIN_ADDR")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        use core_engine::admin;
+        let flag = |k: &str| std::env::var(k).is_ok_and(|v| v == "1" || v == "true");
+        let engine = match admin_engine.take() {
+            Some(e) => e,
+            None => {
+                // No LP yet: an engine without LP routing so the console works.
+                let (h, join) = core_engine::spawn(core_engine::Settings::new(&data_dir))?;
+                standalone = Some((h.clone(), join));
+                h
+            }
+        };
+        let auth =
+            admin::auth::Authenticator::from_env(flag("CORE_DEV_AUTH"), &addr).map_err(|e| e.0)?;
+        let mut acfg = admin::AdminConfig::new(&data_dir).with_env(flag("CORE_DEV_AUTH"))?;
+        let table = lp_status.clone().unwrap_or_default();
+        acfg.lp_status = Some(table.clone());
+        if let Some(path) = &managed_path {
+            let token = std::env::var("FIX_ADMIN_TOKEN")
+                .ok()
+                .filter(|t| t.len() >= 16)
+                .ok_or("FIX_CONFIG_FILE needs FIX_ADMIN_TOKEN (at least 16 characters)")?;
+            let managed = Arc::new(fix_gateway::managed::Managed::open(path)?);
+            let status_addr =
+                std::env::var("FIX_STATUS_ADDR").unwrap_or_else(|_| "127.0.0.1:9890".into());
+            let local = fix_gateway::status_http::spawn_with_admin(
+                &status_addr,
+                table,
+                Some(fix_gateway::status_http::Admin {
+                    token: token.clone(),
+                    managed: managed.clone(),
+                }),
+            )
+            .await?;
+            acfg.lp_admin = Some(admin::LpAdmin {
+                url: format!("http://{local}"),
+                token,
+            });
+            let restart = restart.clone();
+            tokio::spawn(async move {
+                managed.changed().await;
+                tracing::info!("LP config changed: restarting to apply it");
+                restart.notify_one();
+            });
+        }
+        let app = admin::app(engine, auth, acfg)?;
+        let l = tokio::net::TcpListener::bind(&addr).await?;
+        tracing::info!(%addr, "back office admin API");
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(l, app).await {
+                tracing::error!(error = %e, "admin API stopped");
+            }
+        });
+    }
+
     tokio::select! {
         r = client_gateway::serve(hub, listener) => r?,
         _ = tokio::signal::ctrl_c() => {}
+        _ = restart.notified() => {}
+    }
+    if let Some((h, join)) = standalone {
+        h.shutdown();
+        let _ = join.join();
     }
     if let Some(d) = demo_handle {
         d.shutdown().await;

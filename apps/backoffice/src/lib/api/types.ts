@@ -103,6 +103,8 @@ export interface AdminApi {
 
   listClients(q?: ListQuery): Promise<Client[]>;
   getClient(id: string): Promise<Client | null>;
+  /** Opens an account in `group` (funding is a separate deposit). */
+  openAccount(req: { name: string; email: string; group: string }, actor: Actor): Promise<Client>;
   balanceOp(req: BalanceOpRequest, actor: Actor): Promise<BalanceOpResult>;
   setKyc(id: string, kyc: Client["kyc"], actor: Actor): Promise<Client>;
 
@@ -163,6 +165,8 @@ export interface LpInstrument {
   security_id: string;
   tick_size: string;
   qty_step?: string;
+  /** Units per LP OrderQty: 1 = units, 10000 = LMAX FX contracts. */
+  contract_size?: number;
 }
 
 /** fix-gateway `GatewayConfig`. */

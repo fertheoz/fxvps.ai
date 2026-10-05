@@ -67,6 +67,7 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     dashboard: () => call("GET", "/v1/dashboard"),
     exposure: () => call("GET", "/v1/exposure"),
     listClients: (q) => call("GET", `/v1/accounts${q?.search ? `?search=${enc(q.search)}` : ""}`),
+    openAccount: (req, actor) => call("POST", "/v1/accounts", req, actor),
     getClient: async (id) => {
       try {
         return await call("GET", `/v1/accounts/${enc(id)}`);

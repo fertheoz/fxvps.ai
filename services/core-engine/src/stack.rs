@@ -258,6 +258,11 @@ impl CoreStack {
         })
     }
 
+    /// FIX session table of the in-process gateway (admin API `/v1/lp/sessions`).
+    pub fn lp_status(&self) -> std::sync::Arc<std::sync::RwLock<Vec<fix_gateway::SessionStatus>>> {
+        self.gateway.status_source()
+    }
+
     /// Stops the bridge, the FIX sessions and the engine (final snapshot).
     pub async fn shutdown(self) {
         self.bridge.abort();

@@ -22,6 +22,8 @@ export default function ClientsPage() {
   const { data = [] } = useApiQuery("listClients", [{}], { live: 5000 });
   const [kyc, setKyc] = React.useState<string>("all");
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const [opening, setOpening] = React.useState(false);
+  const actor = useActor();
 
   // Order masters followed by their sub-accounts (tree view).
   const ordered = React.useMemo(() => {
@@ -60,7 +62,7 @@ export default function ClientsPage() {
 
   return (
     <div data-testid="page-clients">
-      <PageHeader title={t("clients.title")} />
+      <PageHeader title={t("clients.title")}>{actor.can("clients.edit") && <Button onClick={() => setOpening(true)} data-testid="open-account">{t("clients.open")}</Button>}</PageHeader>
       <DataTable
         data={ordered}
         columns={columns}
@@ -75,7 +77,44 @@ export default function ClientsPage() {
         }
       />
       <ClientDrawer client={data.find((c) => c.id === selectedId) ?? null} all={data} onClose={() => setSelectedId(null)} />
+      <OpenAccountDialog open={opening} onClose={() => setOpening(false)} onOpened={(id) => setSelectedId(id)} />
     </div>
+  );
+}
+
+function OpenAccountDialog({ open, onClose, onOpened }: { open: boolean; onClose: () => void; onOpened: (id: string) => void }) {
+  const t = useT();
+  const actor = useActor();
+  const toast = useToast();
+  const groups = useApiQuery("listGroups", [], { enabled: open });
+  const [name, setName] = React.useState("");
+  const [email, setEmail] = React.useState("");
+  const [group, setGroup] = React.useState("");
+  const [error, setError] = React.useState<string | undefined>();
+  const g = group || groups.data?.[0]?.name || "";
+  const mut = useApiMutation(
+    () => api().openAccount({ name, email, group: g }, actor),
+    (c) => { toast(`${t("clients.opened")} #${c.login}`); onClose(); onOpened(c.id); },
+  );
+  const submit = () => {
+    if (name.trim().length < 2 || !email.includes("@") || !g) return setError(t("clients.openInvalid"));
+    setError(undefined);
+    mut.mutate();
+  };
+  return (
+    <Dialog open={open} onClose={onClose} title={t("clients.open")} footer={<Button onClick={submit} disabled={mut.isPending}>{t("clients.open")}</Button>}>
+      <div className="grid gap-3" data-testid="open-account-form">
+        <Label>{t("clients.name")}<Input value={name} onChange={(e) => setName(e.target.value)} /></Label>
+        <Label>E-mail<Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Label>
+        <Label>{t("clients.group")}
+          <Select value={g} onChange={(e) => setGroup(e.target.value)}>
+            {(groups.data ?? []).map((x) => <option key={x.id} value={x.name}>{x.name} ({x.currency}, 1:{x.leverage})</option>)}
+          </Select>
+        </Label>
+        <p className="text-xs text-muted-foreground">{t("clients.openHint")}</p>
+        <FieldError msg={error} />
+      </div>
+    </Dialog>
   );
 }
 
