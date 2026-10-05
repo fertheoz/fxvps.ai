@@ -34,6 +34,21 @@ pub struct SessionEndpoint {
     pub password: Option<String>,
     #[serde(default = "yes")]
     pub reset_on_logon: bool,
+    /// TLS towards the LP; absent = plain TCP (simulator, cross-connect).
+    #[serde(default)]
+    pub tls: Option<TlsEndpoint>,
+}
+
+/// `[md.tls]` / `[trade.tls]`.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TlsEndpoint {
+    /// Name checked against the certificate; default: host part of `addr`.
+    pub server_name: Option<String>,
+    /// PEM CA bundle; default: Mozilla roots (webpki-roots).
+    pub ca_file: Option<PathBuf>,
+    /// PEM client certificate chain + key, if the LP requires mutual TLS.
+    pub client_cert_file: Option<PathBuf>,
+    pub client_key_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

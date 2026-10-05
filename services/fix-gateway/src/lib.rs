@@ -7,11 +7,12 @@ pub mod config;
 pub mod gateway;
 pub mod normalize;
 pub mod status_http;
+pub mod tls;
 
 #[cfg(feature = "nats")]
 pub mod nats;
 
-pub use config::{GatewayConfig, NatsConfig, SessionEndpoint};
+pub use config::{GatewayConfig, NatsConfig, SessionEndpoint, TlsEndpoint};
 pub use gateway::{
     apply_status, start, GatewayError, GatewayEvent, GatewayHandle, OrderCommand, SessionKind,
     SessionStatus,

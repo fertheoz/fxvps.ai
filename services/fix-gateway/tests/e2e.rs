@@ -14,6 +14,7 @@ fn gateway_config(sim: &lp_simulator::SimHandle) -> GatewayConfig {
         username: Some("demo".into()),
         password: Some("demo".into()),
         reset_on_logon: true,
+        tls: None,
     };
     GatewayConfig {
         lp: "SIM".into(),
