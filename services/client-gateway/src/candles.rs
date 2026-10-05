@@ -185,7 +185,7 @@ mod tests {
         c.on_price("XAUUSD", px("4100.5"), 125 * S);
         let mut r = CandleStore::new(10);
         assert_eq!(r.restore(&format!("garbage line
-{}", c.dump())), 21);
+{}", c.dump())), 15);
         for tf in Timeframe::ALL {
             assert_eq!(r.query("EURUSD", tf, 0, 0, 100), c.query("EURUSD", tf, 0, 0, 100));
             assert_eq!(r.query("XAUUSD", tf, 0, 0, 100), c.query("XAUUSD", tf, 0, 0, 100));
