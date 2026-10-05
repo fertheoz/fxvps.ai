@@ -94,7 +94,8 @@ services:
     image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-latest}
     profiles: ["tunnel"]
     network_mode: host
-    command: ["tunnel", "--no-autoupdate", "run"]
+    # Metrics on loopback only (default listens on all interfaces, port 20241).
+    command: ["tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:20241", "run"]
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
     restart: unless-stopped
