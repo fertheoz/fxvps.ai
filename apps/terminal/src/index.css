@@ -114,7 +114,6 @@ body {
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 18px;
 }
-.fx-mobile .fx-ticket { zoom: 1.12; }
 @media (prefers-reduced-motion: reduce) {
   .fx-mobile .fx-view,
   .fx-mobile .fx-sheet { animation: none; }

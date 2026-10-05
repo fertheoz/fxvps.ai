@@ -81,10 +81,7 @@ const MarketRow = memo(function MarketRow({ symbol, onOpen }: { symbol: string; 
       </button>
       <div className="flex-1 min-w-0">
         <div className="font-semibold text-[15px] tracking-tight">{symbol}</div>
-        <div className="text-[11px] text-muted truncate">
-          {spec.description}
-          {q && <span className="num"> · {spreadPoints(q, spec.digits)}</span>}
-        </div>
+        <div className="num text-[11px] text-muted truncate">{q ? `${t('m.spread')} ${spreadPoints(q, spec.digits)}` : spec.description}</div>
       </div>
       {q ? (
         <>
@@ -512,9 +509,7 @@ function TicketSheet() {
             ✕
           </button>
         </div>
-        <div className="fx-ticket">
-          <OrderTicket key={`${ticket.symbol}-${ticket.side}-${ticket.type}`} preset={ticket} onDone={close} />
-        </div>
+        <OrderTicket key={`${ticket.symbol}-${ticket.side}-${ticket.type}`} preset={ticket} onDone={close} variant="sheet" />
       </div>
     </div>
   );
