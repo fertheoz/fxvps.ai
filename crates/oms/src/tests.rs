@@ -592,6 +592,87 @@ fn abook_reject_and_partial_cancel() {
 }
 
 #[test]
+fn abook_limit_goes_to_lp_as_limit_and_waits_when_unfilled() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 5;
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "10000");
+    // market 1.10000/1.10010, client ask 1.10015: buy limit 1.09950 waits
+    let o = h.pending(1, "lim", Side::Buy, OrderType::Limit, Some("1.09950"), None);
+    let (_, id) = h.order(o);
+    assert!(h.router.take().is_empty());
+    // client ask reaches the limit: an IOC limit at the client limit net of markup
+    h.quote("EURUSD", "1.09935", "1.09945");
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].limit, Some(px("1.09945")));
+    assert!(h.e.order(id).unwrap().working);
+    // LP fills 0.4 and cancels the rest (IOC): the remainder keeps waiting
+    h.cmd(Command::LpFill {
+        lp_order_id: sent[0].lp_order_id,
+        exec_id: "l1".into(),
+        volume: qty("0.4"),
+        price: px("1.09940"),
+    });
+    h.cmd(Command::LpReject {
+        lp_order_id: sent[0].lp_order_id,
+        reason: "ioc remainder".into(),
+    });
+    let o = h.e.order(id).unwrap();
+    assert_eq!(
+        (o.status, o.filled),
+        (OrderStatus::PartiallyFilled, qty("0.4"))
+    );
+    assert!(o.is_pending() && !o.working);
+    assert_eq!(o.avg_price, px("1.09945")); // LP 1.09940 + 5 points: never worse than the limit
+                                            // same price again: no new attempt until the market improves
+    h.quote("EURUSD", "1.09935", "1.09945");
+    assert!(h.router.take().is_empty());
+    h.quote("EURUSD", "1.09930", "1.09940");
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].volume, qty("0.6"));
+    assert_eq!(sent[0].limit, Some(px("1.09945")));
+    h.cmd(Command::LpFill {
+        lp_order_id: sent[0].lp_order_id,
+        exec_id: "l2".into(),
+        volume: qty("0.6"),
+        price: px("1.09935"),
+    });
+    let o = h.e.order(id).unwrap();
+    assert_eq!(o.status, OrderStatus::Filled);
+    assert_eq!(h.pos(1)[0].volume, qty("1"));
+    // a modified price re-arms at once
+    let o2 = h.pending(
+        1,
+        "lim2",
+        Side::Sell,
+        OrderType::Limit,
+        Some("1.09930"),
+        None,
+    );
+    let (_, id2) = h.order(o2);
+    let sent = h.router.take();
+    assert_eq!(sent[0].limit, Some(px("1.09935")));
+    h.cmd(Command::LpReject {
+        lp_order_id: sent[0].lp_order_id,
+        reason: "ioc".into(),
+    });
+    assert!(h.e.order(id2).unwrap().rearm_px.is_some());
+    let mut c = change(h.e.order(id2).unwrap());
+    c.limit_price = Some(px("1.09920"));
+    h.cmd(Command::ModifyOrder {
+        account: 1,
+        order_id: id2,
+        change: c,
+    });
+    assert_eq!(h.router.take().len(), 1);
+}
+
+#[test]
 fn abook_aggregated_pro_rata_allocation() {
     let mut h = H::new(EngineConfig {
         allocation: AllocationMode::ProRata,
