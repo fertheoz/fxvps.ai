@@ -115,8 +115,9 @@ impl CandleStore {
         out
     }
 
-    /// Loads a [`CandleStore::dump`] snapshot (malformed lines are skipped); returns the
-    /// number of bars taken. Bars older than `capacity` per series are dropped.
+    /// Merges a [`CandleStore::dump`] snapshot (malformed lines are skipped); returns the
+    /// number of bars taken. A bar replaces an existing one with the same open time, so
+    /// a later snapshot wins. Bars older than `capacity` per series are dropped.
     pub fn restore(&mut self, text: &str) -> usize {
         let mut n = 0;
         for line in text.lines() {
@@ -124,11 +125,11 @@ impl CandleStore {
             let [symbol, secs, t, o, h, l, c, ticks] = f[..] else {
                 continue;
             };
-            let Some(tf) = secs
-                .parse::<u64>()
-                .ok()
-                .and_then(|s| Timeframe::ALL.into_iter().find(|tf| tf.seconds() == Some(s)))
-            else {
+            let Some(tf) = secs.parse::<u64>().ok().and_then(|s| {
+                Timeframe::ALL
+                    .into_iter()
+                    .find(|tf| tf.seconds() == Some(s))
+            }) else {
                 continue;
             };
             let (Ok(t), Ok(o), Ok(h), Ok(l), Ok(c), Ok(ticks)) = (
@@ -142,17 +143,19 @@ impl CandleStore {
                 continue;
             };
             let s = self.series.entry((symbol.to_string(), tf)).or_default();
-            if s.back().is_some_and(|b| b.open_time_ns >= t) {
-                continue;
-            }
-            s.push_back(Bar {
+            let bar = Bar {
                 open_time_ns: t,
                 open: Fixed::from_raw(o),
                 high: Fixed::from_raw(h),
                 low: Fixed::from_raw(l),
                 close: Fixed::from_raw(c),
                 ticks,
-            });
+            };
+            let pos = s.partition_point(|b| b.open_time_ns < t);
+            match s.get_mut(pos) {
+                Some(b) if b.open_time_ns == t => *b = bar,
+                _ => s.insert(pos, bar),
+            }
             while s.len() > self.capacity {
                 s.pop_front();
             }
@@ -184,16 +187,40 @@ mod tests {
         c.on_price("EURUSD", px("1.3"), 125 * S);
         c.on_price("XAUUSD", px("4100.5"), 125 * S);
         let mut r = CandleStore::new(10);
-        assert_eq!(r.restore(&format!("garbage line
-{}", c.dump())), 15);
+        assert_eq!(
+            r.restore(&format!(
+                "garbage line
+{}",
+                c.dump()
+            )),
+            15
+        );
         for tf in Timeframe::ALL {
-            assert_eq!(r.query("EURUSD", tf, 0, 0, 100), c.query("EURUSD", tf, 0, 0, 100));
-            assert_eq!(r.query("XAUUSD", tf, 0, 0, 100), c.query("XAUUSD", tf, 0, 0, 100));
+            assert_eq!(
+                r.query("EURUSD", tf, 0, 0, 100),
+                c.query("EURUSD", tf, 0, 0, 100)
+            );
+            assert_eq!(
+                r.query("XAUUSD", tf, 0, 0, 100),
+                c.query("XAUUSD", tf, 0, 0, 100)
+            );
         }
         // New prices continue the restored last bar.
         r.on_price("EURUSD", px("1.4"), 130 * S);
         let m1 = r.query("EURUSD", Timeframe::M1, 0, 0, 100);
         assert_eq!((m1.len(), m1[1].high, m1[1].ticks), (2, px("1.4"), 2));
+        // A seed with older bars merges in front; the same open time is replaced.
+        assert_eq!(
+            r.restore(&format!(
+                "EURUSD 60 0 1 1 1 1 0
+EURUSD 60 {} 5 5 5 5 9
+",
+                60 * S
+            )),
+            2
+        );
+        let m1 = r.query("EURUSD", Timeframe::M1, 0, 0, 100);
+        assert_eq!((m1.len(), m1[0].open_time_ns, m1[1].ticks), (3, 0, 9));
         let mut small = CandleStore::new(1);
         small.restore(&c.dump());
         assert_eq!(small.query("EURUSD", Timeframe::M1, 0, 0, 100).len(), 1);

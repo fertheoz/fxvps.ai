@@ -103,15 +103,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let hub = Hub::with_instruments(cfg, auth, &instruments, Some(core.clone()));
         tokio::spawn(hub.clone().run_core_bridge(core.subscribe()));
         // Chart history survives restarts: the LP gives no historical candles.
+        // `candles-seed.txt` (optional back-fill from another source, see
+        // deploy/lmax-demo/seed-candles.py) is loaded first: our own bars win.
         let candle_file = std::path::Path::new(&data_dir).join("candles.txt");
-        match hub.load_candles(&candle_file) {
-            Ok(n) => tracing::info!(bars = n, "candle history restored"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!("candle history not restored: {e}"),
+        for f in [
+            candle_file.with_file_name("candles-seed.txt"),
+            candle_file.clone(),
+        ] {
+            match hub.load_candles(&f) {
+                Ok(n) => tracing::info!(bars = n, file = %f.display(), "candle history restored"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!("candle history not restored: {e}"),
+            }
         }
         let saver = hub.clone();
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
             tick.tick().await;
             loop {
                 tick.tick().await;
