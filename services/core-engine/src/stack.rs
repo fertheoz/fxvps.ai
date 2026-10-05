@@ -339,3 +339,40 @@ mod spec_tests {
         assert!(fx_spec("AUS200", px("0.1")).is_none());
     }
 }
+
+#[cfg(test)]
+mod lmax_list_tests {
+    use super::*;
+
+    /// Every line of the shipped LMAX list maps to an engine symbol, divides a
+    /// lot exactly, and 0.01 lot meets LMAX's minimum order size
+    /// (0.1 contract; 1 contract for platinum / palladium).
+    #[test]
+    fn shipped_lmax_instruments_are_tradable() {
+        let list = include_str!("../../../deploy/lmax-demo/lmax-instruments.txt");
+        let mut n = 0;
+        for line in list.lines().filter(|l| !l.trim().is_empty()) {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            assert_eq!(f.len(), 4, "{line}");
+            let (sym, tick, cs) = (f[0], f[2], f[3].parse::<i64>().unwrap());
+            let spec =
+                fx_spec(sym, tick.parse().unwrap()).unwrap_or_else(|| panic!("no spec: {line}"));
+            let lot = lot_units(sym);
+            assert_eq!(spec.contract_size, lot, "{line}");
+            assert_eq!(lot % cs, 0, "contract does not divide a lot: {line}");
+            let per_lot = lot / cs; // LP OrderQty of 1 lot
+            let min_lp = per_lot as f64 / 100.0; // OrderQty of 0.01 lot
+            let lmax_min = if sym.starts_with("XPT") || sym.starts_with("XPD") {
+                1.0
+            } else {
+                0.1
+            };
+            assert!(
+                min_lp >= lmax_min - 1e-9,
+                "0.01 lot = {min_lp} < LMAX min {lmax_min}: {line}"
+            );
+            n += 1;
+        }
+        assert_eq!(n, 91);
+    }
+}
