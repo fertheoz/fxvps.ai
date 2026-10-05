@@ -367,9 +367,14 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     if (y !== null) el.style.top = `${y - DRAFT_HANDLE / 2}px`;
   });
   useEffect(() => {
-    // Moving a line must not scroll the chart; the press timer dies with the panel.
+    // Moving a line must not scroll the chart; Esc puts it back; the press timer dies with the panel.
     chartRef.current?.applyOptions({ handleScroll: !edit, handleScale: !edit });
+    const esc = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setEdit(null);
+    };
+    if (edit) window.addEventListener('keydown', esc);
     return () => {
+      window.removeEventListener('keydown', esc);
       if (pressRef.current) clearTimeout(pressRef.current.timer);
     };
   }, [edit]);
@@ -388,17 +393,26 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     const r = await getApi().modifyOrder(activeAccountId, e.id, { price: e.price });
     if (!r.ok) toast('error', t('toast.rejected', { error: r.error ?? '' }));
   };
-  /** Long press on a pending order line picks it up (touch and mouse). */
-  const pressStart = (e: React.PointerEvent<HTMLDivElement>) => {
+  /** The pending order whose line is within reach of `clientY`. */
+  const orderAt = (clientY: number) => {
     const series = candleRef.current;
     const el = host.current;
-    if (edit || draft || !series || !el || !spec) return;
-    const y = e.clientY - el.getBoundingClientRect().top;
-    const hit = orders.find((o) => {
+    if (edit || draft || !series || !el || !spec) return undefined;
+    const y = clientY - el.getBoundingClientRect().top;
+    return orders.find((o) => {
       if (o.symbol !== spec.name) return false;
       const c = series.priceToCoordinate(o.price);
       return c !== null && Math.abs(c - y) <= PRESS_HIT_PX;
     });
+  };
+  /** Double-click (desktop) picks a pending order line up. */
+  const pickDouble = (e: React.MouseEvent<HTMLDivElement>) => {
+    const hit = orderAt(e.clientY);
+    if (hit) setEdit({ id: hit.id, price: hit.price });
+  };
+  /** Long press on a pending order line picks it up (touch and mouse). */
+  const pressStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    const hit = orderAt(e.clientY);
     if (!hit) return;
     const timer = setTimeout(() => {
       pressRef.current = null;
@@ -475,6 +489,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
           className="absolute inset-0"
           onMouseDownCapture={onPointerDown}
           onMouseMove={onHover}
+          onDoubleClick={pickDouble}
           onPointerDown={pressStart}
           onPointerMove={pressMove}
           onPointerUp={pressEnd}
