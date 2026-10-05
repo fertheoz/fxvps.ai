@@ -20,10 +20,18 @@ pub struct Instrument {
     /// Minimum quantity increment (contract/lot step at the LP).
     #[serde(default = "default_qty_step")]
     pub qty_step: Qty,
+    /// Units of the base currency per 1 `OrderQty(38)` at the LP: `1` when the LP
+    /// quotes quantities in units (lp-simulator), `10000` for LMAX FX contracts.
+    #[serde(default = "default_contract_size")]
+    pub contract_size: i64,
 }
 
 fn default_qty_step() -> Qty {
     Fixed::from_parts(1, 2)
+}
+
+fn default_contract_size() -> i64 {
+    1
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

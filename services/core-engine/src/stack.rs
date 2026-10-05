@@ -155,6 +155,8 @@ pub enum StackError {
     Core(#[from] CoreError),
     #[error("engine: {0}")]
     Engine(String),
+    #[error("config: {0}")]
+    Config(String),
 }
 
 pub struct CoreStack {
@@ -169,7 +171,16 @@ impl CoreStack {
     pub async fn start(cfg: StackConfig) -> Result<CoreStack, StackError> {
         let mut symbols = SymbolMap::default();
         for i in &cfg.gateway.instruments {
-            symbols.insert(&core_symbol(&i.symbol), &i.symbol, 100_000);
+            // LP OrderQty per engine lot (100 000 units): LMAX FX contracts are
+            // 10 000 units, so 1 lot = 10 contracts; contract_size 1 = units.
+            let cs = i.contract_size.max(1);
+            if 100_000 % cs != 0 {
+                return Err(StackError::Config(format!(
+                    "{}: contract_size {cs} does not divide a 100000-unit lot",
+                    i.symbol
+                )));
+            }
+            symbols.insert(&core_symbol(&i.symbol), &i.symbol, 100_000 / cs);
         }
         let symbols = Arc::new(symbols);
         let gateway = fix_gateway::start(cfg.gateway.clone())?;
