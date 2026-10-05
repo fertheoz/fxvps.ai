@@ -137,7 +137,7 @@ export const useSession = create<SessionState>((set, get) => ({
     // share the cookie, so one at a time always presents the current token.
     const rotate = () => c.refresh();
     const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
-    inflight ??= (locks ? locks.request('fxvps.refresh', rotate) : rotate())
+    inflight ??= (locks ? Promise.resolve(locks.request('fxvps.refresh', rotate)) : rotate())
       .then((r) => {
         get().accept(r);
         return get().status === 'authenticated';
