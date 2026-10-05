@@ -1,8 +1,28 @@
 "use client";
 import * as React from "react";
 import { KeyRound } from "lucide-react";
-import { Button, Card, CardContent, FieldError, Input, Label, Select } from "@/components/ui/primitives";
-import { accessAuthUi, apiUrl, decodeToken, devAuthUi, fetchAccessToken, fetchDevToken, identity2fa, identityLogin, identityUrl, setToken, startIdentitySession } from "@/lib/auth";
+import {
+  Button,
+  Card,
+  CardContent,
+  FieldError,
+  Input,
+  Label,
+  Select,
+} from "@/components/ui/primitives";
+import {
+  accessAuthUi,
+  apiUrl,
+  decodeToken,
+  devAuthUi,
+  fetchAccessToken,
+  fetchDevToken,
+  identity2fa,
+  identityLogin,
+  identityUrl,
+  setToken,
+  startIdentitySession,
+} from "@/lib/auth";
 import { useT } from "@/lib/hooks";
 import { ROLES, type Role } from "@/lib/rbac";
 
@@ -86,30 +106,65 @@ export function LoginScreen() {
     }
   };
 
+  // With the identity service, e-mail + password is the only way in; token paste and dev mint stay for local/dev setups.
+  const idMode = !!identityUrl();
   return (
     <div className="mx-auto mt-16 grid max-w-lg gap-4" data-testid="login">
       <div className="flex items-center gap-2">
         <KeyRound className="h-5 w-5 text-primary" />
         <h1 className="text-lg font-semibold">{t("auth.title")}</h1>
       </div>
-      <p className="text-sm text-muted-foreground">{t("auth.body")}</p>
-      {identityUrl() && (
+      {!idMode && (
+        <p className="text-sm text-muted-foreground">{t("auth.body")}</p>
+      )}
+      {idMode && (
         <Card>
           <CardContent className="pt-4">
-            <form onSubmit={(e) => void idSubmit(e)} className="grid gap-3" data-testid="identity-login">
+            <form
+              onSubmit={(e) => void idSubmit(e)}
+              className="grid gap-3"
+              data-testid="identity-login"
+            >
               {mfaToken ? (
                 <Label>
                   {t("auth.code")}
-                  <Input name="code" value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" autoFocus />
+                  <Input
+                    name="code"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    autoFocus
+                  />
                 </Label>
               ) : (
                 <>
-                  <Label>E-mail<Input name="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" /></Label>
-                  <Label>{t("auth.password")}<Input name="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" /></Label>
+                  <Label>
+                    E-mail
+                    <Input
+                      name="email"
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      autoComplete="username"
+                    />
+                  </Label>
+                  <Label>
+                    {t("auth.password")}
+                    <Input
+                      name="password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      autoComplete="current-password"
+                    />
+                  </Label>
                 </>
               )}
               <FieldError msg={error} />
-              <Button type="submit" disabled={busy}>{t("auth.signIn")}</Button>
+              <Button type="submit" disabled={busy}>
+                {t("auth.signIn")}
+              </Button>
             </form>
           </CardContent>
         </Card>
@@ -117,38 +172,72 @@ export function LoginScreen() {
       {accessAuthUi() && (
         <Card>
           <CardContent className="grid gap-2 pt-4" data-testid="access-login">
-            <Button onClick={() => void access()} disabled={busy} data-testid="access-token">{t("auth.access")}</Button>
+            <Button
+              onClick={() => void access()}
+              disabled={busy}
+              data-testid="access-token"
+            >
+              {t("auth.access")}
+            </Button>
           </CardContent>
         </Card>
       )}
-      <Card>
-        <CardContent className="pt-4">
-          <form onSubmit={signIn} className="grid gap-3">
-            <Label>
-              {t("auth.token")}
-              <Input name="token" value={token} onChange={(e) => setTok(e.target.value)} placeholder="eyJhbGciOi…" autoComplete="off" />
-            </Label>
-            <FieldError msg={error} />
-            <Button type="submit">{t("auth.signIn")}</Button>
-          </form>
-        </CardContent>
-      </Card>
-      {devAuthUi() && (
+      {!idMode && (
+        <Card>
+          <CardContent className="pt-4">
+            <form onSubmit={signIn} className="grid gap-3">
+              <Label>
+                {t("auth.token")}
+                <Input
+                  name="token"
+                  value={token}
+                  onChange={(e) => setTok(e.target.value)}
+                  placeholder="eyJhbGciOi…"
+                  autoComplete="off"
+                />
+              </Label>
+              <FieldError msg={error} />
+              <Button type="submit">{t("auth.signIn")}</Button>
+            </form>
+          </CardContent>
+        </Card>
+      )}
+      {!idMode && devAuthUi() && (
         <Card>
           <CardContent className="grid gap-3 pt-4" data-testid="dev-login">
             <p className="text-xs text-muted-foreground">{t("auth.dev")}</p>
             <div className="flex flex-wrap items-end gap-2">
               <Label>
                 {t("common.role")}
-                <Select value={role} onChange={(e) => setRole(e.target.value as Role)} name="dev-role">
-                  {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                <Select
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as Role)}
+                  name="dev-role"
+                >
+                  {ROLES.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
                 </Select>
               </Label>
               <Label className="flex-1">
                 {t("auth.name")}
-                <Input value={name} onChange={(e) => setName(e.target.value)} name="dev-name" placeholder={`dev-${role}`} />
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  name="dev-name"
+                  placeholder={`dev-${role}`}
+                />
               </Label>
-              <Button variant="outline" onClick={() => void dev()} disabled={busy} data-testid="dev-token">{t("auth.devButton")}</Button>
+              <Button
+                variant="outline"
+                onClick={() => void dev()}
+                disabled={busy}
+                data-testid="dev-token"
+              >
+                {t("auth.devButton")}
+              </Button>
             </div>
           </CardContent>
         </Card>
