@@ -29,9 +29,14 @@ interface Props {
   followChart?: boolean;
   onDone?: () => void;
   autoFocus?: boolean;
+  /** `sheet`: touch layout for the phone bottom sheet (large controls, card style). */
+  variant?: 'panel' | 'sheet';
 }
 
-export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
+const QUICK_LOTS = ['0.01', '0.10', '0.50', '1.00'];
+
+export function OrderTicket({ preset, followChart, onDone, autoFocus, variant = 'panel' }: Props) {
+  const sheet = variant === 'sheet';
   const t = useT();
   const uid = useId();
   const chartSymbol = useTerminal((s) => s.charts[s.activeChart]?.symbol);
@@ -154,8 +159,12 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
     }
   };
 
-  const field = 'w-full bg-panel-2 border border-line rounded px-2 py-1 num outline-none focus:border-accent';
-  const label = 'text-[10px] uppercase tracking-wide text-muted';
+  const field = sheet
+    ? 'w-full h-12 bg-panel-2 border border-line/60 rounded-2xl px-4 num outline-none focus:border-accent'
+    : 'w-full bg-panel-2 border border-line rounded px-2 py-1 num outline-none focus:border-accent';
+  const label = sheet ? 'block mb-1.5 text-[11px] uppercase tracking-wider text-muted' : 'text-[10px] uppercase tracking-wide text-muted';
+  const stepBtn = sheet ? 'w-12 h-12 shrink-0 rounded-2xl bg-panel-2 border border-line/60 text-[20px]' : 'px-2 rounded border border-line';
+  const chip = (on: boolean) => `flex-1 h-10 rounded-full text-[13px] font-medium ${on ? 'bg-accent text-white' : 'bg-panel-2 text-muted'}`;
   const err = (f: string) => {
     const e = errFor(f);
     return e ? <p className="text-down text-[11px] mt-0.5" role="alert">{t(`err.${e.key}` as MessageKey)}</p> : null;
@@ -164,8 +173,17 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
   const sideName = side === 'buy' ? t('ticket.buy') : t('ticket.sell');
 
   return (
-    <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-2 p-2 text-[12px]" aria-label={t('ticket.title')} data-testid="order-ticket" noValidate>
-      <div className="flex gap-2">
+    <form onSubmit={(e) => void submit(e)} className={sheet ? 'flex flex-col gap-4 px-5 pt-3 pb-5 text-[14px]' : 'flex flex-col gap-2 p-2 text-[12px]'} aria-label={t('ticket.title')} data-testid="order-ticket" noValidate>
+      {sheet && (
+        <div className="flex gap-2" role="radiogroup" aria-label={t('ticket.type')}>
+          {TYPES.map((x) => (
+            <button type="button" key={x} role="radio" aria-checked={type === x} className={chip(type === x)} onClick={() => setType(x)}>
+              {t(`ticket.${x}`)}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className={sheet ? 'hidden' : 'flex gap-2'}>
         <label className="flex-1">
           <span className={label}>{t('ticket.symbol')}</span>
           <select className={field} value={symbol} onChange={(e) => setSymbol(e.target.value)} aria-label={t('ticket.symbol')} disabled={followChart}>
@@ -186,7 +204,7 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
         </label>
       </div>
 
-      <div className="grid grid-cols-2 gap-1" role="radiogroup">
+      <div className={`grid grid-cols-2 ${sheet ? 'gap-3' : 'gap-1'}`} role="radiogroup">
         {(['sell', 'buy'] as Side[]).map((s) => (
           <button
             type="button"
@@ -194,23 +212,23 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
             role="radio"
             aria-checked={side === s}
             onClick={() => setSide(s)}
-            className={`rounded py-1.5 flex flex-col items-center border ${
+            className={`${sheet ? 'rounded-2xl py-3' : 'rounded py-1.5'} flex flex-col items-center border ${
               side === s ? (s === 'buy' ? 'bg-up text-white border-up' : 'bg-down text-white border-down') : 'border-line text-muted'
             }`}
           >
             <span className="text-[10px] uppercase">{s === 'buy' ? t('ticket.buy') : t('ticket.sell')}</span>
-            <span className="num font-semibold text-[14px]">{quote ? formatPrice(s === 'buy' ? quote.ask : quote.bid, spec.digits) : '—'}</span>
+            <span className={`num font-semibold ${sheet ? 'text-[19px]' : 'text-[14px]'}`}>{quote ? formatPrice(s === 'buy' ? quote.ask : quote.bid, spec.digits) : '—'}</span>
           </button>
         ))}
       </div>
 
       <label>
         <span className={label}>{t('ticket.volume')}</span>
-        <div className="flex gap-1">
-          <button type="button" className="px-2 rounded border border-line" onClick={() => stepLots(-1)} aria-label="-">−</button>
+        <div className={`flex ${sheet ? 'gap-2' : 'gap-1'}`}>
+          <button type="button" className={stepBtn} onClick={() => stepLots(-1)} aria-label="-">−</button>
           <input
             id={`${uid}-vol`}
-            className={field}
+            className={`${field} ${sheet ? 'text-center text-[18px] font-semibold' : ''}`}
             value={lots}
             onChange={(e) => setLots(e.target.value)}
             inputMode="decimal"
@@ -218,8 +236,17 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
             data-testid="ticket-volume"
             autoFocus={autoFocus}
           />
-          <button type="button" className="px-2 rounded border border-line" onClick={() => stepLots(1)} aria-label="+">+</button>
+          <button type="button" className={stepBtn} onClick={() => stepLots(1)} aria-label="+">+</button>
         </div>
+        {sheet && (
+          <div className="flex gap-2 mt-2">
+            {QUICK_LOTS.map((x) => (
+              <button type="button" key={x} className={`num ${chip(lots === x)}`} onClick={() => setLots(x)}>
+                {x}
+              </button>
+            ))}
+          </div>
+        )}
         {err('volume')}
       </label>
 
@@ -243,7 +270,7 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
       <div>
         <div className="flex items-center justify-between">
           <span className={label}>SL / TP</span>
-          <div className="flex text-[10px] rounded border border-line overflow-hidden">
+          <div className={sheet ? 'flex text-[12px] rounded-full bg-panel-2 p-0.5 mb-1.5 [&>button]:px-3 [&>button]:h-7 [&>button]:rounded-full' : 'flex text-[10px] rounded border border-line overflow-hidden'}>
             {(['pips', 'price'] as const).map((m) => (
               <button type="button" key={m} className={`px-1.5 ${protMode === m ? 'bg-accent text-white' : 'text-muted'}`} onClick={() => setProtMode(m)}>
                 {m === 'pips' ? t('ticket.inPips') : t('ticket.inPrice')}
@@ -251,7 +278,7 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
             ))}
           </div>
         </div>
-        <div className="flex gap-2 mt-0.5">
+        <div className={`flex ${sheet ? 'gap-3' : 'gap-2 mt-0.5'}`}>
           <label className="flex-1">
             <span className="sr-only">{t('ticket.sl')}</span>
             <input className={field} placeholder={t('ticket.sl')} value={slText} onChange={(e) => setSlText(e.target.value)} inputMode="decimal" aria-label={t('ticket.sl')} />
@@ -289,7 +316,7 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
         </label>
       )}
 
-      <dl className="grid grid-cols-2 gap-x-2 gap-y-0.5 p-2 rounded bg-panel-2 border border-line" data-testid="ticket-preview">
+      <dl className={sheet ? 'grid grid-cols-2 gap-x-2 gap-y-2 p-4 rounded-2xl bg-panel-2 border border-line/60' : 'grid grid-cols-2 gap-x-2 gap-y-0.5 p-2 rounded bg-panel-2 border border-line'} data-testid="ticket-preview">
         <dt className="text-muted">{t('ticket.margin')}</dt>
         <dd className="num text-right" data-testid="ticket-margin">{derived?.reqMargin !== undefined ? formatMoney(derived.reqMargin) : '—'}</dd>
         <dt className="text-muted">{t('ticket.pipValue')}</dt>
@@ -315,7 +342,7 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus }: Props) {
         type="submit"
         disabled={submitting}
         data-testid="ticket-submit"
-        className={`rounded py-2 font-semibold text-white disabled:opacity-60 ${side === 'buy' ? 'bg-up' : 'bg-down'}`}
+        className={`${sheet ? 'h-14 rounded-2xl text-[16px] active:scale-[0.98] transition-transform' : 'rounded py-2'} font-semibold text-white disabled:opacity-60 ${side === 'buy' ? 'bg-up' : 'bg-down'}`}
       >
         {t('ticket.place', { side: sideName, type: t(`ticket.${type}`) })} {volume ? volumeToLots(volume) : ''} {symbol}
       </button>
