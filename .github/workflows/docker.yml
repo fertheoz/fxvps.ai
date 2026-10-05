@@ -40,7 +40,7 @@ jobs:
           # (e-mail + password + 2FA at id.fxvps.ai); dev-token button for local use.
           - { svc: backoffice-console, dockerfile: infra/docker/static-web.Dockerfile, src: apps/backoffice, args: "APP=backoffice\nOUT=out\nNEXT_PUBLIC_API_URL=/\nNEXT_PUBLIC_DEV_AUTH=1\nNEXT_PUBLIC_IDENTITY_URL=https://id.fxvps.ai\nNEXT_PUBLIC_TERMINAL_URL=https://trade.fxvps.ai" }
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check source exists (pending services are skipped)
         id: exists
         run: |
@@ -93,7 +93,7 @@ jobs:
           # (e-mail + password + 2FA at id.fxvps.ai); dev-token button for local use.
           - { svc: backoffice-console, dockerfile: infra/docker/static-web.Dockerfile, src: apps/backoffice, args: "APP=backoffice\nOUT=out\nNEXT_PUBLIC_API_URL=/\nNEXT_PUBLIC_DEV_AUTH=1\nNEXT_PUBLIC_IDENTITY_URL=https://id.fxvps.ai\nNEXT_PUBLIC_TERMINAL_URL=https://trade.fxvps.ai" }
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check source exists (pending services are skipped)
         id: exists
         run: |
