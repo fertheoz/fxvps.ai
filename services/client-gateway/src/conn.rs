@@ -12,7 +12,7 @@ use std::time::Duration;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use client_proto::{
     Ack, AuthOk, Body, CandleResponse, DealHistory, Decimal, Encoding, Envelope, ErrorCode,
-    Heartbeat, Hello, OrderList, OrderType, Pong, QuoteBatch, Timeframe, PROTOCOL_VERSION,
+    Heartbeat, Hello, OrderList, OrderType, Pong, Prefs, QuoteBatch, Timeframe, PROTOCOL_VERSION,
 };
 use core_engine::api::{DealQuery, OrderKind, OrderModify, Protection};
 use domain::Fixed;
