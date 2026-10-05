@@ -18,6 +18,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let args: Vec<String> = std::env::args().collect();
+    // Operator commands against the production store (DATABASE_URL).
+    let op = args.get(1).map(String::as_str);
+    if matches!(op, Some("verify-email" | "link-account")) {
+        let url =
+            std::env::var("DATABASE_URL").map_err(|_| "operator commands need DATABASE_URL")?;
+        let store = PgStore::connect(&url).await?;
+        let email = args.get(2).ok_or(
+            "usage: identity verify-email <email> | identity link-account <email> <account>",
+        )?;
+        if op == Some("verify-email") {
+            let changed = identity::store::verify_email(&store, email).await?;
+            println!(
+                "{}",
+                if changed {
+                    "email verified"
+                } else {
+                    "already verified"
+                }
+            );
+        } else {
+            let account = args
+                .get(3)
+                .ok_or("usage: identity link-account <email> <account>")?;
+            identity::store::link_account(&store, email, account).await?;
+            println!("account {account} linked");
+        }
+        return Ok(());
+    }
     if args.get(1).map(String::as_str) == Some("grant-admin") {
         let email = args.get(2).ok_or("usage: identity grant-admin <email>")?;
         let url = std::env::var("DATABASE_URL").map_err(|_| "grant-admin needs DATABASE_URL")?;

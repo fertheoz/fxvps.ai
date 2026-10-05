@@ -27,3 +27,11 @@ describe("static export CSP", () => {
     expect(buildPolicy([], "not a url")).toContain("connect-src 'self';");
   });
 });
+
+describe("csp with identity", () => {
+  it("allows the admin API and the identity origins", async () => {
+    const { buildPolicy } = await import("../scripts/csp.mjs");
+    const p = buildPolicy([], ["/", "https://id.fxvps.ai"]);
+    expect(p).toContain("connect-src 'self' https://id.fxvps.ai;");
+  });
+});

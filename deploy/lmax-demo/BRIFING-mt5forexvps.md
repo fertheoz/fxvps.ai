@@ -1,93 +1,148 @@
-# Brifing — fxvps.ai LP konsolu (LMAX demo) için ödünç LXC — sürüm 2
+# Brifing v4 (KESİN) — fxvps.ai demo platformu: konsol + müşteri terminali + LMAX demo (CT 970)
 
-**Kimden:** fxvps.ai projesi (bulut oturumu, yalnız kod).
-**Kime:** mt5forexvps masaüstü oturumu (`/root/mt5forexvps`).
-**Onaylayan:** Kurucu.
-**Süre:** Geçici, LMAX demo bağlantı testi bitene kadar.
+**Kimden:** fxvps.ai projesi · **Kime:** mt5forexvps masaüstü oturumu · **Onaylayan:** Kurucu
+**v1–v3'ün yerine geçer.** Çelişki varsa bu belge geçerlidir.
 
-**v1'e göre değişenler:**
-- Kimlik CT 970.
-- Genel IP yok; NAT arkasında özel IP yeterli.
-- `lmax-demo.toml` kalktı. LP bilgileri artık kurucu tarafından **konsoldan** girilir.
-- Kutuda üç kap çalışır: fix-gateway, core-engine, konsol. Hepsi CT içinde yalnız 127.0.0.1'de.
+---
 
-## Mevcut CT 970'i yükseltme (5 Ekim'de kuruldu, 104.243.32.199)
-CT hazır olduğu için 1–2. adımlar atlanır. Sırayla:
-1. **Durdur ve güncelle:**
-   - `cd /opt/fxvps.ai/deploy/lmax-demo && docker compose down`. Daha önce hiç `up` yapılmadıysa zararsız.
-   - `git -C /opt/fxvps.ai pull`
-2. **`.env`'i yenile:**
-   - Eski `FIX_GATEWAY_*_PASSWORD` satırları artık kullanılmıyor.
-   - `cp .env.example .env.new`, `FIX_ADMIN_TOKEN=$(openssl rand -hex 24)` değerini yaz, `mv .env.new .env && chmod 600 .env`.
-3. **Veri dizini:** `mkdir -p core-data && chown 65532:65532 core-data`. `fix-store` zaten var.
-4. **SSH:**
-   - `apt-get install -y openssh-server`, kurucunun açık anahtarı, `PasswordAuthentication no`.
-   - CT genel IP'de olduğu için **yalnız anahtarla giriş**. Root parola girişi kapalı kalmalı.
-5. **Çalıştır:** `docker compose pull && docker compose up -d`, sonra 9. adımdaki doğrulamalar.
-6. **Kurucuya tünel komutu:** genel IP olduğu için atlama noktası gerekmez:
-   `ssh -L 8080:127.0.0.1:8080 root@104.243.32.199` → tarayıcıda `http://localhost:8080`.
-7. **Dışarıya açık port kontrolü:** `ss -ltnp` çıktısında 22 dışında `0.0.0.0`/genel IP'de dinleyen bir şey olmamalı. 8080, 8090 ve 9890 yalnız 127.0.0.1'de.
+## 0. Ne değişti, neden
+- **Tek işlem süreci:** müşteri emirleri için çekirdek ve FIX aynı süreçte olmalı. LMAX de CompID başına tek oturuma izin veriyor. Bu yüzden ayrı `fix-gateway` ve `core-engine` kapları kalktı; yerlerine tek **`trading`** kabı geldi (client-gateway + core-engine + fix-gateway).
+- **Konsol girişi:** artık **e-posta + parola + 2FA** ile, kimlik servisinden yapılıyor. Kurucu isteği: "admin şifresi olmadan girilmesin". Cloudflare Access dış kapı olarak kalır; dev-token ve Access'ten otomatik giriş kalktı.
+- **Yeni yayınlar:** müşteri terminali **`trade.fxvps.ai`**, kimlik servisi **`id.fxvps.ai`**. İkisi de herkese açık; korumayı kimlik girişi sağlar.
+- **LMAX miktar düzeltmesi (#38):** 1 lot artık 10 LMAX kontratı olarak gidiyor. Önceki kodla 100.000 kontrat gidecekti. Bu düzeltme olmadan emir verilmez.
 
-## Amaç
-fxvps.ai'nin LP konsolunu ayağa kaldırmak. Kurucu LMAX demo FIX 4.4 bilgilerini konsoldaki LP sayfasına girer. Gateway oturumları açar, durum aynı sayfada görünür. Bu bir **bağlantı testi**: gerçek para yok, müşteri verisi yok, mt5forexvps ürününe dokunan değişiklik yok.
+| Yerel adres (CT içinde) | Servis | Yayın |
+|---|---|---|
+| 127.0.0.1:8080 | Konsol (nginx → admin API) | `console.fxvps.ai` + **Access** |
+| 127.0.0.1:8081 | Kimlik servisi | `id.fxvps.ai` |
+| 127.0.0.1:8082 | Müşteri terminali (nginx → `/ws`) | `trade.fxvps.ai` |
+| 127.0.0.1:8088 | trading: müşteri WebSocket | (terminal üzerinden) |
+| 127.0.0.1:8090 | trading: admin API | (konsol üzerinden) |
+| 127.0.0.1:9890 | trading: LP durum / LP ayar ucu (token'lı) | — |
+| 127.0.0.1:5433 | PostgreSQL (kimlik) | — |
 
-## Kapsam sınırları (mt5forexvps kuralları geçerli)
-- **Müşteri kutularına** (LXC 1xx, VM 106) ve **golden şablonlara** (11xx, CT 980 golden soyu, onaylı şablon mührü) dokunulmaz. 966 (kapı) dokunulmaz.
-- mt5 üretim kaplarına ve `/opt/mt5forexvps`'e dokunulmaz.
-- Hepsi **CT 970** (`fxvps-lmax-demo`) içinde çalışır.
-- Hiçbir şey "temizlik" diye silinmez. İş bitince CT durdurulur; silmeye kurucu karar verir.
-- LP parolasını oturum görmez, istemez, basmaz. Kurucu konsola kendisi girer.
-
-## Kaynak ve ağ
-| | |
+## 1. Kim ne yapar
+| Adım | Yapan |
 |---|---|
-| CT | 970 · Debian 13 standart şablon · 1 vCPU / 1 GB / 8 GB · `nesting=1` · `onboot=0` |
-| Ağ | NAT arkasında özel IP. Genel IP ve port yönlendirme **yok** |
-| Dışarı çıkış | GHCR (imaj çekme, HTTPS) ve LMAX demo FIX host'ları (TLS). Bunlar kurucu konsola girince belli olur |
-| İçeri giriş | Yalnız SSH (kurucunun anahtarı), konsol tüneli için |
+| Cloudflare: 3 public hostname + Access (yalnız console) | **Kurucu** (panelde) |
+| CT 970: dosyalar, `.env`, anahtar, kaplar, doğrulama, operatör komutları | **mt5forexvps oturumu** |
+| Konsola giriş, LP bilgileri (LMAX parolası), Saygın'ın hesabını açma ve bakiye yükleme | **Kurucu** |
+| Kod hatası, yeni imaj | **fxvps.ai** |
 
-## Adımlar
-1. **Ön kontrol (salt okuma):** CT 970 hâlâ boş mu, seçilen özel IP çakışıyor mu? Çakışma varsa dur, kurucuya sor.
-2. **CT 970'i oluştur** (yukarıdaki değerlerle) ve başlat.
-3. **CT içinde:**
-   - `apt-get install -y docker.io docker-compose-plugin git openssh-server`. Paket adı sürüme göre `docker-compose` olabilir.
-   - Kurucunun açık anahtarını `/root/.ssh/authorized_keys`'e ekle. `PasswordAuthentication no`.
-4. **Paketi getir:** `git clone https://github.com/fertheoz/fxvps.ai /opt/fxvps.ai && cd /opt/fxvps.ai/deploy/lmax-demo`.
-5. **Sır:**
-   - `cp .env.example .env && chmod 600 .env`.
-   - `FIX_ADMIN_TOKEN` değerini `openssl rand -hex 24` ile üret ve yaz. Bu bir LP parolası değil, iki kap arasındaki iç anahtar. Oturum değeri ekrana basmaz.
-6. **Veri dizinleri:** `mkdir -p fix-store core-data && chown 65532:65532 fix-store core-data`.
-7. **İmajlar:** `docker compose pull`. İmajlar public; jeton ve derleme gerekmez.
-8. **Çalıştır:** `docker compose up -d`, ardından `docker compose ps` ile üç kabın da `running` olduğunu gör.
-9. **Doğrula (CT içinde, salt okuma):**
-   - `curl -s 127.0.0.1:8080/healthz` → `ok`
-   - `curl -s 127.0.0.1:9890/status` → `[]`, çünkü henüz LP girilmedi.
-   - `docker compose logs fix-gateway | tail` → `no LP configured yet; waiting for PUT /config`.
-10. **Kurucuya tünel komutunu ver.** CT özel IP'si `<CT_IP>`, Proxmox düğümü atlama noktası:
-    ```
-    ssh -J root@104.194.9.154 -L 8080:127.0.0.1:8080 root@<CT_IP>
-    ```
-    Kurucu tarayıcıda `http://localhost:8080` açar. Girişte **"Dev token"** → rol **admin** seçer, sonra LP sayfasına gider ve LMAX bilgilerini girip kaydeder.
-11. **Rapor:**
-    - `curl -s 127.0.0.1:9890/status` çıktısı. Hedef: iki satır, `"logged_on": true`.
-    - `docker compose logs --tail=200 fix-gateway` içinden parolasız hata satırları.
-    - fxvps.ai'ye iletilir.
+Sırlar (`.env` değerleri, imza anahtarı, LMAX parolası) hiçbir yere yazılmaz, ekrana basılmaz.
 
-**Emir gönderme yok.** Bu kurulum yalnız bağlantı ve fiyat testi.
+---
 
-## Sorun giderme
-| Belirti | Olası neden |
+## 2. Kurucu — Cloudflare (mevcut `fxvps-console` tünelinde)
+Zero Trust → Networks → Tunnels → `fxvps-console` → **Public Hostname**. Üç kayıt; hepsinde Type **HTTP**:
+
+| Subdomain | Domain | URL |
+|---|---|---|
+| `console` | `fxvps.ai` | `127.0.0.1:8080` (varsa dokunma) |
+| `trade` | `fxvps.ai` | `127.0.0.1:8082` |
+| `id` | `fxvps.ai` | `127.0.0.1:8081` |
+
+- **Access uygulaması yalnız `console.fxvps.ai` içindir.** `trade` ve `id` için Access **yok**: müşteri ve kimlik servisi herkese açık olmalı.
+- DNS'e elle kayıt eklenmez; tünel CNAME'leri kendisi oluşturur.
+
+## 3. mt5forexvps — CT 970
+```bash
+cd /opt/fxvps.ai && git pull                                   # bu brifingi içeren main
+cd deploy/lmax-demo
+docker compose --profile tunnel down                           # eski kaplar (fix-gateway, core-engine, console, cloudflared)
+cp .env .env.yedek-$(date +%Y%m%d%H%M)
+mkdir -p fix-store core-data pg-data keys
+chown 65532:65532 fix-store core-data
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/identity.pem
+chown 65532:65532 keys/identity.pem && chmod 600 keys/identity.pem
+```
+`.env` (mevcut `FIX_ADMIN_TOKEN` ve `CLOUDFLARE_TUNNEL_TOKEN` korunur; `CORE_DEV_AUTH` ve `CF_ACCESS_*` satırları silinir):
+```
+FIX_ADMIN_TOKEN=<mevcut>
+PG_PASSWORD=<openssl rand -hex 24>
+CLOUDFLARE_TUNNEL_TOKEN=<mevcut>
+FIXVPS_TAG=latest
+RUST_LOG=info
+```
+```bash
+chmod 600 .env
+docker compose --profile tunnel pull
+docker compose --profile tunnel up -d
+docker compose --profile tunnel ps     # postgres, identity, trading, console, terminal, cloudflared → running
+```
+Eski LP ayarı (`fix-store/lp.json`) korunur; trading kabı onu okur. **Not:** dosyadaki enstrüman satırlarında kontrat büyüklüğü yok, yani 1 = birim. Kurucu konsolda kaydetmeden emir verilmeyecek (§5).
+
+### 3.1 Doğrulama
+| # | Komut | Beklenen |
+|---|---|---|
+| 1 | `curl -s 127.0.0.1:8081/.well-known/jwks.json \| head -c 80` | `{"keys":[` |
+| 2 | `curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:8090/v1/me` | `401` |
+| 3 | `curl -s -o /dev/null -w '%{http_code}\n' -XPOST 127.0.0.1:8090/auth/dev-token -H 'content-type: application/json' -d '{"role":"admin"}'` | `404` |
+| 4 | `curl -s 127.0.0.1:9890/status` | LP satırları (LMAX bilgileri girildiyse) ya da `[]` |
+| 5 | `curl -s 127.0.0.1:8082/healthz; curl -s 127.0.0.1:8080/healthz` | `ok` `ok` |
+| 6 | `ss -ltnp` | 0.0.0.0/genel IP'de yalnız 22 |
+| 7 | (CT dışından) `curl -sI https://trade.fxvps.ai \| head -1` ve `curl -s https://id.fxvps.ai/.well-known/openid-configuration \| head -c 60` | `200` ve `{"issuer":"https://id.fxvps.ai"` |
+| 8 | (CT dışından) `curl -sI https://console.fxvps.ai \| head -3` | Access yönlendirmesi (302) |
+
+## 4. Kurucunun admin hesabı (bir kerelik)
+1. Kurucu `https://trade.fxvps.ai` → **Kayıt ol** → `ferthe@gmail.com` + güçlü parola.
+2. mt5 oturumu (CT içinde):
+   ```bash
+   docker compose exec identity /app/identity verify-email ferthe@gmail.com
+   docker compose exec identity /app/identity grant-admin ferthe@gmail.com
+   ```
+3. Kurucu `trade.fxvps.ai`'ye giriş yapar → hesap menüsünden **2FA (TOTP)** kurar (Google Authenticator vb.) → kurtarma kodlarını saklar.
+4. Kurucu `https://console.fxvps.ai` → Access e-posta kodu → konsol girişi: e-posta + parola + 2FA kodu.
+   *Para ve ayar değiştiren işlemler 2FA'lı giriş ister (`CORE_REQUIRE_MFA=1`).*
+
+## 5. Kurucu — LP (LMAX) ayarı
+Konsol → **LP** → **LP bağlantı ayarları**:
+
+| Alan | Piyasa verisi | İşlem |
+|---|---|---|
+| Host:port | `fix-marketdata.london-demo.lmax.com:443` | `fix-order.london-demo.lmax.com:443` |
+| SenderCompID / Kullanıcı | `FXVPS-Ferdi` | `FXVPS-Ferdi` |
+| TargetCompID | `LMXBDM` | `LMXBD` |
+| Parola | LMAX FIX parolası | aynı |
+| TLS | on | on |
+
+- **Enstrümanlar**, satır başına `SEMBOL SecurityID tick kontrat` (LMAX FX kontratı = **10000**):
+  ```
+  EUR/USD 4001 0.00001 10000
+  GBP/USD 4002 0.00001 10000
+  USD/JPY 4004 0.001 10000
+  ```
+- Diğer alanlar: LP `LMAX` · Heartbeat `30` · SecurityIDSource `8`.
+- **Kaydet** → trading kabı yeniden başlar (yaklaşık 5–10 sn) → tabloda MD ve TRADING satırları **logged_on** olur.
+
+## 6. Saygın Balıkel — 5.000 USD demo hesabı
+1. **Hesap (konsol):** Müşteriler → **Hesap aç** → Ad `Saygın Balıkel`, e-posta `saygin.balikel@gmail.com`, grup **`demo-retail`** (USD, 1:30, A-book → LMAX) → hesap numarası görünür (ör. **100001**).
+2. **Bakiye (konsol):** hesabı aç → **Para yatırma** → `5000` USD, gerekçe `demo funding`. 4-göz eşiği aşılırsa ikinci onay istenir. Tek admin varsa eşik Ayarlar'dan geçici olarak yükseltilir.
+3. **Giriş:** Saygın `https://trade.fxvps.ai` → **Kayıt ol** (`saygin.balikel@gmail.com`).
+4. **Bağlama (mt5 oturumu):**
+   ```bash
+   docker compose exec identity /app/identity verify-email saygin.balikel@gmail.com
+   docker compose exec identity /app/identity link-account saygin.balikel@gmail.com <hesap-no>
+   ```
+5. Saygın tekrar giriş yapar → terminalde **5.000 USD** bakiyeli hesabı görür, fiyatlar LMAX demodan akar.
+   - İlk işlemi **0.01 lot**, yani LMAX'te 0.1 kontrat (en küçük emir) olsun.
+   - Doğrulama: konsol → Pozisyonlar'da görünür; `docker compose logs trading | grep -i exec` satırlarında LMAX dolumu (`35=8`) görünür.
+
+## 7. Sorun giderme
+| Belirti | Çözüm |
 |---|---|
-| Konsol açılmıyor | Tünel yok ya da `console` kabı ayakta değil (`docker compose logs console`) |
-| Konsolda LP ayar kartı "yönetilmiyor" diyor | core-engine `CORE_LP_ADMIN_URL`/token eşleşmiyor → `.env`'deki `FIX_ADMIN_TOKEN` |
-| Kaydet → hata "host:port", "TLS" | Girilen değerde biçim hatası. Mesaj konsolda görünür |
-| `connect ...: refused/timed out` | Yanlış host/port ya da CT'den dışarı çıkış engeli |
-| TLS hatası (`UnknownIssuer`, `invalid peer certificate`) | LMAX özel CA ya da farklı sunucu adı. fxvps.ai'ye bildir |
-| Logon sonrası hemen `Logout` | CompID, kullanıcı ya da parola hatalı; ya da sequence reset politikası |
+| trade/id → 522 ya da 1033 | §2 hostname'leri; `docker compose logs cloudflared` |
+| Konsol "invalid token" ya da 401 | `CORE_JWT_ISSUER` = `https://id.fxvps.ai` ve kimlik servisi ayakta mı (#1) |
+| Konsolda değişiklik "mfa required" | Kurucu 2FA kurmadan girmiş → §4.3 |
+| Terminal girişte "Origin not allowed" | `IDENTITY_ALLOWED_ORIGINS` / `FXVPS_ALLOWED_ORIGINS` |
+| Saygın hesabı göremiyor | §6.4 bağlama + çıkış yapıp tekrar giriş |
+| Emir "no LP mapping" ya da reddedildi | §5 enstrüman satırları ve kontrat sütunu |
+| Logon sonrası `Logout` / TLS hatası | `docker compose logs --tail=200 trading` → parolasız satırları fxvps.ai'ye ilet |
 
-## Bitirme / geri alma
-- `docker compose down` (CT içinde), sonra `pct stop 970`.
-- CT silme kurucu kararıdır. `fix-store/lp.json` LP parolasını içerir; CT silinmeyecekse bu dosyayı ayrıca kaldırmayı kurucuya sor.
+## 8. Geri alma (hiçbir şey silinmez)
+- **Yayını kapat:** `docker compose stop cloudflared`.
+- **Platformu durdur:** `docker compose --profile tunnel down`. Veri dizinleri (`fix-store`, `core-data`, `pg-data`, `keys`) diskte kalır.
+- Hostname, Access, DNS, CT silme ve IP iadesi kurucu kararıdır.
 
-## Hafıza
-`docs/agent-memory/` altına not: CT 970, özel IP, tarih, sonuç (parolasız). ACIK-ISLER'e "fxvps LP konsolu CT 970 — geçici, sökülecek".
+## 9. Hafıza
+`docs/agent-memory/`: tarih, CT 970, hostnames, Saygın hesap no (parolasız), doğrulama sonuçları. ACIK-ISLER: "fxvps demo platformu CT 970 — geçici, sökülecek".

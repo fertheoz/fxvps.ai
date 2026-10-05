@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { isAllowedWsUrl, loadGateway, parseOrigins, resolveGateway, saveGateway, type WsPolicy } from './connection';
+import { defaultGateway, isAllowedWsUrl, loadGateway, parseOrigins, resolveGateway, saveGateway, type WsPolicy } from './connection';
 
 describe('gateway selection', () => {
   beforeEach(() => sessionStorage.clear());
@@ -50,5 +50,15 @@ describe('gateway allow list', () => {
     expect(isAllowedWsUrl('ws://127.0.0.1:9000/ws', { ...prod, dev: true })).toBe(true);
     expect(isAllowedWsUrl('ws://localhost:9000/ws', { allowed: [], pageOrigin: 'http://localhost:4173', dev: false })).toBe(true);
     expect(isAllowedWsUrl('wss://evil.example/ws', { allowed: [], pageOrigin: 'http://localhost:4173', dev: true })).toBe(false);
+  });
+});
+
+describe('default gateway (VITE_DEFAULT_WS_URL)', () => {
+  it('resolves a path against the page host', () => {
+    expect(defaultGateway('/ws', 'https://trade.fxvps.ai')).toEqual({ url: 'wss://trade.fxvps.ai/ws', token: '' });
+    expect(defaultGateway('/ws', 'http://127.0.0.1:5173')).toEqual({ url: 'ws://127.0.0.1:5173/ws', token: '' });
+    expect(defaultGateway('wss://gw.example.com/ws', '')).toEqual({ url: 'wss://gw.example.com/ws', token: '' });
+    expect(defaultGateway(undefined, 'https://x')).toBeNull();
+    expect(defaultGateway('nonsense', 'https://x')).toBeNull();
   });
 });

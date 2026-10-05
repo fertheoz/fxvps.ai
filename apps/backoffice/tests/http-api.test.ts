@@ -209,3 +209,14 @@ describe("Cloudflare Access login", () => {
     expect(urls).toEqual(["/auth/access-token"]);
   });
 });
+
+describe("identity login (console)", () => {
+  it("accepts identity tokens with a roles array", async () => {
+    const { decodeToken } = await import("@/lib/auth");
+    const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+    const tok = `x.${b64({ sub: "u1", email: "boss@x.io", roles: ["client", "admin"], exp: 9e9 })}.s`;
+    expect(decodeToken(tok)).toMatchObject({ sub: "u1", name: "boss@x.io", role: "admin" });
+    const client = `x.${b64({ sub: "u2", roles: ["client"], exp: 9e9 })}.s`;
+    expect(decodeToken(client)).toBeNull();
+  });
+});

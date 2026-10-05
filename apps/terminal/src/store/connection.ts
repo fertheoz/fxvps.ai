@@ -113,6 +113,23 @@ export function isAllowedWsUrl(url: string, policy: WsPolicy = defaultWsPolicy()
  * sessionStorage. `?api=mock` forces the mock and forgets a stored gateway.
  * Returns the config and the query string with `token` stripped.
  */
+/**
+ * Build-time `VITE_DEFAULT_WS_URL` (e.g. `/ws` for a gateway behind the page's own
+ * host): used when nothing is configured, so a published terminal opens straight on
+ * its gateway (token from the identity login). Relative paths resolve against the page.
+ */
+export function defaultGateway(raw: string | undefined = import.meta.env.VITE_DEFAULT_WS_URL, pageOrigin = typeof location === 'undefined' ? '' : location.origin): GatewayConfig | null {
+  const v = raw?.trim();
+  if (!v) return null;
+  let url = v;
+  if (v.startsWith('/')) {
+    if (!pageOrigin) return null;
+    const page = new URL(pageOrigin);
+    url = `${page.protocol === 'https:' ? 'wss:' : 'ws:'}//${page.host}${v}`;
+  }
+  return isValidWsUrl(url) ? { url, token: '' } : null;
+}
+
 export function resolveGateway(
   search: string,
   policy: WsPolicy = defaultWsPolicy(),
@@ -134,7 +151,7 @@ export function resolveGateway(
       gateway = loadGateway();
     }
   } else {
-    gateway = loadGateway();
+    gateway = loadGateway() ?? defaultGateway();
   }
   params.delete('token');
   const q = params.toString();

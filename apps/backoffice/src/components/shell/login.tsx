@@ -2,7 +2,7 @@
 import * as React from "react";
 import { KeyRound } from "lucide-react";
 import { Button, Card, CardContent, FieldError, Input, Label, Select } from "@/components/ui/primitives";
-import { accessAuthUi, apiUrl, decodeToken, devAuthUi, fetchAccessToken, fetchDevToken, setToken } from "@/lib/auth";
+import { accessAuthUi, apiUrl, decodeToken, devAuthUi, fetchAccessToken, fetchDevToken, identity2fa, identityLogin, identityUrl, setToken, startIdentitySession } from "@/lib/auth";
 import { useT } from "@/lib/hooks";
 import { ROLES, type Role } from "@/lib/rbac";
 
@@ -58,6 +58,34 @@ export function LoginScreen() {
     }
   };
 
+  // Identity login: e-mail + password, then the TOTP code when 2FA is on.
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [mfaToken, setMfaToken] = React.useState<string | null>(null);
+  const [code, setCode] = React.useState("");
+  React.useEffect(() => {
+    startIdentitySession(); // silent sign-in from an existing session cookie
+  }, []);
+  const idSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    try {
+      if (mfaToken) {
+        setToken(await identity2fa(mfaToken, code.trim()));
+      } else {
+        const r = await identityLogin(email.trim(), password);
+        if ("token" in r) setToken(r.token);
+        else setMfaToken(r.mfaToken);
+      }
+      startIdentitySession();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="mx-auto mt-16 grid max-w-lg gap-4" data-testid="login">
       <div className="flex items-center gap-2">
@@ -65,6 +93,27 @@ export function LoginScreen() {
         <h1 className="text-lg font-semibold">{t("auth.title")}</h1>
       </div>
       <p className="text-sm text-muted-foreground">{t("auth.body")}</p>
+      {identityUrl() && (
+        <Card>
+          <CardContent className="pt-4">
+            <form onSubmit={(e) => void idSubmit(e)} className="grid gap-3" data-testid="identity-login">
+              {mfaToken ? (
+                <Label>
+                  {t("auth.code")}
+                  <Input name="code" value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" autoFocus />
+                </Label>
+              ) : (
+                <>
+                  <Label>E-mail<Input name="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" /></Label>
+                  <Label>{t("auth.password")}<Input name="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" /></Label>
+                </>
+              )}
+              <FieldError msg={error} />
+              <Button type="submit" disabled={busy}>{t("auth.signIn")}</Button>
+            </form>
+          </CardContent>
+        </Card>
+      )}
       {accessAuthUi() && (
         <Card>
           <CardContent className="grid gap-2 pt-4" data-testid="access-login">

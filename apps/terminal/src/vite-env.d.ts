@@ -9,6 +9,8 @@ interface ImportMetaEnv {
    * loopback gateways are always allowed.
    */
   readonly VITE_ALLOWED_WS_ORIGINS?: string;
+  /** Gateway used when none is configured (`/ws` = same host). */
+  readonly VITE_DEFAULT_WS_URL?: string;
 }
 
 interface ImportMeta {

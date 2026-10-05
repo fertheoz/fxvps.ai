@@ -24,7 +24,8 @@ export function originOf(url) {
 
 /** The policy for one page given the hashes of its inline scripts. */
 export function buildPolicy(hashes, apiUrl) {
-  const api = originOf(apiUrl);
+  // apiUrl: one URL or a list (admin API + identity service).
+  const api = [...new Set((Array.isArray(apiUrl) ? apiUrl : [apiUrl]).map(originOf).filter(Boolean))].join(" ");
   const scripts = ["'self'", ...hashes.map((h) => `'sha256-${h}'`)];
   return [
     "default-src 'self'",
@@ -63,6 +64,6 @@ function walk(dir) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const out = process.argv[2] ?? "out";
   const files = walk(out);
-  for (const f of files) writeFileSync(f, applyCsp(readFileSync(f, "utf8"), process.env.NEXT_PUBLIC_API_URL));
+  for (const f of files) writeFileSync(f, applyCsp(readFileSync(f, "utf8"), [process.env.NEXT_PUBLIC_API_URL, process.env.NEXT_PUBLIC_IDENTITY_URL]));
   console.log(`csp: ${files.length} page(s) in ${out}`);
 }
