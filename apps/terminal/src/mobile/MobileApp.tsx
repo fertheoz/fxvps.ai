@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Deal, PendingOrder, Position, Side } from '@fxvps/trading-core';
+import type { Deal, PendingOrder, Position, Side, SymbolSpec } from '@fxvps/trading-core';
 import {
   TIMEFRAMES,
   big,
@@ -7,6 +7,7 @@ import {
   formatMoney,
   formatPrice,
   formatTimeShort,
+  lotsToVolume,
   roundPrice,
   parseDecimal,
   positionProfit,
@@ -189,6 +190,53 @@ function Hero() {
   );
 }
 
+/** Lot size: arrows step, a tap on the number opens a keypad for a direct entry. */
+function LotStepper({ volume, onStep, onSet, spec }: { volume: number; onStep: (dir: 1 | -1) => void; onSet: (v: number) => void; spec?: SymbolSpec }) {
+  const t = useT();
+  const [text, setText] = useState<string | null>(null);
+  const commit = () => {
+    if (text !== null) {
+      const v = lotsToVolume(text);
+      if (v && spec) onSet(Math.min(spec.maxVolume, Math.max(spec.minVolume, v)));
+    }
+    setText(null);
+  };
+  return (
+    <div className="flex items-center rounded-2xl bg-panel-2 border border-line/60 px-1" data-testid="m-quick-volume">
+      <button className="w-9 h-14 text-[18px] text-muted" onClick={() => onStep(-1)} aria-label="-">
+        ▾
+      </button>
+      <div className="w-14 text-center">
+        <div className="text-[9px] uppercase tracking-wider text-muted">{t('chart.lots')}</div>
+        {text === null ? (
+          <button className="num text-[15px] font-semibold w-full" onClick={() => setText(volumeToLots(volume))} data-testid="m-lots-edit" aria-label={t('ticket.volume')}>
+            {volumeToLots(volume)}
+          </button>
+        ) : (
+          <input
+            autoFocus
+            inputMode="decimal"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commit();
+              if (e.key === 'Escape') setText(null);
+            }}
+            onFocus={(e) => e.currentTarget.select()}
+            className="num w-full text-center bg-transparent outline-none text-[15px] font-semibold"
+            aria-label={t('ticket.volume')}
+            data-testid="m-lots-input"
+          />
+        )}
+      </div>
+      <button className="w-9 h-14 text-[18px] text-muted" onClick={() => onStep(1)} aria-label="+">
+        ▴
+      </button>
+    </div>
+  );
+}
+
 function ChartView({ onSymbols }: { onSymbols: () => void }) {
   const t = useT();
   const slot = useTerminal((s) => s.charts[0]);
@@ -234,20 +282,7 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
       setBusy(false);
     }
   };
-  const lotStepper = (
-    <div className="flex items-center rounded-2xl bg-panel-2 border border-line/60 px-1" data-testid="m-quick-volume">
-      <button className="w-9 h-14 text-[18px] text-muted" onClick={() => step(-1)} aria-label="-">
-        ▾
-      </button>
-      <div className="w-12 text-center">
-        <div className="text-[9px] uppercase tracking-wider text-muted">{t('chart.lots')}</div>
-        <div className="num text-[15px] font-semibold">{volumeToLots(volume)}</div>
-      </div>
-      <button className="w-9 h-14 text-[18px] text-muted" onClick={() => step(1)} aria-label="+">
-        ▴
-      </button>
-    </div>
-  );
+  const lotStepper = <LotStepper volume={volume} onStep={step} onSet={setVolume} spec={spec} />;
   const toggleQuick = () => {
     writeQuick(!quick);
     setQuick(!quick);
@@ -275,7 +310,7 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
   );
   return (
     <div className="fx-view flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 pt-3">
+      <div className="flex items-center justify-between px-4 pt-1">
         <button className="text-left" onClick={onSymbols} data-testid="m-symbol">
           <div className="text-[20px] font-semibold tracking-tight">
             {slot.symbol} <span className="text-muted text-[14px]">▾</span>
@@ -316,7 +351,7 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
           )}
         </div>
       </div>
-      <div className="flex gap-1 px-3 py-2 overflow-x-auto">
+      <div className="flex gap-1 px-3 py-1 overflow-x-auto">
         {TIMEFRAMES.map((tf) => (
           <button
             key={tf}
@@ -718,16 +753,15 @@ export function MobileApp() {
   const dot = conn === 'connected' ? 'bg-up' : conn === 'disconnected' ? 'bg-down' : 'bg-amber-400';
   return (
     <div className="fx-mobile flex flex-col h-[100dvh]" data-testid="mobile-app">
-      <header className="flex items-center justify-between px-4 h-12 shrink-0 pt-[env(safe-area-inset-top)] box-content">
-        <div className="flex items-center gap-2 font-semibold text-[16px] tracking-tight">
-          <span className="grid place-items-center w-7 h-7 rounded-lg bg-accent text-white text-[12px]">fx</span>
-          fxvps.ai
-        </div>
-        <div className="flex items-center gap-2 text-[12px] text-muted" data-testid="connection" data-state={conn}>
+      <header className="flex items-center justify-between px-3 h-6 shrink-0 pt-[env(safe-area-inset-top)] box-content text-[11px] text-muted">
+        <span className="font-semibold tracking-tight">
+          <span className="text-accent">fx</span>vps.ai
+        </span>
+        <span className="flex items-center gap-1.5" data-testid="connection" data-state={conn}>
           {account && <span className="num">{account.id}</span>}
-          {account?.isDemo && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-500">{t('top.demo')}</span>}
-          <span className={`w-2 h-2 rounded-full ${dot}`} title={t(`conn.${conn}`)} />
-        </div>
+          {account?.isDemo && <span className="text-[9px] font-semibold text-amber-500">{t('top.demo')}</span>}
+          <span className={`w-1.5 h-1.5 rounded-full ${dot}`} title={t(`conn.${conn}`)} />
+        </span>
       </header>
       <main className="flex-1 min-h-0">
         {tab === 'markets' && <Markets onOpen={open} />}
