@@ -133,8 +133,11 @@ export const useSession = create<SessionState>((set, get) => ({
     if (!c) return Promise.resolve(false);
     // Single flight: concurrent callers share one rotation (a second rotation with
     // the already-rotated cookie would look like token theft and end the session).
-    inflight ??= c
-      .refresh()
+    // Across tabs of this origin the rotation is serialized with a Web Lock: the tabs
+    // share the cookie, so one at a time always presents the current token.
+    const rotate = () => c.refresh();
+    const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
+    inflight ??= (locks ? Promise.resolve(locks.request('fxvps.refresh', rotate)) : rotate())
       .then((r) => {
         get().accept(r);
         return get().status === 'authenticated';
