@@ -5,7 +5,7 @@ use crate::router::{LpOrderRequest, LpRouter, NullRouter};
 use crate::types::*;
 use ledger::{AccountId, AccountKind, Ledger, LedgerSnapshot, Posting, TxnKind, TxnRequest};
 use money::{Money, Price, Qty, Rounding, SCALE};
-use risk::{AccountRisk, OrderIntent, PartialFill, Quote, QuoteBook, RiskError};
+use risk::{AccountRisk, GroupCommission, OrderIntent, PartialFill, Quote, QuoteBook, RiskError};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -251,9 +251,10 @@ impl Engine {
         AccountRisk::new(balance, floating, margin)
     }
 
-    fn markup(&self, g: &GroupConfig, symbol: &str) -> Price {
+    /// Markup on `side` of `symbol` for group `g` (ask for Buy, bid for Sell).
+    fn markup(&self, g: &GroupConfig, symbol: &str, side: Side) -> Price {
         let point = self.st.symbols.get(symbol).map_or(0, |s| s.point().raw());
-        Price::from_raw(point * g.markup_points)
+        Price::from_raw(point * g.markup_points_for(symbol, side))
     }
 
     fn client_quote(&self, g: &GroupConfig, symbol: &str) -> Result<Quote, RiskError> {
@@ -262,7 +263,10 @@ impl Engine {
             .quotes
             .get(symbol)
             .ok_or_else(|| RiskError::NoQuote(symbol.into()))?;
-        Ok(q.with_markup(self.markup(g, symbol)))
+        Ok(q.with_markups(
+            self.markup(g, symbol, Side::Sell),
+            self.markup(g, symbol, Side::Buy),
+        ))
     }
 
     // ------------------------------------------------------------------
@@ -828,8 +832,17 @@ impl Engine {
                 if let Some(l) = o.limit_leg() {
                     // "Limit or better" is guaranteed by the LP, not by us: the client
                     // limit net of the markup goes out as an IOC limit order.
-                    let m = self.markup(&g, &o.req.symbol).raw() * o.req.side.sign();
+                    let m = self.markup(&g, &o.req.symbol, o.req.side).raw() * o.req.side.sign();
                     let lp_limit = Price::from_raw(l.raw() - m);
+                    self.send_lp_limit(o.req.symbol.clone(), o.req.side, vec![id], Some(lp_limit));
+                } else if let (Some(req), Some(max)) =
+                    (o.req.requested_price, g.max_slippage_points)
+                {
+                    // Slippage cap: the LP may fill up to `max` points past the requested
+                    // price (client terms), as an IOC limit net of the markup.
+                    let point = self.st.symbols[&o.req.symbol].point().raw();
+                    let m = self.markup(&g, &o.req.symbol, o.req.side).raw() * o.req.side.sign();
+                    let lp_limit = Price::from_raw(req.raw() + o.req.side.sign() * point * max - m);
                     self.send_lp_limit(o.req.symbol.clone(), o.req.side, vec![id], Some(lp_limit));
                 } else if self.st.config.aggregate_a_book && o.close_position.is_none() {
                     self.st.pending_lp.push(id);
@@ -954,15 +967,21 @@ impl Engine {
         }
         *self.st.omnibus_net.entry(symbol.clone()).or_default() += side.sign() * allocated;
         for (oid, q) in allocs {
-            let acc = &self.st.accounts[&self.st.orders[&oid].req.account];
+            let o = &self.st.orders[&oid];
+            let acc = &self.st.accounts[&o.req.account];
             let g = &self.st.groups[&acc.group];
-            let m = self.markup(g, &symbol).raw() * side.sign();
-            self.fill_child(
-                oid,
-                Qty::from_raw(q),
-                Price::from_raw(price.raw() + m),
-                price,
-            );
+            let m = self.markup(g, &symbol, side).raw() * side.sign();
+            let mut client_px = Price::from_raw(price.raw() + m);
+            // Asymmetric slippage: an improvement on the requested price stays with us.
+            if !g.pass_price_improvement {
+                if let Some(req) = o.req.requested_price {
+                    let better = (req.raw() - client_px.raw()) * side.sign() > 0;
+                    if better {
+                        client_px = req;
+                    }
+                }
+            }
+            self.fill_child(oid, Qty::from_raw(q), client_px, price);
         }
         Ok(())
     }
@@ -1062,14 +1081,36 @@ impl Engine {
         let g = self.st.groups[&acc.group].clone();
         let spec = self.st.symbols[&symbol].clone();
         let mut commission = Money::zero(g.currency);
-        // commission per lot per side
-        if !spec.commission_per_lot.is_zero() {
-            let c = spec
+        // commission per side: the group's model, else the symbol's per-lot amount
+        let c = match g.commission {
+            Some(GroupCommission::PerLot { minor }) => Money::new(minor as i128, g.currency)
+                .mul_ratio(v.raw() as i128, SCALE as i128, Rounding::HalfUp)
+                .ok(),
+            Some(GroupCommission::PerMillion { minor }) => {
+                // notional in the quote currency: lots × contract size × price
+                let units = v.raw() as i128 * spec.contract_size as i128; // scaled 1e8
+                let notional = units * price.raw() as i128 / SCALE as i128; // scaled 1e8
+                Money::from_scaled(notional, spec.quote, Rounding::HalfUp)
+                    .ok()
+                    .and_then(|n| self.st.quotes.convert(n, g.currency, Rounding::HalfUp).ok())
+                    .and_then(|n| {
+                        n.mul_ratio(
+                            minor as i128,
+                            1_000_000 * 10i128.pow(n.currency.minor_exponent()),
+                            Rounding::HalfUp,
+                        )
+                        .ok()
+                    })
+            }
+            None if !spec.commission_per_lot.is_zero() => spec
                 .commission_per_lot
                 .mul_ratio(v.raw() as i128, SCALE as i128, Rounding::HalfUp)
                 .ok()
-                .and_then(|c| self.st.quotes.convert(c, g.currency, Rounding::HalfUp).ok());
-            if let Some(c) = c {
+                .and_then(|c| self.st.quotes.convert(c, g.currency, Rounding::HalfUp).ok()),
+            None => None,
+        };
+        if let Some(c) = c.filter(|c| c.minor != 0) {
+            {
                 if self
                     .post(
                         TxnKind::Commission,

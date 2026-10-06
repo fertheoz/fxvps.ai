@@ -11,7 +11,8 @@ export const KycStatus = z.enum(["none", "pending", "approved", "rejected"]);
 export const AccountStatus = z.enum(["active", "disabled", "readonly"]);
 export const Book = z.enum(["A", "B"]);
 export const MarginMode = z.enum(["retail_hedged", "retail_netting", "exchange"]);
-export const CommissionType = z.enum(["per_lot", "per_million", "percent"]);
+/** symbol: the symbol's own per-lot commission; per_lot / per_million: minor units of the group currency. */
+export const CommissionType = z.enum(["symbol", "per_lot", "per_million"]);
 /** What happens to the part of an A-book order the LP did not fill. */
 export const PartialFillPolicy = z.enum(["cancel", "retry", "all_or_none"]);
 /** ESMA leverage cap applied on top of the group leverage (retail: FX majors 1:30, minors/gold 1:20…). */
@@ -36,6 +37,15 @@ export const Group = z
     esma: z.preprocess((v) => (v === null || v === undefined ? "none" : v), EsmaCap),
     partialFill: z.preprocess((v) => v ?? "cancel", PartialFillPolicy),
     maxAttempts: z.preprocess((v) => v ?? 3, z.number().int().min(1).max(10)),
+    /** Per-side markups; null = `markupPoints` on that side. */
+    markupBidPoints: z.preprocess((v) => (v === undefined ? null : v), z.number().int().min(0).max(1000).nullable()),
+    markupAskPoints: z.preprocess((v) => (v === undefined ? null : v), z.number().int().min(0).max(1000).nullable()),
+    /** symbol -> points, overrides the group markups on both sides. */
+    symbolMarkups: z.preprocess((v) => v ?? {}, z.record(z.string(), z.number().int().min(0).max(1000))),
+    /** A-book market orders: max points past the requested price (null = no cap). */
+    maxSlippagePoints: z.preprocess((v) => (v === undefined ? null : v), z.number().int().min(0).max(1000).nullable()),
+    /** false: a better fill is given at the requested price, the difference is ours. */
+    passPriceImprovement: z.preprocess((v) => v ?? true, z.boolean()),
   })
   .refine((g) => g.stopOutPct < g.marginCallPct, {
     message: "Stop-out level must be below margin call level",

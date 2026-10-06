@@ -47,6 +47,16 @@ export default function GroupsPage() {
   );
 }
 
+/** "EURUSD=7, XAUUSD=20" -> { EURUSD: 7, XAUUSD: 20 } (bad entries dropped). */
+function parseSymbolMarkups(text: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const part of text.split(/[,\s]+/)) {
+    const m = /^([A-Za-z0-9._-]+)=(\d{1,4})$/.exec(part.trim());
+    if (m && m[1] && m[2]) out[m[1].toUpperCase()] = Number(m[2]);
+  }
+  return out;
+}
+
 function GroupDialog({ group, onClose }: { group: Group; onClose: () => void }) {
   const t = useT();
   const actor = useActor();
@@ -72,6 +82,15 @@ function GroupDialog({ group, onClose }: { group: Group; onClose: () => void }) 
         <SelectField label={`${t("groups.commission")} type`} value={draft.commissionType} options={CommissionType.options} onChange={(v) => set("commissionType", v)} />
         <NumField label={`${t("groups.commission")} (minor units / bp)`} value={draft.commissionValue} onChange={(v) => set("commissionValue", v)} error={errors.commissionValue} step={1} />
         <NumField label={t("groups.markup")} value={draft.markupPoints} onChange={(v) => set("markupPoints", v)} error={errors.markupPoints} step={1} />
+        <NumField label={t("groups.markupBid")} value={draft.markupBidPoints ?? draft.markupPoints} onChange={(v) => set("markupBidPoints", v === draft.markupPoints ? null : v)} step={1} />
+        <NumField label={t("groups.markupAsk")} value={draft.markupAskPoints ?? draft.markupPoints} onChange={(v) => set("markupAskPoints", v === draft.markupPoints ? null : v)} step={1} />
+        <TextField
+          label={t("groups.symbolMarkups")}
+          value={Object.entries(draft.symbolMarkups).map(([s, p]) => `${s}=${p}`).join(", ")}
+          onChange={(v) => set("symbolMarkups", parseSymbolMarkups(v))}
+        />
+        <NumField label={t("groups.maxSlippage")} value={draft.maxSlippagePoints ?? 0} onChange={(v) => set("maxSlippagePoints", v > 0 ? v : null)} step={1} />
+        <SelectField label={t("groups.priceImprovement")} value={draft.passPriceImprovement ? "client" : "broker"} options={["client", "broker"] as const} onChange={(v) => set("passPriceImprovement", v === "client")} />
         <NumField label={t("groups.swapMult")} value={draft.swapMultiplier} onChange={(v) => set("swapMultiplier", v)} error={errors.swapMultiplier} step={0.1} />
       </div>
       <FieldError msg={errors._} />

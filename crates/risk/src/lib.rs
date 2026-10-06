@@ -55,6 +55,15 @@ pub enum MarginMode {
     Netting,
 }
 
+/// Commission charged per fill (per side), overriding the symbol's per-lot commission.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum GroupCommission {
+    /// Minor units of the group currency per lot.
+    PerLot { minor: i64 },
+    /// Minor units of the group currency per 1,000,000 of notional (1 bp = 10,000).
+    PerMillion { minor: i64 },
+}
+
 /// What happens to the part of an A-book order the LP did not fill.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
 pub enum PartialFill {
@@ -182,6 +191,29 @@ pub struct GroupConfig {
     pub routing: Routing,
     #[serde(default)]
     pub partial_fill: PartialFill,
+    /// Markup on the bid / ask side; `None` = `markup_points` on both.
+    #[serde(default)]
+    pub markup_bid_points: Option<i64>,
+    #[serde(default)]
+    pub markup_ask_points: Option<i64>,
+    /// Per-symbol markup (both sides) that overrides the group values.
+    #[serde(default)]
+    pub symbol_markup_points: BTreeMap<String, i64>,
+    /// A-book market orders go to the LP as IOC limits at requested ± this many
+    /// points; the part the LP cannot fill inside the cap follows `partial_fill`.
+    #[serde(default)]
+    pub max_slippage_points: Option<i64>,
+    /// `false`: a fill better than the requested price is given at the requested
+    /// price and the difference stays with the broker (asymmetric slippage).
+    #[serde(default = "default_true")]
+    pub pass_price_improvement: bool,
+    /// Group commission model; `None` = the symbol's per-lot commission.
+    #[serde(default)]
+    pub commission: Option<GroupCommission>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl GroupConfig {
@@ -204,6 +236,24 @@ impl GroupConfig {
             negative_balance_protection: true,
             routing,
             partial_fill: PartialFill::default(),
+            markup_bid_points: None,
+            markup_ask_points: None,
+            symbol_markup_points: BTreeMap::new(),
+            max_slippage_points: None,
+            pass_price_improvement: true,
+            commission: None,
+        }
+    }
+
+    /// Markup in points applied on `side` of `symbol`'s quote (bid for Sell,
+    /// ask for Buy): per-symbol override, else the side value, else the group value.
+    pub fn markup_points_for(&self, symbol: &str, side: Side) -> i64 {
+        if let Some(p) = self.symbol_markup_points.get(symbol) {
+            return *p;
+        }
+        match side {
+            Side::Buy => self.markup_ask_points.unwrap_or(self.markup_points),
+            Side::Sell => self.markup_bid_points.unwrap_or(self.markup_points),
         }
     }
 
@@ -278,9 +328,13 @@ impl Quote {
     }
     /// Widens the quote by `points` on each side.
     pub fn with_markup(&self, markup: Price) -> Quote {
+        self.with_markups(markup, markup)
+    }
+    /// Widens the quote by `bid` points below and `ask` points above.
+    pub fn with_markups(&self, bid: Price, ask: Price) -> Quote {
         Quote {
-            bid: Price::from_raw(self.bid.raw() - markup.raw()),
-            ask: Price::from_raw(self.ask.raw() + markup.raw()),
+            bid: Price::from_raw(self.bid.raw() - bid.raw()),
+            ask: Price::from_raw(self.ask.raw() + ask.raw()),
         }
     }
 }

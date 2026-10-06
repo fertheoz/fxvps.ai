@@ -173,8 +173,8 @@ pub fn to_command(ev: &GatewayEvent, symbols: &SymbolMap, prefix: &str) -> Optio
 /// through `Command::Quote` and priced by the engine).
 #[derive(Default)]
 struct Markups {
-    /// group -> markup points
-    groups: Vec<(String, i64)>,
+    /// group configs (markups are per side and per symbol)
+    groups: Vec<risk::GroupConfig>,
     /// symbol -> point (raw)
     points: BTreeMap<String, i64>,
     at: Option<Instant>,
@@ -192,10 +192,7 @@ impl Markups {
         }
         if let Ok((groups, points)) = engine
             .read(|e| {
-                let g: Vec<(String, i64)> = e
-                    .groups()
-                    .map(|g| (g.name.clone(), g.markup_points))
-                    .collect();
+                let g: Vec<risk::GroupConfig> = e.groups().cloned().collect();
                 let p: BTreeMap<String, i64> = e
                     .symbols()
                     .map(|s| (s.symbol.clone(), s.point().raw()))
@@ -225,19 +222,20 @@ impl Markups {
         let point = self.points.get(symbol).copied().unwrap_or(0);
         self.groups
             .iter()
-            .map(|(group, pts)| {
-                let m = point * pts;
-                let level = |l: &domain::Level, sign: i64| {
+            .map(|g| {
+                let m_bid = point * g.markup_points_for(symbol, risk::Side::Sell);
+                let m_ask = point * g.markup_points_for(symbol, risk::Side::Buy);
+                let level = |l: &domain::Level, m: i64| {
                     (
-                        Fixed::from_raw(l.price.raw() + sign * m),
+                        Fixed::from_raw(l.price.raw() + m),
                         Fixed::from_raw(units_to_lots(l.qty, contracts_per_lot).raw()),
                     )
                 };
                 GroupDepth {
-                    group: group.clone(),
+                    group: g.name.clone(),
                     symbol: symbol.to_string(),
-                    bids: q.bids.iter().map(|l| level(l, -1)).collect(),
-                    asks: q.asks.iter().map(|l| level(l, 1)).collect(),
+                    bids: q.bids.iter().map(|l| level(l, -m_bid)).collect(),
+                    asks: q.asks.iter().map(|l| level(l, m_ask)).collect(),
                     ts_ns,
                 }
             })

@@ -6,7 +6,8 @@ use ledger::TxnKind;
 use money::{Price, Qty};
 use oms::{Engine, OrderStatus, OrderType, Position};
 use risk::{
-    AssetClass, EsmaPreset, GroupConfig, MarginMode, PartialFill, Routing, Side, SymbolSpec,
+    AssetClass, EsmaPreset, GroupCommission, GroupConfig, MarginMode, PartialFill, Routing, Side,
+    SymbolSpec,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -269,9 +270,14 @@ pub fn group(g: &GroupConfig, all_symbols: &[String]) -> Value {
         "marginMode": match g.margin_mode { MarginMode::Hedging => "retail_hedged", MarginMode::Netting => "retail_netting" },
         "marginCallPct": g.margin_call_pct,
         "stopOutPct": g.stop_out_pct,
-        "commissionType": "per_lot",
-        "commissionValue": 0,
+        "commissionType": match g.commission { Some(GroupCommission::PerLot { .. }) => "per_lot", Some(GroupCommission::PerMillion { .. }) => "per_million", None => "symbol" },
+        "commissionValue": match g.commission { Some(GroupCommission::PerLot { minor }) | Some(GroupCommission::PerMillion { minor }) => minor, None => 0 },
         "markupPoints": g.markup_points,
+        "markupBidPoints": g.markup_bid_points,
+        "markupAskPoints": g.markup_ask_points,
+        "symbolMarkups": g.symbol_markup_points,
+        "maxSlippagePoints": g.max_slippage_points,
+        "passPriceImprovement": g.pass_price_improvement,
         "swapMultiplier": 1,
         "book": book(g.routing),
         "symbols": symbols,

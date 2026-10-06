@@ -564,6 +564,55 @@ fn abook_partial_fills_markup_and_omnibus() {
 }
 
 #[test]
+fn revenue_levers_markup_sides_symbol_override_improvement_and_cap() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 5;
+    g.markup_ask_points = Some(8);
+    g.symbol_markup_points.insert("GBPUSD".into(), 20);
+    g.pass_price_improvement = false;
+    g.max_slippage_points = Some(10);
+    h.cmd(Command::SetGroup(g.clone()));
+    h.account(1, "a", "10000");
+    // EURUSD 1.10000/1.10010 -> client bid 1.09995 (5), ask 1.10018 (8)
+    let q = h.e.group_quote("a", "EURUSD").unwrap();
+    assert_eq!((q.bid, q.ask), (px("1.09995"), px("1.10018")));
+    // buy at the requested client ask with a 10-point cap: IOC limit at 1.10028 - 8 = 1.10020
+    let mut o = h.pending(1, "m", Side::Buy, OrderType::Market, None, None);
+    o.requested_price = Some(px("1.10018"));
+    let (_, id) = h.order(o);
+    let sent = h.router.take();
+    assert_eq!(sent[0].limit, Some(px("1.10020")));
+    // LP fills better (1.10000): client would get 1.10008, but improvement is kept -> 1.10018
+    h.cmd(Command::LpFill {
+        lp_order_id: sent[0].lp_order_id,
+        exec_id: "x".into(),
+        volume: qty("1"),
+        price: px("1.10000"),
+    });
+    assert_eq!(h.e.order(id).unwrap().avg_price, px("1.10018"));
+}
+
+#[test]
+fn group_commission_per_lot_and_per_million() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::BBook);
+    g.esma = None;
+    g.leverage = 100;
+    g.commission = Some(risk::GroupCommission::PerLot { minor: 700 });
+    h.cmd(Command::SetGroup(g.clone()));
+    h.account(1, "a", "10000");
+    h.market(1, "c1", Side::Buy, "0.5");
+    assert_eq!(h.bal(1), usd("9996.50")); // 0.5 lot × $7
+    g.commission = Some(risk::GroupCommission::PerMillion { minor: 3000 }); // $30 per million
+    h.cmd(Command::SetGroup(g));
+    h.market(1, "c2", Side::Buy, "1"); // 100,000 × ~1.1001 = $110,010 notional -> $3.30
+    assert_eq!(h.bal(1), usd("9993.20"));
+}
+
+#[test]
 fn partial_fill_policies() {
     use risk::PartialFill;
     // Retry: the remainder goes to the LP again, up to max_attempts LP orders.
