@@ -145,7 +145,7 @@ provası + durum dosyası → uyarı motoru), `geri-yukle.sh`, `dagit.sh` (repla
 kapısı + geri dönüş etiketi + sağlık kontrolü + otomatik geri alma),
 başlangıçta journal sıkıştırma. Ayrıntı: `docs/09-felaket-kurtarma.md`.
 
-### Etap 11 — Uyum, raporlama ve denetim izi
+### Etap 11 — Uyum, raporlama ve denetim izi ✅ (e-posta teslimi Etap 12 mailer'a bağlı)
 Lisans alındığında ilk sorulanlar: (a) **müşteri ekstresi PDF/e-posta**
 (günlük/aylık, imzalı), (b) **MiFIR/EMIR benzeri işlem raporu dışa aktarımı**
 (CSV/XML şablonu, LEI alanları), (c) **best execution raporu** (yürütme
@@ -153,6 +153,17 @@ kalitesi verimiz zaten var → RTS 27/28 formatına döküm), (d) **değiştiril
 denetim**: audit zinciri hash-zincirli + günlük kök hash'i dış kayda (örn.
 Git tag / zaman damgası servisi), (e) **negatif bakiye koruması ve stop-out
 olaylarının müşteriye bildirimi** (e-posta/terminal).
+
+Yapılan: **işlem raporu** `GET /v1/reports/transactions?from&to` (RTS 22 alan
+alt kümesi: LEI'ler, kapasite DEAL/MTCH, mekân XOFF, LP, birim miktar, nominal)
++ CSV; **best execution** `GET /v1/reports/best-execution` (mekân × varlık
+sınıfı: hacim payı, dolum, kayma, fiyat iyileşmesi, gecikme) + CSV; **müşteri
+LEI** (profil, kartta düzenlenir) ve **broker LEI** (Ayarlar); **hash-zincirli
+denetim** (`AuditRec.prev_hash/hash`, `GET /v1/audit/chain`, denetim sayfasında
+rozet) + gece yedeğinin konteyner dışında sakladığı **append-only çapa**
+(admin.jsonl uzunluk+hash; önek değişirse yedek durur → uyarı); **yazdırılabilir
+ekstre** `/clients/statement/?login=&from=&to=` (tarayıcı PDF). Kalan: e-posta
+ile ekstre/bildirim (mailer ile birlikte Etap 12).
 
 ### Etap 12 — Müşteri yaşam döngüsü ve ödeme
 Konsolda hesap var ama müşteri hunisi yok: (a) **KYC akışı** (belge yükleme,

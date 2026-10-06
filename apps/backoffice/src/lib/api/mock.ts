@@ -306,6 +306,32 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       c.leverage = g.leverage;
       return delay(c);
     },
+    async setProfile(id, p, actor) {
+      guard(actor, "clients.edit");
+      const c = s.clients.find((x) => x.id === id);
+      if (!c) throw new Error("Client not found");
+      audit(actor, "profile.update", `#${c.login}`, `LEI ${c.lei ?? ""} → ${p.lei ?? ""}`);
+      c.lei = p.lei;
+      return delay(c);
+    },
+    async transactions() {
+      const rows = s.trades.slice(0, 200).map((t, i) => ({
+        txId: `D${i + 1}`, tradingDateTime: t.closedAt, executingEntity: "", buyerId: t.side === "buy" ? `CLIENT-${t.login}` : (t.book === "A" ? "LMAX" : ""), sellerId: t.side === "buy" ? (t.book === "A" ? "LMAX" : "") : `CLIENT-${t.login}`,
+        clientLogin: t.login, clientName: s.clients.find((c) => c.login === t.login)?.name ?? null, instrument: t.symbol, assetClass: t.symbol.startsWith("XAU") ? "METAL" : "FX", isin: "",
+        side: t.side, entry: "close" as const, price: t.closePrice, priceCurrency: "USD", quantityLots: t.lots, quantityUnits: t.lots * 100000, notional: t.lots * 100000 * t.closePrice,
+        tradingCapacity: (t.book === "A" ? "MTCH" : "DEAL") as "MTCH" | "DEAL", venue: "XOFF", executionLp: t.book === "A" ? "LMAX" : null, book: t.book, commission: t.commission, swap: t.swap, realisedPnl: t.pnl, reason: "Client",
+      }));
+      return delay({ from: new Date(Date.now() - 30 * 864e5).toISOString(), to: null, rows });
+    },
+    async bestExecution() {
+      const a = s.trades.filter((t) => t.book === "A").length, b = s.trades.length - a;
+      const row = (venue: string, assetClass: string, orders: number, slip: number, lat: number) => ({ venue, assetClass, orders, filled: orders - 1, rejected: 1, fillRate: orders ? (orders - 1) / orders : 0, lots: orders * 0.8, volumeSharePct: 0, avgClientSlipPts: slip, p95ClientSlipPts: slip * 3, priceImprovementPct: 22, p50LatencyMs: lat, p95LatencyMs: lat * 2.4 });
+      const rows = [row("LMAX", "FX", a, 0.3, 38), row("B-book", "FX", b, 0, 0), row("LMAX", "METAL", Math.ceil(a / 4), 1.1, 41)];
+      const tot = rows.reduce((x, r) => x + r.lots, 0);
+      rows.forEach((r) => { r.volumeSharePct = tot ? (r.lots / tot) * 100 : 0; });
+      return delay({ from: new Date(Date.now() - 30 * 864e5).toISOString(), to: null, rows });
+    },
+    async auditChain() { return delay({ count: s.audit.length, chained: s.audit.length, verified: true, headHash: "9f2a…demo", brokenAt: null, lastAt: s.audit[0]?.at ?? null }); },
     async setKyc(id, kyc, actor) {
       guard(actor, "clients.edit");
       const c = s.clients.find((x) => x.id === id);

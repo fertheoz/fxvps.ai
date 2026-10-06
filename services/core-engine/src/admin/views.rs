@@ -83,6 +83,7 @@ pub fn client(e: &Engine, id: u64, admin: &AdminState) -> Option<Value> {
         "parentId": null,
         "name": admin.profiles.get(&id).map_or_else(|| format!("Account {id}"), |p| p.name.clone()),
         "email": admin.profiles.get(&id).map_or_else(|| format!("account{id}@example.com"), |p| p.email.clone()),
+        "lei": admin.profiles.get(&id).and_then(|p| p.lei.clone()),
         "country": "ZZ",
         "group": a.group,
         "status": "active",
@@ -289,6 +290,184 @@ pub fn client_flow(e: &Engine, admin: &AdminState) -> Value {
             .then_with(|| b["trades"].as_u64().cmp(&a["trades"].as_u64()))
     });
     Value::Array(rows)
+}
+
+/// LP that executed `order_id` (the omnibus order whose children include it).
+fn venue_of(e: &Engine, order_id: u64) -> Option<String> {
+    e.lp_orders()
+        .find(|l| l.children.contains(&order_id))
+        .and_then(|l| l.lp.clone())
+}
+
+fn asset_class_name(a: AssetClass) -> &'static str {
+    match a {
+        AssetClass::MajorFx | AssetClass::MinorFx => "FX",
+        AssetClass::Gold => "METAL",
+        AssetClass::MajorIndex | AssetClass::MinorIndex => "INDEX",
+        AssetClass::Commodity => "COMMODITY",
+        AssetClass::Equity => "EQUITY",
+        AssetClass::Crypto => "CRYPTO",
+    }
+}
+
+/// Transaction report (MiFIR RTS 22 field subset) — one row per deal in
+/// `[from, to)`: timestamps, identifiers (client LEI / login, our LEI),
+/// instrument, price, quantity in units, notional, capacity (DEAL = we are
+/// principal on the B-book, MTCH = matched principal against the LP), venue.
+pub fn transactions(e: &Engine, admin: &AdminState, from: u64, to: u64) -> Value {
+    let broker_lei = admin.settings.broker_lei.clone();
+    let rows: Vec<Value> = e
+        .deals()
+        .iter()
+        .filter(|d| d.ts >= from && d.ts < to)
+        .map(|d| {
+            let spec = e.symbol_spec(&d.symbol);
+            let a_book = d.lp_price.is_some()
+                || e.account(d.account)
+                    .and_then(|a| e.group(&a.group))
+                    .is_some_and(|g| g.routing == Routing::ABook);
+            let profile = admin.profiles.get(&d.account);
+            let client_id = profile
+                .and_then(|p| p.lei.clone())
+                .unwrap_or_else(|| format!("CLIENT-{}", d.account));
+            let units = qty_f(d.volume) * spec.map_or(100_000, |s| s.contract_size) as f64;
+            let venue_lp = if a_book {
+                venue_of(e, d.order_id)
+            } else {
+                None
+            };
+            let (buyer, seller) = match d.side {
+                Side::Buy => (
+                    client_id.clone(),
+                    if a_book {
+                        venue_lp.clone().unwrap_or_else(|| "LP".into())
+                    } else {
+                        broker_lei.clone()
+                    },
+                ),
+                Side::Sell => (
+                    if a_book {
+                        venue_lp.clone().unwrap_or_else(|| "LP".into())
+                    } else {
+                        broker_lei.clone()
+                    },
+                    client_id.clone(),
+                ),
+            };
+            json!({
+                "txId": format!("D{}", d.id),
+                "tradingDateTime": iso(d.ts),
+                "executingEntity": broker_lei,
+                "buyerId": buyer,
+                "sellerId": seller,
+                "clientLogin": d.account,
+                "clientName": profile.map(|p| p.name.clone()),
+                "instrument": d.symbol,
+                "assetClass": spec.map(|s| asset_class_name(s.asset_class)),
+                "isin": "",
+                "side": side_str(d.side),
+                "entry": if d.entry == oms::DealEntry::In { "open" } else { "close" },
+                "price": price_f(d.price),
+                "priceCurrency": spec.map(|s| s.quote.to_string()),
+                "quantityLots": qty_f(d.volume),
+                "quantityUnits": units,
+                "notional": units * price_f(d.price),
+                "tradingCapacity": if a_book { "MTCH" } else { "DEAL" },
+                "venue": "XOFF",
+                "executionLp": venue_lp,
+                "book": if a_book { "A" } else { "B" },
+                "commission": minor(d.commission.minor),
+                "swap": minor(d.swap),
+                "realisedPnl": minor(d.pnl.minor),
+                "reason": format!("{:?}", d.reason),
+            })
+        })
+        .collect();
+    json!({ "from": iso(from), "to": if to == u64::MAX { Value::Null } else { json!(iso(to)) }, "rows": rows })
+}
+
+/// Best-execution summary (RTS 27/28 spirit) per venue × asset class over
+/// orders created in `[from, to)`: share of volume, fill rate, client slippage,
+/// price improvement, LP latency, rejects.
+pub fn best_execution(e: &Engine, from: u64, to: u64) -> Value {
+    #[derive(Default)]
+    struct Acc {
+        orders: u32,
+        filled: u32,
+        rejected: u32,
+        lots: f64,
+        slips: Vec<f64>,
+        improved: u32,
+        priced: u32,
+        lat: Vec<f64>,
+    }
+    let points: BTreeMap<&str, f64> = e
+        .symbols()
+        .map(|s| (s.symbol.as_str(), price_f(s.point())))
+        .collect();
+    let mut by: BTreeMap<(String, &'static str), Acc> = BTreeMap::new();
+    let mut total_lots = 0f64;
+    for o in e
+        .orders()
+        .filter(|o| o.created_ts >= from && o.created_ts < to)
+    {
+        let class = e
+            .symbol_spec(&o.req.symbol)
+            .map_or("FX", |s| asset_class_name(s.asset_class));
+        let venue = match o.routing {
+            Routing::BBook => "B-book".to_string(),
+            Routing::ABook => venue_of(e, o.id).unwrap_or_else(|| "LP".into()),
+        };
+        let a = by.entry((venue, class)).or_default();
+        a.orders += 1;
+        if o.status == OrderStatus::Rejected {
+            a.rejected += 1;
+        }
+        if o.filled.raw() > 0 {
+            a.filled += 1;
+            a.lots += qty_f(o.filled);
+            total_lots += qty_f(o.filled);
+            if let (Some(req), Some(&point)) =
+                (o.req.requested_price, points.get(o.req.symbol.as_str()))
+            {
+                if point > 0.0 {
+                    let sign = if o.req.side == Side::Buy { 1.0 } else { -1.0 };
+                    let slip = sign * (price_f(o.avg_price) - price_f(req)) / point;
+                    a.slips.push(slip);
+                    a.priced += 1;
+                    if slip < 0.0 {
+                        a.improved += 1;
+                    }
+                }
+            }
+            if let Some(l) = e.lp_orders().find(|l| l.children.contains(&o.id)) {
+                if let Some(t) = l.fills.iter().map(|f| f.ts).min() {
+                    a.lat.push(t.saturating_sub(l.created_ts) as f64 / 1e6);
+                }
+            }
+        }
+    }
+    let rows: Vec<Value> = by
+        .into_iter()
+        .map(|((venue, class), mut a)| {
+            json!({
+                "venue": venue,
+                "assetClass": class,
+                "orders": a.orders,
+                "filled": a.filled,
+                "rejected": a.rejected,
+                "fillRate": if a.orders > 0 { f64::from(a.filled) / f64::from(a.orders) } else { 0.0 },
+                "lots": a.lots,
+                "volumeSharePct": if total_lots > 0.0 { a.lots / total_lots * 100.0 } else { 0.0 },
+                "avgClientSlipPts": mean(&a.slips),
+                "p95ClientSlipPts": p95(&mut a.slips),
+                "priceImprovementPct": if a.priced > 0 { f64::from(a.improved) / f64::from(a.priced) * 100.0 } else { 0.0 },
+                "p50LatencyMs": { let mut v = a.lat.clone(); v.sort_by(|x, y| x.total_cmp(y)); if v.is_empty() { 0.0 } else { v[(v.len() - 1) / 2] } },
+                "p95LatencyMs": p95(&mut a.lat),
+            })
+        })
+        .collect();
+    json!({ "from": iso(from), "to": if to == u64::MAX { Value::Null } else { json!(iso(to)) }, "rows": rows })
 }
 
 pub fn weekday_name(d: u8) -> &'static str {

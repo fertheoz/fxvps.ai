@@ -53,6 +53,8 @@ export default function ClientCardPage() {
   const subs = client ? (clients.data ?? []).filter((c) => c.parentId === client.id) : [];
   const kycMut = useApiMutation((k: Client["kyc"]) => api().setKyc(client!.id, k, actor));
   const groupMut = useApiMutation((g: string) => api().setGroup(client!.id, g, actor));
+  const leiMut = useApiMutation((lei: string) => api().setProfile(client!.id, { lei: lei.trim() || null }, actor));
+  const [lei, setLei] = React.useState<string | null>(null);
 
   const my = <T extends { login: number }>(rows: T[] | undefined) => (rows ?? []).filter((r) => r.login === login);
   const ps = my(positions.data);
@@ -235,6 +237,7 @@ export default function ClientCardPage() {
       {tab === "statement" && (
         <Card>
           <CardContent className="grid grid-cols-2 gap-x-3 gap-y-1.5 pt-4 text-sm tabular-nums md:grid-cols-4">
+            <div className="col-span-2 md:col-span-4"><Button variant="outline" onClick={() => router.push(`/clients/statement/?login=${client.login}`)} data-testid="card-statement-print">{t("card.printStatement")}</Button></div>
             {st ? (
               ([["opening", "reports.opening"], ["deposits", "reports.deposits"], ["withdrawals", "reports.withdrawals"], ["pnl", "positions.pnl"], ["commission", "reports.commission"], ["swap", "reports.swap"], ["closing", "reports.closing"]] as const).map(([k, label]) => (
                 <React.Fragment key={k}><span className="text-muted-foreground">{t(label)}</span><span className="text-right">{money(st[k])}</span></React.Fragment>
@@ -261,6 +264,14 @@ export default function ClientCardPage() {
                 </Select>
                 <span className="text-xs text-muted-foreground">{t("clients.groupHint")}</span>
                 {groupMut.error && <span className="text-xs text-red-600 dark:text-red-400">{String((groupMut.error as Error).message ?? groupMut.error)}</span>}
+              </label>
+              <label className="grid gap-1">{t("clients.lei")}
+                <span className="flex gap-2">
+                  <input className="w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-sm uppercase text-foreground" maxLength={20} value={lei ?? client.lei ?? ""} onChange={(e) => setLei(e.target.value.toUpperCase())} disabled={!actor.can("clients.edit")} data-testid="card-lei" />
+                  {actor.can("clients.edit") && <Button size="sm" variant="outline" disabled={lei === null || leiMut.isPending} onClick={() => { leiMut.mutate(lei ?? ""); setLei(null); }}>{t("common.save")}</Button>}
+                </span>
+                <span className="text-xs text-muted-foreground">{t("clients.leiHint")}</span>
+                {leiMut.error && <span className="text-xs text-red-600 dark:text-red-400">{String((leiMut.error as Error).message ?? leiMut.error)}</span>}
               </label>
               <div className="text-xs text-muted-foreground">{t("card.accessHint")}</div>
             </CardContent>

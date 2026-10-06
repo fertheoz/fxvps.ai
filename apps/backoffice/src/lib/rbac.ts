@@ -61,6 +61,7 @@ export function can(role: Role, permission: Permission): boolean {
 export const ROUTE_PERMISSIONS: Record<string, Permission> = {
   "/": "dashboard.view",
   "/clients": "clients.view",
+  "/clients/statement": "clients.view",
   "/groups": "groups.view",
   "/rules": "groups.view",
   "/symbols": "symbols.view",

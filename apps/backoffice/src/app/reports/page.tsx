@@ -3,12 +3,12 @@ import * as React from "react";
 import { createColumnHelper } from "@tanstack/react-table";
 import { Download } from "lucide-react";
 import { DataTable } from "@/components/ui/data-table";
-import { Button, PageHeader, Pnl, Stat, Tabs } from "@/components/ui/primitives";
+import { Badge, Button, PageHeader, Pnl, Stat, Tabs } from "@/components/ui/primitives";
 import { BookBadge, SideBadge, ToxicityBadge } from "@/components/badges";
 import { useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { Trade } from "@/lib/schemas";
-import type { ClientFlowRow, ExecutionRow, ExecutionSummary, LpExecution, RevenueRow, RevenueTotals, Statement } from "@/lib/api";
+import type { BestExecutionRow, ClientFlowRow, ExecutionRow, ExecutionSummary, LpExecution, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
 import { formatMinorPlain } from "@/lib/money";
 import { downloadCsv, toCsv } from "@/lib/utils";
 
@@ -19,7 +19,9 @@ const rc = createColumnHelper<RevenueRow>();
 const xc = createColumnHelper<ExecutionRow>();
 const xs = createColumnHelper<ExecutionSummary>();
 const fc = createColumnHelper<ClientFlowRow>();
-type Tab = "trades" | "statements" | "lp" | "execution" | "revenue" | "flow";
+const txc = createColumnHelper<TransactionRow>();
+const bxc = createColumnHelper<BestExecutionRow>();
+type Tab = "trades" | "statements" | "lp" | "execution" | "revenue" | "flow" | "transactions" | "bestexec";
 
 const pts = (v: number | null | undefined, digits = 1) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(digits)}`);
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
@@ -37,6 +39,9 @@ export default function ReportsPage() {
   const revenue = useApiQuery("revenue", [], { live: 5000 });
   const execution = useApiQuery("execution", [], { live: 5000 });
   const flow = useApiQuery("clientFlow", [], { live: 10000, enabled: tab === "flow" });
+  const [range, setRange] = React.useState<{ from: string; to: string }>({ from: "", to: "" });
+  const tx = useApiQuery("transactions", [range.from || undefined, range.to || undefined], { enabled: tab === "transactions" });
+  const bx = useApiQuery("bestExecution", [range.from || undefined, range.to || undefined], { enabled: tab === "bestexec" });
 
   const execCols = [
     xc.accessor("at", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
@@ -124,6 +129,35 @@ export default function ReportsPage() {
     fc.accessor("avgSlipGainPoints", { header: t("flow.slipGain"), cell: (c) => c.getValue().toFixed(2) }),
     fc.accessor("toxicity", { header: t("flow.toxicity"), cell: (c) => <ToxicityBadge score={c.getValue()} /> }),
   ];
+  const txCols = [
+    txc.accessor("tradingDateTime", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
+    txc.accessor("txId", { header: "ID" }),
+    txc.accessor("clientLogin", { header: t("clients.login") }),
+    txc.accessor("buyerId", { header: t("tx.buyer"), cell: (c) => <span className="font-mono text-xs">{c.getValue() || "—"}</span> }),
+    txc.accessor("sellerId", { header: t("tx.seller"), cell: (c) => <span className="font-mono text-xs">{c.getValue() || "—"}</span> }),
+    txc.accessor("instrument", { header: t("positions.symbol") }),
+    txc.accessor("side", { header: t("positions.side"), cell: (c) => <SideBadge side={c.getValue()} /> }),
+    txc.accessor("price", { header: t("positions.open") }),
+    txc.accessor("quantityUnits", { header: t("tx.units"), cell: (c) => f.num(c.getValue(), 0) }),
+    txc.accessor("notional", { header: t("tx.notional"), cell: (c) => f.num(c.getValue(), 2) }),
+    txc.accessor("tradingCapacity", { header: t("tx.capacity"), cell: (c) => <Badge tone="muted">{c.getValue()}</Badge> }),
+    txc.accessor("executionLp", { header: "LP", cell: (c) => c.getValue() ?? "—" }),
+    txc.accessor("book", { header: t("groups.book"), cell: (c) => <BookBadge book={c.getValue()} /> }),
+  ];
+  const bxCols = [
+    bxc.accessor("venue", { header: t("bestexec.venue") }),
+    bxc.accessor("assetClass", { header: t("bestexec.class") }),
+    bxc.accessor("orders", { header: t("dash.orders") }),
+    bxc.accessor("fillRate", { header: t("reports.fillRate"), cell: (c) => `${(c.getValue() * 100).toFixed(1)}%` }),
+    bxc.accessor("rejected", { header: t("lp.rejects") }),
+    bxc.accessor("lots", { header: t("positions.lots"), cell: (c) => c.getValue().toFixed(2) }),
+    bxc.accessor("volumeSharePct", { header: t("bestexec.share"), cell: (c) => `${c.getValue().toFixed(1)}%` }),
+    bxc.accessor("avgClientSlipPts", { header: t("reports.avgSlip"), cell: (c) => c.getValue().toFixed(2) }),
+    bxc.accessor("p95ClientSlipPts", { header: "p95 slip", cell: (c) => c.getValue().toFixed(2) }),
+    bxc.accessor("priceImprovementPct", { header: t("bestexec.improved"), cell: (c) => `${c.getValue().toFixed(0)}%` }),
+    bxc.accessor("p50LatencyMs", { header: t("reports.p50Latency"), cell: (c) => `${f.num(c.getValue())} ms` }),
+    bxc.accessor("p95LatencyMs", { header: t("reports.p95Latency"), cell: (c) => `${f.num(c.getValue())} ms` }),
+  ];
   const tradeCols = [
     tc.accessor("closedAt", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
     tc.accessor("login", { header: t("clients.login") }),
@@ -147,7 +181,13 @@ export default function ReportsPage() {
   ];
 
   const exportCsv = () => {
-    if (tab === "lp") {
+    if (tab === "transactions") {
+      const rows = (tx.data?.rows ?? []).map((x) => [x.txId, x.tradingDateTime, x.executingEntity, x.buyerId, x.sellerId, x.clientLogin, x.instrument, x.assetClass ?? "", x.isin, x.side, x.entry, x.price, x.priceCurrency ?? "", x.quantityLots, x.quantityUnits, x.notional.toFixed(2), x.tradingCapacity, x.venue, x.executionLp ?? "", x.book, formatMinorPlain(x.commission, "USD"), formatMinorPlain(x.swap, "USD"), formatMinorPlain(x.realisedPnl, "USD"), x.reason]);
+      downloadCsv("transactions.csv", toCsv(["tx_id", "trading_date_time", "executing_entity_lei", "buyer_id", "seller_id", "client_login", "instrument", "asset_class", "isin", "side", "entry", "price", "price_currency", "quantity_lots", "quantity_units", "notional", "trading_capacity", "venue", "execution_lp", "book", "commission", "swap", "realised_pnl", "reason"], rows));
+    } else if (tab === "bestexec") {
+      const rows = (bx.data?.rows ?? []).map((x) => [x.venue, x.assetClass, x.orders, x.filled, x.rejected, (x.fillRate * 100).toFixed(2), x.lots.toFixed(2), x.volumeSharePct.toFixed(2), x.avgClientSlipPts.toFixed(3), x.p95ClientSlipPts.toFixed(3), x.priceImprovementPct.toFixed(1), x.p50LatencyMs.toFixed(1), x.p95LatencyMs.toFixed(1)]);
+      downloadCsv("best-execution.csv", toCsv(["venue", "asset_class", "orders", "filled", "rejected", "fill_rate_pct", "lots", "volume_share_pct", "avg_client_slip_pts", "p95_client_slip_pts", "price_improvement_pct", "p50_latency_ms", "p95_latency_ms"], rows));
+    } else if (tab === "lp") {
       const rows = (lp.data ?? []).map((x) => [x.id, x.createdAt, x.symbol, x.side, x.lots, x.filledLots, x.avgPrice, x.status, x.fills.map((y) => y.execId).join(" "), x.clients.map((y) => `${y.login}@${y.price}`).join(" ")]);
       downloadCsv("lp-executions.csv", toCsv(["id", "created_at", "symbol", "side", "lots", "filled", "lp_price", "status", "exec_ids", "clients"], rows));
     } else if (tab === "execution") {
@@ -171,7 +211,7 @@ export default function ReportsPage() {
         {actor.can("reports.export") && <Button variant="outline" onClick={exportCsv} data-testid="export-csv"><Download className="h-4 w-4" />{t("common.export")}</Button>}
       </PageHeader>
       <div className="mb-3">
-        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }, { value: "flow", label: t("reports.flow") }]} />
+        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }, { value: "flow", label: t("reports.flow") }, { value: "transactions", label: t("reports.transactions") }, { value: "bestexec", label: t("reports.bestExec") }]} />
       </div>
       {tab === "trades" && <DataTable data={trades.data ?? []} columns={tradeCols} getRowId={(x) => x.id} />}
       {tab === "statements" && <DataTable data={statements.data ?? []} columns={stmtCols} getRowId={(x) => String(x.login)} />}
@@ -182,6 +222,25 @@ export default function ReportsPage() {
           <h3 className="mb-1 text-sm font-medium">{t("reports.bySymbol")}</h3>
           <div className="mb-4"><DataTable data={execution.data?.bySymbol ?? []} columns={sumCols} getRowId={(x) => x.symbol} /></div>
           <DataTable data={execution.data?.rows ?? []} columns={execCols} getRowId={(x) => x.id} />
+        </div>
+      )}
+      {(tab === "transactions" || tab === "bestexec") && (
+        <div className="mb-3 flex flex-wrap items-end gap-2 text-sm">
+          <label className="grid gap-1 text-xs text-muted-foreground">{t("reports.range")}
+            <span className="flex gap-1"><input type="date" className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /><input type="date" className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} /></span>
+          </label>
+        </div>
+      )}
+      {tab === "transactions" && (
+        <div data-testid="transactions-report">
+          <p className="mb-2 text-xs text-muted-foreground">{t("reports.transactionsHint")}</p>
+          <DataTable data={tx.data?.rows ?? []} columns={txCols} getRowId={(x) => x.txId} />
+        </div>
+      )}
+      {tab === "bestexec" && (
+        <div data-testid="bestexec-report">
+          <p className="mb-2 text-xs text-muted-foreground">{t("reports.bestExecHint")}</p>
+          <DataTable data={bx.data?.rows ?? []} columns={bxCols} getRowId={(x) => `${x.venue}-${x.assetClass}`} />
         </div>
       )}
       {tab === "flow" && (
