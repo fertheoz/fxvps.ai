@@ -18,7 +18,9 @@ test("every page loads for admin", async ({ page }) => {
 test("balance deposit with confirmation lands in audit log", async ({ page }) => {
   await page.goto("/clients/");
   await page.getByTestId("clients-table").locator("tbody tr", { hasText: "700100" }).click();
-  await expect(page.getByTestId("client-drawer")).toBeVisible();
+  // The row opens the full-page client card; balance operations live in its Access tab.
+  await expect(page.getByTestId("page-client-card")).toBeVisible();
+  await page.getByRole("tab", { name: "Access" }).click();
   const form = page.getByTestId("balance-form");
   await form.locator('input[name="amount"]').fill("250.50");
   await form.locator('input[name="reason"]').fill("Smoke test wire");
