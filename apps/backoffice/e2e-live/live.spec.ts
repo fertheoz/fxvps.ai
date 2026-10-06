@@ -30,7 +30,9 @@ async function apiCall(page: Page, method: string, path: string, body?: unknown)
 async function openClient(page: Page, login: string) {
   await page.goto("/clients/");
   await page.getByTestId("clients-table").locator("tbody tr", { hasText: login }).click();
-  await expect(page.getByTestId("client-drawer")).toBeVisible();
+  // The row opens the full-page client card; balance operations live in its Access tab.
+  await expect(page.getByTestId("page-client-card")).toBeVisible();
+  await page.getByRole("tab", { name: "Access" }).click();
 }
 
 async function balanceOp(page: Page, amount: string, reason: string) {
@@ -45,10 +47,10 @@ test("deposit → balance updated → audit entry (admin, live core-engine)", as
   await devLogin(page, "admin", "Alice Admin");
   await expect(page.getByTestId("data-source")).toContainText("Live core-engine");
   await openClient(page, "1002");
-  await expect(page.getByTestId("client-drawer")).toContainText("5,000.00");
+  await expect(page.getByTestId("page-client-card")).toContainText("5,000.00");
   await balanceOp(page, "250.50", "Live e2e wire");
   await expect(page.getByRole("status").filter({ hasText: "Operation applied" })).toBeVisible();
-  await expect(page.getByTestId("client-drawer")).toContainText("5,250.50");
+  await expect(page.getByTestId("page-client-card")).toContainText("5,250.50");
   const acct = await apiCall(page, "GET", "/v1/accounts/1002");
   expect(acct.body.balance).toBe(525_050);
 
@@ -81,7 +83,7 @@ test("4-eyes: a large deposit waits for a different approver", async ({ page }) 
   await openClient(page, "1003");
   await balanceOp(page, "20000", "Large wire needs approval");
   await expect(page.getByRole("status").filter({ hasText: "Sent for second approval" })).toBeVisible();
-  await expect(page.getByTestId("client-drawer")).toContainText("12,000.00");
+  await expect(page.getByTestId("page-client-card")).toContainText("12,000.00");
 
   await page.keyboard.press("Escape");
   await page.getByTestId("logout").click();
@@ -93,5 +95,5 @@ test("4-eyes: a large deposit waits for a different approver", async ({ page }) 
   await expect(page.getByRole("status").filter({ hasText: "Approved and applied" })).toBeVisible();
   await expect(page.getByTestId("approvals-empty")).toBeVisible();
   await openClient(page, "1003");
-  await expect(page.getByTestId("client-drawer")).toContainText("32,000.00");
+  await expect(page.getByTestId("page-client-card")).toContainText("32,000.00");
 });
