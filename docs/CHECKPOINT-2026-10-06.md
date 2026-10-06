@@ -70,3 +70,13 @@ Açık işlere ekler:
 cd D:\fxvps.ai && git pull
 claude        # ilk mesaj: "docs/CHECKPOINT-2026-10-06.md'yi oku, açık işlerden devam et"
 ```
+
+## 6 Ekim öğleden sonra (#78–#104, hepsi CT 970'de)
+
+**Terminal:** masaüstü PWA yükleme (#78), Fibonacci (#79), iPhone Chrome→Safari Ana Ekran akışı (#80/#81), LP derinliği uçtan uca + lot cinsinden miktar (#82/#86/#89), pozisyon çizgisini sürükleyerek SL/TP (#85), VWAP merdiveni (#87), tek satır araç çubuğu (#88), oturum jetonu yerinde yenileme — kopma yok (#92/#95), journal'da emir/kapatma/SL-TP satırları (#96), chart −/× + alt panel büyüt/daralt (#94), yan panel 📌/otomatik gizleme (#97), 6 chart + sürükle-bırak (#98), Market Watch sağ tık + spesifikasyon (#99) + seçilebilir sütunlar (#101), chart sağ tık menüsü (#102).
+
+**Konsol/motor:** yürütme kalitesi raporu + tablo filtreleri/sütun seçici (#83), Etap 2 LP kayması/deneme/p50-p95/ad (#90), terminal margin'i motordan + ESMA alanı (#84; demo-retail ESMA=none), kısmi dolum politikası cancel/retry/all-or-none (#91), kazanç kapıları: yan/sembol markup, kayma tavanı, fiyat iyileşmesi, komisyon modeli (#93), dashboard `/v1/dashboard/series` ile yeniden (#100), müşteri 360° kartı `/clients/card/?login=` (#103), mobil sekmeler (#104).
+
+**Dış:** Cloudflare Access'e One-time PIN + saygin.balikel@gmail.com eklendi. LMAX demo MD akışı top-of-book; tam derinlik için LMAX'e talep gerekiyor (log: "lp book levels").
+
+**Sırada (docs/08):** Etap 5 kural motoru/hibrit, Etap 6 çoklu LP + agregasyon, Etap 7 B-book ileri (kalanı B-book'a al dahil), Etap 8 swap, Etap 9 uyarılar.
