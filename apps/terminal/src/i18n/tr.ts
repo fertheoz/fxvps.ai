@@ -76,6 +76,7 @@ export const tr: Record<MessageKey, string> = {
   'top.lang': 'Dil',
   'top.palette': 'Komutlar',
   'top.shortcuts': 'Klavye kısayolları',
+  'top.install': 'Uygulamayı yükle',
   'conn.connecting': 'Bağlanıyor',
   'conn.connected': 'Bağlı',
   'conn.reconnecting': 'Yeniden bağlanıyor',

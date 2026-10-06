@@ -74,6 +74,7 @@ export const en = {
   'top.lang': 'Language',
   'top.palette': 'Commands',
   'top.shortcuts': 'Keyboard shortcuts',
+  'top.install': 'Install app',
   'conn.connecting': 'Connecting',
   'conn.connected': 'Connected',
   'conn.reconnecting': 'Reconnecting',
