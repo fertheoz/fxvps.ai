@@ -20,6 +20,8 @@ import { translate, type Lang } from '../i18n';
 
 export type Theme = 'dark' | 'light';
 export type ChartLayout = 1 | 2 | 4;
+/** Drawing tool armed on the chart. */
+export type ChartTool = 'hline' | 'alert' | 'trend' | 'rect' | null;
 export type ToolboxTab = 'positions' | 'orders' | 'history' | 'journal';
 
 export interface ChartSlot {
@@ -68,7 +70,7 @@ export interface TerminalState {
   /** Chart lines and price alerts per account (stored on the server). */
   objects: Record<string, ChartObjects>;
   /** Tool armed on the chart: the next placed line becomes a line or an alert. */
-  chartTool: 'hline' | 'alert' | null;
+  chartTool: ChartTool;
   journal: JournalEntry[];
   // UI (persisted)
   theme: Theme;
@@ -96,7 +98,7 @@ export interface TerminalState {
   setOrderHistory(accountId: string, orders: OrderHistoryEntry[]): void;
   /** Replaces an account's objects (from the server or after an edit) and schedules the save. */
   setObjects(accountId: string, objects: ChartObjects, persist?: boolean): void;
-  setChartTool(tool: 'hline' | 'alert' | null): void;
+  setChartTool(tool: ChartTool): void;
   setActiveAccount(id: string): void;
   setTheme(t: Theme): void;
   toggleTheme(): void;

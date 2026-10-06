@@ -392,8 +392,8 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
             <h2 className="px-5 pt-2 pb-3 text-[17px] font-semibold">
               {t('obj.tools')} · {slot.symbol}
             </h2>
-            <div className="flex gap-2 px-5 pb-4">
-              {(['hline', 'alert'] as const).map((k) => (
+            <div className="grid grid-cols-2 gap-2 px-5 pb-4">
+              {(['hline', 'alert', 'trend', 'rect'] as const).map((k) => (
                 <button
                   key={k}
                   className="flex-1 h-12 rounded-2xl bg-panel-2 border border-line/60 font-medium"
@@ -403,7 +403,7 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
                   }}
                   data-testid={`m-tool-${k}`}
                 >
-                  {k === 'hline' ? '—' : '🔔'} {t(k === 'hline' ? 'obj.hline' : 'obj.alert')}
+                  {k === 'hline' ? '—' : k === 'alert' ? '🔔' : k === 'trend' ? '╱' : '▭'} {t(k === 'hline' ? 'obj.hline' : k === 'alert' ? 'obj.alert' : k === 'trend' ? 'obj.trend' : 'obj.rect')}
                 </button>
               ))}
             </div>

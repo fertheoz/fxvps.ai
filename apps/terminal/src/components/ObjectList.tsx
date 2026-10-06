@@ -11,10 +11,18 @@ export function ObjectList({ symbol }: { symbol: string }) {
   const digits = useTerminal((s) => s.symbols[symbol]?.digits ?? 5);
   const lines = (objects?.lines ?? []).filter((l) => l.symbol === symbol);
   const alerts = (objects?.alerts ?? []).filter((a) => a.symbol === symbol);
+  const shapes = (objects?.shapes ?? []).filter((x) => x.symbol === symbol);
   if (!accountId || !objects) return null;
-  const remove = (kind: 'line' | 'alert', id: string) =>
-    setObjects(accountId, kind === 'line' ? { ...objects, lines: objects.lines.filter((l) => l.id !== id) } : { ...objects, alerts: objects.alerts.filter((a) => a.id !== id) });
-  if (!lines.length && !alerts.length) return <div className="px-3 py-2 text-muted">{t('obj.none')}</div>;
+  const remove = (kind: 'line' | 'alert' | 'shape', id: string) =>
+    setObjects(
+      accountId,
+      kind === 'line'
+        ? { ...objects, lines: objects.lines.filter((l) => l.id !== id) }
+        : kind === 'alert'
+          ? { ...objects, alerts: objects.alerts.filter((a) => a.id !== id) }
+          : { ...objects, shapes: (objects.shapes ?? []).filter((x) => x.id !== id) },
+    );
+  if (!lines.length && !alerts.length && !shapes.length) return <div className="px-3 py-2 text-muted">{t('obj.none')}</div>;
   const row = (key: string, text: string, muted: boolean, onRemove: () => void) => (
     <div key={key} className={`flex items-center justify-between gap-2 px-3 py-2 border-b border-line/50 ${muted ? 'text-muted' : ''}`}>
       <span className="num">{text}</span>
@@ -25,6 +33,7 @@ export function ObjectList({ symbol }: { symbol: string }) {
   );
   return (
     <div data-testid="object-list">
+      {shapes.map((x) => row(x.id, `${x.kind === 'trend' ? '╱' : '▭'} ${t(x.kind === 'trend' ? 'obj.trend' : 'obj.rect')} ${formatPrice(x.a.price, digits)} → ${formatPrice(x.b.price, digits)}`, false, () => remove('shape', x.id)))}
       {lines.map((l) => row(l.id, `— ${t('obj.hline')} ${formatPrice(l.price, digits)}`, false, () => remove('line', l.id)))}
       {alerts.map((a) =>
         row(a.id, `🔔 ${t(a.direction === 'above' ? 'obj.above' : 'obj.below')} ${formatPrice(a.price, digits)}${a.firedAt ? ` · ${t('obj.fired')}` : ''}`, !!a.firedAt, () => remove('alert', a.id)),
