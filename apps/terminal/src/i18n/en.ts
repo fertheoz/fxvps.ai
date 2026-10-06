@@ -262,6 +262,8 @@ export const en = {
   'obj.place': 'Place',
   'obj.objects': 'Lines and alerts',
   'obj.none': 'No lines or alerts on this chart',
+  'obj.clearAll': 'Clear all on this chart',
+  'obj.deleteHint': 'Double-click a shape to select it, then press Delete',
   'obj.above': 'when price rises to',
   'obj.below': 'when price falls to',
   'obj.fired': 'fired',

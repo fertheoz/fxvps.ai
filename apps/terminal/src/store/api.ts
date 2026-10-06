@@ -2,7 +2,7 @@ import type { TradingApi } from '@fxvps/trading-core';
 import { MockTradingApi } from '@fxvps/trading-core';
 import { WsTradingApi } from '../api/ws';
 import { isAllowedWsUrl, resolveGateway } from './connection';
-import { sessionToken } from './session';
+import { sessionToken, useSession } from './session';
 import { RafBatcher } from '@fxvps/trading-core';
 import type { ChartObjects, Quote } from '@fxvps/trading-core';
 import { setObjectsSaver, useTerminal } from './terminal';
@@ -28,7 +28,14 @@ export function createApiFromLocation(search: string): TradingApi {
   if (gateway) {
     const trusted = isAllowedWsUrl(gateway.url);
     if (!trusted && !gateway.token) console.warn(`[fxvps] gateway ${gateway.url} is not allow-listed; session token withheld`);
-    return new WsTradingApi({ url: gateway.url, token: () => gateway.token || (trusted ? sessionToken() : '') });
+    const ws = new WsTradingApi({ url: gateway.url, token: () => gateway.token || (trusted ? sessionToken() : '') });
+    // A silently refreshed session token is pushed to the gateway in place (no reconnect).
+    if (!gateway.token && trusted) {
+      useSession.subscribe((s, prev) => {
+        if (s.accessToken && s.accessToken !== prev.accessToken) ws.renewToken();
+      });
+    }
+    return ws;
   }
   return new MockTradingApi();
 }

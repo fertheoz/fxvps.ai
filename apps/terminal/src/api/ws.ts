@@ -652,6 +652,18 @@ export class WsTradingApi implements TradingApi {
     if (this.v12) await Promise.all(this.accountIds.map((id) => this.loadOrders(id)));
   }
 
+  /**
+   * The identity session refreshed the access token: re-authenticate on the open
+   * socket so the gateway extends the session instead of closing it at the old
+   * expiry (v1.3 gateway; older ones answer with an error that is only journaled).
+   */
+  renewToken(): void {
+    const token = this.opts.token?.() ?? '';
+    if (!token || token === this.sentToken || this.state !== 'connected') return;
+    this.sentToken = token;
+    this.sendBody({ case: 'auth', value: { token } });
+  }
+
   /** Working orders from the server (authoritative after a (re)connect). */
   private async loadOrders(accountId: string): Promise<void> {
     try {

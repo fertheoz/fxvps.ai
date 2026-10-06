@@ -23,6 +23,14 @@ export function ObjectList({ symbol }: { symbol: string }) {
           : { ...objects, shapes: (objects.shapes ?? []).filter((x) => x.id !== id) },
     );
   if (!lines.length && !alerts.length && !shapes.length) return <div className="px-3 py-2 text-muted">{t('obj.none')}</div>;
+  // Everything drawn on this symbol (other symbols untouched).
+  const clearAll = () =>
+    setObjects(accountId, {
+      ...objects,
+      lines: objects.lines.filter((l) => l.symbol !== symbol),
+      alerts: objects.alerts.filter((a) => a.symbol !== symbol),
+      shapes: (objects.shapes ?? []).filter((x) => x.symbol !== symbol),
+    });
   const row = (key: string, text: string, muted: boolean, onRemove: () => void) => (
     <div key={key} className={`flex items-center justify-between gap-2 px-3 py-2 border-b border-line/50 ${muted ? 'text-muted' : ''}`}>
       <span className="num">{text}</span>
@@ -38,6 +46,11 @@ export function ObjectList({ symbol }: { symbol: string }) {
       {alerts.map((a) =>
         row(a.id, `🔔 ${t(a.direction === 'above' ? 'obj.above' : 'obj.below')} ${formatPrice(a.price, digits)}${a.firedAt ? ` · ${t('obj.fired')}` : ''}`, !!a.firedAt, () => remove('alert', a.id)),
       )}
+      <div className="px-3 py-2 flex justify-end">
+        <button className="px-3 h-7 rounded-full border border-down/50 text-down hover:bg-down/10" onClick={clearAll} data-testid="obj-clear-all">
+          {t('obj.clearAll')}
+        </button>
+      </div>
     </div>
   );
 }
