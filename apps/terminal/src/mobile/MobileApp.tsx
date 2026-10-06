@@ -271,7 +271,9 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
   const installPrompt = useInstallPrompt();
   const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
   const iosChrome = /CriOS/.test(ua);
-  const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+  // iPhone Chrome's web-share sheet has no "Add to Home Screen" (only Chrome's own
+  // share menu next to the address bar does), so there we show the steps instead.
+  const canShare = !iosChrome && typeof navigator !== 'undefined' && typeof navigator.share === 'function';
   const [shared, setShared] = useState(false);
   const addToHome = async () => {
     if (installPrompt) {

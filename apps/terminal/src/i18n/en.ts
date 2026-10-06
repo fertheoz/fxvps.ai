@@ -236,7 +236,7 @@ export const en = {
   'm.fsInstall': 'Install app',
   'm.fsAfterShare': 'In the sheet that opens choose “Add to Home Screen”, then open fxvps.ai from the Home Screen.',
   'm.fsStep1Safari': 'Tap the Share button at the bottom of Safari',
-  'm.fsStep1Chrome': 'Tap the Share icon next to the address bar',
+  'm.fsStep1Chrome': 'Tap the Share icon at the right end of the address bar (not the button above)',
   'm.fsStep2': 'Choose “Add to Home Screen”',
   'm.fsStep3': 'Open fxvps.ai from the Home Screen',
   'm.deals': 'Deals',
