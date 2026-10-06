@@ -92,6 +92,12 @@ export interface Account {
   balance: number;
   /** e.g. 100 for 1:100. */
   leverage: number;
+  /**
+   * Margin the server holds for the open positions (minor units). When present
+   * it is authoritative: group rules such as ESMA leverage caps apply on the
+   * server, so a local `volume × price / leverage` would understate it.
+   */
+  marginUsed?: number;
   isDemo: boolean;
   /** Netting: one position per symbol; hedging: several (both sides). */
   marginMode?: MarginMode;

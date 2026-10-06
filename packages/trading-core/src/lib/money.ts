@@ -193,6 +193,9 @@ export function computeAccountMetrics(
     margin += marginMinor(spec, p.volume, p.openPrice, account.leverage, account.currency, rates);
   }
   const equity = account.balance + floating;
+  // Floating P/L moves with every tick and is computed here; margin only moves
+  // with positions, so the server's figure wins whenever we have it.
+  if (account.marginUsed !== undefined) margin = account.marginUsed;
   return {
     balance: account.balance,
     equity,

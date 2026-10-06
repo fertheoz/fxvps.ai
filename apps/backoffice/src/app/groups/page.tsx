@@ -8,7 +8,7 @@ import { NumField, SelectField, TextField, useZodForm } from "@/components/form"
 import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
-import { Book, CommissionType, Group, MarginMode } from "@/lib/schemas";
+import { Book, CommissionType, EsmaCap, Group, MarginMode } from "@/lib/schemas";
 
 const col = createColumnHelper<Group>();
 
@@ -28,6 +28,7 @@ export default function GroupsPage() {
     col.accessor("name", { header: "Name", cell: (c) => <span className="font-medium">{c.getValue()}</span> }),
     col.accessor("currency", { header: t("groups.currency") }),
     col.accessor("leverage", { header: t("groups.leverage"), cell: (c) => `1:${c.getValue()}` }),
+    col.accessor("esma", { header: "ESMA", cell: (c) => (c.getValue() === "none" ? "—" : c.getValue()) }),
     col.accessor("marginMode", { header: t("groups.marginMode") }),
     col.accessor("marginCallPct", { header: t("groups.marginCall"), cell: (c) => `${c.getValue()}%` }),
     col.accessor("stopOutPct", { header: t("groups.stopOut"), cell: (c) => `${c.getValue()}%` }),
@@ -61,6 +62,7 @@ function GroupDialog({ group, onClose }: { group: Group; onClose: () => void }) 
         <TextField label="Name" value={draft.name} onChange={(v) => set("name", v)} error={errors.name} />
         <NumField label={t("groups.leverage")} value={draft.leverage} onChange={(v) => set("leverage", v)} error={errors.leverage} step={1} />
         <SelectField label={t("groups.marginMode")} value={draft.marginMode} options={MarginMode.options} onChange={(v) => set("marginMode", v)} />
+        <SelectField label={t("groups.esma")} value={draft.esma} options={EsmaCap.options} onChange={(v) => set("esma", v)} />
         <SelectField label={t("groups.book")} value={draft.book} options={Book.options} onChange={(v) => set("book", v)} />
         <NumField label={t("groups.marginCall")} value={draft.marginCallPct} onChange={(v) => set("marginCallPct", v)} error={errors.marginCallPct} />
         <NumField label={t("groups.stopOut")} value={draft.stopOutPct} onChange={(v) => set("stopOutPct", v)} error={errors.stopOutPct} />
