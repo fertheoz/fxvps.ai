@@ -237,7 +237,7 @@ pub fn verify(data_dir: impl Into<PathBuf>) -> std::io::Result<VerifyReport> {
     Ok(VerifyReport {
         ok: error.is_none(),
         seq,
-        digest: engine.state_digest(),
+        digest: short_digest(&engine),
         snapshot_seq,
         journal_bytes,
         journal_lines,
@@ -280,7 +280,7 @@ fn compact_with(engine: &Engine, seq: u64, dir: &FsPath) -> std::io::Result<Comp
     File::create(&jp)?;
     Ok(CompactReport {
         seq,
-        digest: engine.state_digest(),
+        digest: short_digest(engine),
         archived,
         archived_bytes: bytes,
     })
@@ -294,6 +294,15 @@ pub fn compact(data_dir: impl Into<PathBuf>) -> std::io::Result<CompactReport> {
     let (engine, seq) = recover(&settings)?;
     engine.check_invariants().map_err(std::io::Error::other)?;
     compact_with(&engine, seq, &settings.data_dir)
+}
+
+/// 16-hex-digit fingerprint of the full state (the raw digest is the whole
+/// state as JSON: megabytes). Equal states → equal fingerprints.
+fn short_digest(engine: &Engine) -> String {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    engine.state_digest().hash(&mut h);
+    format!("{:016x}", h.finish())
 }
 
 fn now_ns() -> u64 {

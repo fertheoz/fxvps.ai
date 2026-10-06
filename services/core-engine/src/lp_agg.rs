@@ -407,7 +407,12 @@ impl Aggregator {
                 let mut quoting = 0;
                 let mut deviating = Vec::new();
                 for (sym, lps) in &b.by_symbol {
-                    if !lps.contains_key(&name) {
+                    // an empty book (LP sends no levels for the symbol) is "not
+                    // quoting", not a price deviation
+                    let Some(bk) = lps.get(&name) else {
+                        continue;
+                    };
+                    if bk.bids.is_empty() && bk.asks.is_empty() {
                         continue;
                     }
                     quoting += 1;
