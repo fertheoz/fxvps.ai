@@ -18,6 +18,10 @@ pub struct GatewayConfig {
     /// the LP account from lock-outs on wrong credentials); 0 = never stop.
     #[serde(default = "default_max_logon_failures")]
     pub max_logon_failures: u32,
+    /// Orders per second sent on the trading session (LMAX allows 100/s;
+    /// default 80 leaves headroom). 0 = no brake.
+    #[serde(default = "default_max_orders_per_sec")]
+    pub max_orders_per_sec: u32,
     /// false: configured but paused, no connection attempts at all.
     #[serde(default = "yes")]
     pub enabled: bool,
@@ -82,6 +86,10 @@ fn default_reconnect() -> u64 {
 fn default_source() -> String {
     "8".into()
 }
+fn default_max_orders_per_sec() -> u32 {
+    80
+}
+
 fn yes() -> bool {
     true
 }

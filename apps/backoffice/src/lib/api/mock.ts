@@ -383,7 +383,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     async simState() { return delay({ scenario: sim, instruments: [{ securityId: "4001", mid: "1.12485" }, { securityId: "4002", mid: "1.32640" }] }); },
     async simShock(symbol, pct, actor) { guard(actor, "lp.manage"); audit(actor, "lp.sim", symbol, `shock ${pct}%`); return delay({ symbol, pct }); },
     async simScenario(s2, actor) { guard(actor, "lp.manage"); sim = s2; audit(actor, "lp.sim", "scenario", JSON.stringify(s2)); return delay(sim); },
-    async perf() { return delay({ engine: { samples: 5000, totalCommands: 2_400_000, p50Us: 38, p95Us: 120, p99Us: 410, maxUs: 2900, uptimeS: 86400 }, writerSeq: 2_400_000, replica: { seq: 2_399_998, lagCommands: 2, reloads: 1, applied: 120_000 }, budget: { p99Us: 5000, ok: true } }); },
+    async perf() { return delay({ engine: { samples: 5000, totalCommands: 2_400_000, p50Us: 38, p95Us: 120, p99Us: 410, maxUs: 2900, uptimeS: 86400 }, writerSeq: 2_400_000, replica: { seq: 2_399_998, lagCommands: 2, reloads: 1, applied: 120_000 }, budget: { p99Us: 5000, ok: true }, loadtest: { at: new Date(Date.now() - 6 * 36e5).toISOString(), ok: true, clients: 1000, connected: 1000, ordersPerMin: 10012, targetPerMin: 10000, ackP99Ms: 41, rejectPct: 0, quotesPerS: 9400 } }); },
     async listTenants() { return delay(tenants); },
     async saveTenants(ts, actor) { guard(actor, "users.edit"); tenants = ts; audit(actor, "tenants.update", "tenants", ts.map((t) => t.id).join(", ")); return delay(tenants); },
     async auditChain() { return delay({ count: s.audit.length, chained: s.audit.length, verified: true, headHash: "9f2a…demo", brokenAt: null, lastAt: s.audit[0]?.at ?? null }); },

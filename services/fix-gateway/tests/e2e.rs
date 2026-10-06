@@ -22,6 +22,7 @@ fn gateway_config(sim: &lp_simulator::SimHandle) -> GatewayConfig {
         market_depth: 3,
         reconnect_delay_ms: 100,
         max_logon_failures: 3,
+        max_orders_per_sec: 0,
         enabled: true,
         security_id_source: "8".into(),
         store_dir: None,

@@ -28,7 +28,7 @@ pub enum SessionKind {
 }
 
 /// Normalized events published on the internal channel.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GatewayEvent {
     SessionUp {
@@ -68,7 +68,8 @@ pub enum GatewayEvent {
 }
 
 /// Commands accepted from internal components (OMS, tests).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum OrderCommand {
     Submit(Order),
     Cancel {
@@ -573,7 +574,58 @@ fn to_body(cfg: &GatewayConfig, c: &OrderCommand) -> Result<Body, String> {
     })
 }
 
-fn reject_cmd(events: &broadcast::Sender<GatewayEvent>, c: &OrderCommand, reason: String) {
+/// Order-rate brake for one trading session (LP limits such as LMAX's
+/// 100 orders/s): a token bucket refilled at `per_sec`, burst = `per_sec`.
+/// An order waits up to [`Brake::MAX_WAIT`] for a token, else it is rejected.
+struct Brake {
+    per_sec: u32,
+    tokens: f64,
+    last: std::time::Instant,
+}
+
+impl Brake {
+    const MAX_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+    fn new(per_sec: u32) -> Brake {
+        Brake {
+            per_sec,
+            tokens: per_sec as f64,
+            last: std::time::Instant::now(),
+        }
+    }
+
+    fn refill(&mut self) {
+        let now = std::time::Instant::now();
+        let add = now.duration_since(self.last).as_secs_f64() * self.per_sec as f64;
+        self.tokens = (self.tokens + add).min(self.per_sec as f64);
+        self.last = now;
+    }
+
+    /// true = send now (possibly after a short wait); false = over the limit.
+    async fn admit(&mut self) -> bool {
+        if self.per_sec == 0 {
+            return true;
+        }
+        self.refill();
+        if self.tokens < 1.0 {
+            let wait =
+                std::time::Duration::from_secs_f64((1.0 - self.tokens) / self.per_sec as f64);
+            if wait > Self::MAX_WAIT {
+                return false;
+            }
+            tokio::time::sleep(wait).await;
+            self.refill();
+        }
+        self.tokens -= 1.0;
+        true
+    }
+}
+
+pub(crate) fn reject_cmd(
+    events: &broadcast::Sender<GatewayEvent>,
+    c: &OrderCommand,
+    reason: String,
+) {
     warn!(cl_ord_id = c.cl_ord_id(), %reason, "order command rejected by gateway");
     let _ = events.send(GatewayEvent::CommandRejected {
         cl_ord_id: c.cl_ord_id().to_owned(),
@@ -592,6 +644,7 @@ async fn trade_task(
     let kind = SessionKind::Trading;
     let mut session = Some(session);
     let mut orders_open = true;
+    let mut brake = Brake::new(cfg.max_orders_per_sec);
     let mut retry = Retry::default();
     while let Some(s) = session.take() {
         let io = match connect(&cfg.trade.addr, tls.as_ref(), &mut sd).await {
@@ -651,6 +704,7 @@ async fn trade_task(
                 c = orders.recv(), if orders_open => match c {
                     None => orders_open = false,
                     Some(c) if !up => reject_cmd(&events, &c, "trading session not logged on".into()),
+                    Some(c) if !brake.admit().await => reject_cmd(&events, &c, format!("LP order rate limit ({}/s)", cfg.max_orders_per_sec)),
                     Some(c) => match to_body(&cfg, &c) {
                         Ok(body) => {
                             if cmd.send(SessionCommand::Send(body)).await.is_err() {

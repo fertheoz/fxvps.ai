@@ -319,6 +319,8 @@ export interface PerfReport {
   writerSeq: number;
   replica: { seq: number; lagCommands: number; reloads: number; applied: number } | null;
   budget: { p99Us: number; ok: boolean };
+  /** Last nightly load test (yuk-sinavi.sh). */
+  loadtest?: { at: string; ok: boolean; clients: number; connected: number; ordersPerMin: number; targetPerMin: number; ackP99Ms: number; rejectPct: number; quotesPerS: number } | null;
 }
 export interface Tenant { id: string; name: string; groups: string[]; hostnames: string[] }
 

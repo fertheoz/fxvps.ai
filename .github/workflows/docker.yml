@@ -28,6 +28,7 @@ jobs:
       matrix:
         include:
           - { svc: lp-simulator, dockerfile: infra/docker/lp-simulator.Dockerfile, src: services/lp-simulator, args: "" }
+          - { svc: loadgen, dockerfile: infra/docker/loadgen.Dockerfile, src: tools/loadgen, args: "" }
           - { svc: fix-gateway, dockerfile: infra/docker/fix-gateway.Dockerfile, src: services/fix-gateway, args: "" }
           - { svc: client-gateway, dockerfile: infra/docker/client-gateway.Dockerfile, src: services/client-gateway, args: "" }
           - { svc: core-engine, dockerfile: infra/docker/core-engine.Dockerfile, src: services/core-engine, args: "" }
@@ -81,6 +82,7 @@ jobs:
       matrix:
         include:
           - { svc: lp-simulator, dockerfile: infra/docker/lp-simulator.Dockerfile, src: services/lp-simulator, args: "" }
+          - { svc: loadgen, dockerfile: infra/docker/loadgen.Dockerfile, src: tools/loadgen, args: "" }
           - { svc: fix-gateway, dockerfile: infra/docker/fix-gateway.Dockerfile, src: services/fix-gateway, args: "" }
           - { svc: client-gateway, dockerfile: infra/docker/client-gateway.Dockerfile, src: services/client-gateway, args: "" }
           - { svc: core-engine, dockerfile: infra/docker/core-engine.Dockerfile, src: services/core-engine, args: "" }

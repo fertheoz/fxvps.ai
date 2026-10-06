@@ -768,7 +768,9 @@ export class WsTradingApi implements TradingApi {
 
   private scheduleReconnect(): void {
     this.setState('reconnecting');
-    const backoff = Math.min(30_000, 500 * 2 ** this.attempt++);
+    // Blue/green hand-overs take ~1 s: retry quickly first, then back off.
+    const n = this.attempt++;
+    const backoff = n < 10 ? 300 : Math.min(30_000, 500 * 2 ** (n - 10));
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => void this.connect().catch(() => undefined), backoff);
   }

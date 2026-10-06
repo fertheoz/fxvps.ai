@@ -48,6 +48,11 @@ impl Replica {
         self.seq
     }
 
+    /// Hands the caught-up engine over (blue/green take-over).
+    pub fn into_parts(self) -> (Engine, u64) {
+        (self.engine, self.seq)
+    }
+
     fn reload(&mut self) -> std::io::Result<()> {
         let (mut engine, seq) = recover(&self.settings)?;
         engine.set_router(Box::new(NullRouter));

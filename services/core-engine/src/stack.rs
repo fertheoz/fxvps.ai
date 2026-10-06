@@ -16,7 +16,7 @@ use crate::api::{AccountNames, CoreError, InProcessCore};
 use crate::lp_agg::{AggConfig, Aggregator};
 use crate::lp_fix::{run_bridge, AggLpRouter, LpLink, SymbolMap};
 use crate::output::Publisher;
-use crate::{spawn_with, EngineHandle, LpFeedback, LpMode, Settings};
+use crate::{EngineHandle, LpFeedback, LpMode, Settings};
 
 /// Accounts, group and symbols created on a fresh journal.
 #[derive(Clone, Debug)]
@@ -159,6 +159,10 @@ pub struct StackConfig {
     pub lp_prefix: String,
     /// Minimum interval between quote-driven P&L pushes per account.
     pub pnl_push_interval: Duration,
+    /// `Some(url)`: the FIX gateways run as separate processes and are reached
+    /// over NATS (`fix_gateway::nats`); the core never owns the LP sessions, so
+    /// restarting it (blue/green hand-over) keeps them up.
+    pub nats_url: Option<String>,
 }
 
 impl StackConfig {
@@ -167,6 +171,7 @@ impl StackConfig {
             gateway,
             extra_gateways: Vec::new(),
             aggregation: AggConfig::default(),
+            nats_url: None,
             data_dir: data_dir.into(),
             snapshot_every: 1_000,
             seed: None,
@@ -198,6 +203,7 @@ pub struct CoreStack {
     /// External account id <-> engine number map (client self-service routes).
     pub names: AccountNames,
     gateways: Vec<GatewayHandle>,
+    remotes: Vec<fix_gateway::nats::RemoteGateway>,
     writer: std::thread::JoinHandle<()>,
     bridges: Vec<tokio::task::JoinHandle<()>>,
     status: std::sync::Arc<std::sync::RwLock<Vec<fix_gateway::SessionStatus>>>,
@@ -207,6 +213,15 @@ pub struct CoreStack {
 
 impl CoreStack {
     pub async fn start(cfg: StackConfig) -> Result<CoreStack, StackError> {
+        Self::start_warm(cfg, None).await
+    }
+
+    /// Like [`CoreStack::start`] with an engine already rebuilt from the
+    /// journal (blue/green standby): no replay on take-over.
+    pub async fn start_warm(
+        cfg: StackConfig,
+        warm: Option<(oms::Engine, u64)>,
+    ) -> Result<CoreStack, StackError> {
         let all: Vec<&GatewayConfig> = std::iter::once(&cfg.gateway)
             .chain(cfg.extra_gateways.iter())
             .collect();
@@ -219,6 +234,8 @@ impl CoreStack {
         let agg = Arc::new(Aggregator::new(cfg.aggregation.clone()));
         let feedback = LpFeedback::default();
         let mut gateways = Vec::new();
+        let mut remotes = Vec::new();
+        let mut status_sources = Vec::new();
         let mut links = Vec::new();
         let mut subs = Vec::new();
         for g in &all {
@@ -236,15 +253,33 @@ impl CoreStack {
                 symbols.insert(&core_symbol(&i.symbol), &i.symbol, lot / cs);
             }
             let symbols = Arc::new(symbols);
-            let gateway = fix_gateway::start((*g).clone())?;
-            // subscribe before anything else so the first MD snapshot is not missed
-            subs.push((g.lp.clone(), gateway.subscribe(), symbols.clone()));
-            links.push(LpLink {
-                name: g.lp.clone(),
-                orders: gateway.orders(),
-                symbols,
-            });
-            gateways.push(gateway);
+            match &cfg.nats_url {
+                Some(url) => {
+                    let remote = fix_gateway::nats::RemoteGateway::connect(url, g)
+                        .await
+                        .map_err(|e| StackError::Config(format!("NATS gateway {}: {e}", g.lp)))?;
+                    subs.push((g.lp.clone(), remote.subscribe(), symbols.clone()));
+                    links.push(LpLink {
+                        name: g.lp.clone(),
+                        orders: remote.orders(),
+                        symbols,
+                    });
+                    status_sources.push(remote.status_source());
+                    remotes.push(remote);
+                }
+                None => {
+                    let gateway = fix_gateway::start((*g).clone())?;
+                    // subscribe before anything else so the first MD snapshot is not missed
+                    subs.push((g.lp.clone(), gateway.subscribe(), symbols.clone()));
+                    links.push(LpLink {
+                        name: g.lp.clone(),
+                        orders: gateway.orders(),
+                        symbols,
+                    });
+                    status_sources.push(gateway.status_source());
+                    gateways.push(gateway);
+                }
+            }
         }
         let router = AggLpRouter::new(links, agg.clone(), feedback.clone(), cfg.lp_prefix.clone());
         let names = AccountNames::default();
@@ -262,13 +297,14 @@ impl CoreStack {
         let mut settings = Settings::new(&cfg.data_dir);
         settings.snapshot_every = cfg.snapshot_every;
         settings.simulate_lp = false;
-        let (engine, writer) = spawn_with(
+        let (engine, writer) = crate::spawn_with_state(
             settings,
             LpMode::External {
                 router: Box::new(router),
                 feedback,
             },
             Some(publisher),
+            warm,
         )?;
         // Instruments of every LP (added after the first start too) become
         // engine symbols on the next start (the seed only runs once).
@@ -327,10 +363,10 @@ impl CoreStack {
             .collect();
         // One session table over all gateways (admin API `/v1/lp/sessions`):
         // the single gateway's own table, or a merged copy refreshed twice a second.
-        let (status, status_task) = if gateways.len() == 1 {
-            (gateways[0].status_source(), None)
+        let (status, status_task) = if status_sources.len() == 1 {
+            (status_sources[0].clone(), None)
         } else {
-            let sources: Vec<_> = gateways.iter().map(|g| g.status_source()).collect();
+            let sources = status_sources;
             let merged = Arc::new(std::sync::RwLock::new(Vec::new()));
             let w = merged.clone();
             let task = tokio::spawn(async move {
@@ -381,6 +417,7 @@ impl CoreStack {
             engine,
             agg,
             gateways,
+            remotes,
             writer,
             bridges,
             status,
@@ -405,6 +442,9 @@ impl CoreStack {
         self.rollover_task.abort();
         for g in self.gateways {
             g.shutdown().await;
+        }
+        for r in self.remotes {
+            r.shutdown();
         }
         self.engine.shutdown();
         let _ = tokio::task::spawn_blocking(move || self.writer.join()).await;
