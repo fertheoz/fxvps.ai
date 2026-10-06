@@ -70,6 +70,9 @@ services:
       FIX_CONFIG_FILE: /var/lib/fix-gateway/lp.json
       # Further LPs aggregated with the primary (comma separated gateway configs).
       FIX_LP_FILES: /etc/fxvps/lp-sim-gateway.json
+      # Backup drill status (yedek.sh) watched by the alert engine; journal auto-compaction.
+      CORE_BACKUP_STATUS_FILE: /var/lib/fxvps-yedek/yedek.durum
+      CORE_JOURNAL_COMPACT_MB: "256"
       FIX_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN:?set FIX_ADMIN_TOKEN in .env}
       FIX_STATUS_ADDR: 127.0.0.1:9890
       # Back office admin API: identity tokens, admin role + 2FA for changes.
@@ -89,6 +92,7 @@ services:
       - "./fix-store:/var/lib/fix-gateway"
       - "./core-data:/var/lib/core-engine"
       - "./lp-sim-gateway.json:/etc/fxvps/lp-sim-gateway.json:ro"
+      - "/var/lib/fxvps-yedek:/var/lib/fxvps-yedek:ro"
     depends_on: [identity, lp-simulator]
     restart: unless-stopped
     logging: *logs

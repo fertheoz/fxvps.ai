@@ -130,7 +130,7 @@ Kurucunun 1–9 etabı "bir bridge'de olması gerekenler"di; aşağıdakiler ger
 para ve gerçek müşteri gelmeden önce **operasyonun dayanıklılığını** ve
 **ticari yüzeyi** tamamlar. Sıra, risk ↓ ve gelir ↑ etkisine göre.
 
-### Etap 10 — Felaket kurtarma ve sıfır kesintili dağıtım
+### Etap 10 — Felaket kurtarma ve sıfır kesintili dağıtım ✅ (mavi/yeşil hariç → Etap 14)
 Bugün tek CT, tek disk, tek süreç. Hedefler: (a) günlük motor journal +
 admin store + candles **şifreli offsite yedeği** ve **otomatik geri yükleme
 provası** (yedekten boş CT'ye kalk, snapshot digest'i karşılaştır);
@@ -139,6 +139,11 @@ dedikten sonra FIX oturumları ve WS bağlantıları devredilir (müşteri
 ~45 sn kopma yaşamaz); (c) **chaos sınavı**: LP kesintisi, disk dolması,
 saat sapması, çift süreç senaryoları CI'da koşar; (d) journal boyutu
 büyüdükçe **snapshot + sıkıştırılmış arşiv** (bugün 235 MB, lineer büyüyor).
+
+Yapılan: `core-engine verify|compact`, `yedek.sh` (şifreli + günlük geri yükleme
+provası + durum dosyası → uyarı motoru), `geri-yukle.sh`, `dagit.sh` (replay
+kapısı + geri dönüş etiketi + sağlık kontrolü + otomatik geri alma),
+başlangıçta journal sıkıştırma. Ayrıntı: `docs/09-felaket-kurtarma.md`.
 
 ### Etap 11 — Uyum, raporlama ve denetim izi
 Lisans alındığında ilk sorulanlar: (a) **müşteri ekstresi PDF/e-posta**

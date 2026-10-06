@@ -192,6 +192,110 @@ pub fn recover(settings: &Settings) -> std::io::Result<(Engine, u64)> {
     Ok((engine, seq))
 }
 
+/// Result of [`verify`]: the state replayed from a data directory, with no LP
+/// side effects. `ok` = replay succeeded and the engine invariants hold.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VerifyReport {
+    pub ok: bool,
+    pub seq: u64,
+    pub digest: String,
+    pub snapshot_seq: Option<u64>,
+    pub journal_bytes: u64,
+    pub journal_lines: u64,
+    pub accounts: usize,
+    pub positions: usize,
+    pub error: Option<String>,
+}
+
+/// Replays `data_dir` (snapshot + journal) and checks the invariants — the
+/// restore drill of a backup and the deploy gate of a new engine image
+/// (`core-engine verify --data-dir DIR`). Read-only.
+pub fn verify(data_dir: impl Into<PathBuf>) -> std::io::Result<VerifyReport> {
+    let settings = Settings::new(data_dir);
+    let snapshot_seq = fs::read(snapshot_path(&settings.data_dir))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<EngineSnapshot>(&b).ok())
+        .map(|s| s.seq());
+    let (journal_bytes, journal_lines) = match File::open(journal_path(&settings.data_dir)) {
+        Ok(f) => {
+            let bytes = f.metadata().map(|m| m.len()).unwrap_or(0);
+            let lines = BufReader::new(f)
+                .lines()
+                .map_while(Result::ok)
+                .filter(|l| !l.trim().is_empty())
+                .count() as u64;
+            (bytes, lines)
+        }
+        Err(_) => (0, 0),
+    };
+    let (engine, seq) = recover(&settings)?;
+    let error = engine.check_invariants().err();
+    let positions = engine
+        .accounts()
+        .map(|a| engine.positions_of(a.id).len())
+        .sum();
+    Ok(VerifyReport {
+        ok: error.is_none(),
+        seq,
+        digest: engine.state_digest(),
+        snapshot_seq,
+        journal_bytes,
+        journal_lines,
+        accounts: engine.accounts().count(),
+        positions,
+        error,
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CompactReport {
+    pub seq: u64,
+    pub digest: String,
+    /// Where the old journal went (`None` when it was already empty).
+    pub archived: Option<PathBuf>,
+    pub archived_bytes: u64,
+}
+
+/// Writes a fresh snapshot of `engine` and rotates the journal into
+/// `archive/journal-<seq>.jsonl`. Only valid while no writer has the journal open.
+fn compact_with(engine: &Engine, seq: u64, dir: &FsPath) -> std::io::Result<CompactReport> {
+    let snap = engine.snapshot();
+    let tmp = dir.join("snapshot.json.tmp");
+    fs::write(
+        &tmp,
+        serde_json::to_vec(&snap).map_err(std::io::Error::other)?,
+    )?;
+    fs::rename(tmp, snapshot_path(dir))?;
+    let jp = journal_path(dir);
+    let bytes = fs::metadata(&jp).map(|m| m.len()).unwrap_or(0);
+    let archived = if bytes > 0 {
+        let arch = dir.join("archive");
+        fs::create_dir_all(&arch)?;
+        let target = arch.join(format!("journal-{seq}.jsonl"));
+        fs::rename(&jp, &target)?;
+        Some(target)
+    } else {
+        None
+    };
+    File::create(&jp)?;
+    Ok(CompactReport {
+        seq,
+        digest: engine.state_digest(),
+        archived,
+        archived_bytes: bytes,
+    })
+}
+
+/// Snapshot + journal rotation of a data directory nobody is writing to
+/// (`core-engine compact --data-dir DIR`). State is unchanged: replaying the
+/// compacted directory yields the same digest.
+pub fn compact(data_dir: impl Into<PathBuf>) -> std::io::Result<CompactReport> {
+    let settings = Settings::new(data_dir);
+    let (engine, seq) = recover(&settings)?;
+    engine.check_invariants().map_err(std::io::Error::other)?;
+    compact_with(&engine, seq, &settings.data_dir)
+}
+
 fn now_ns() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -361,6 +465,21 @@ pub fn spawn_with(
             WriterLp::External(feedback)
         }
     };
+    // Journals grow without bound; above `CORE_JOURNAL_COMPACT_MB` (default 256,
+    // 0 = never) the start-up snapshots and rotates the old journal into archive/.
+    let limit_mb: u64 = std::env::var("CORE_JOURNAL_COMPACT_MB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(256);
+    if limit_mb > 0 {
+        let bytes = fs::metadata(journal_path(&settings.data_dir))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        if bytes > limit_mb * 1024 * 1024 {
+            let r = compact_with(&engine, seq, &settings.data_dir)?;
+            tracing::info!(seq, archived = ?r.archived, bytes, "journal compacted at start-up");
+        }
+    }
     let journal = OpenOptions::new()
         .create(true)
         .append(true)

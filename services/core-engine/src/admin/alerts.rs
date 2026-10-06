@@ -294,6 +294,42 @@ pub fn infra_conditions(ctx: &AdminCtx, now_ms: u64) -> Vec<Condition> {
             }
         }
     }
+    // Backup drill status file written by deploy/lmax-demo/yedek.sh
+    if let Ok(path) = std::env::var("CORE_BACKUP_STATUS_FILE") {
+        match std::fs::read_to_string(&path) {
+            Ok(s) => {
+                let fresh = std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|d| d.as_secs() < 36 * 3_600);
+                if !s.starts_with("OK") {
+                    out.push(Condition {
+                        kind: "backup",
+                        target: "drill".into(),
+                        severity: Severity::Critical,
+                        title: "Backup / restore drill failed".into(),
+                        detail: s.trim().chars().take(200).collect(),
+                    });
+                } else if !fresh {
+                    out.push(Condition {
+                        kind: "backup",
+                        target: "stale".into(),
+                        severity: Severity::Warning,
+                        title: "No successful backup in 36 h".into(),
+                        detail: s.trim().chars().take(200).collect(),
+                    });
+                }
+            }
+            Err(_) => out.push(Condition {
+                kind: "backup",
+                target: "missing".into(),
+                severity: Severity::Warning,
+                title: "Backup status file missing".into(),
+                detail: path,
+            }),
+        }
+    }
     if let Some(agg) = &ctx.agg {
         for r in agg.runtime() {
             if r.policy.enabled && !r.deviating.is_empty() {

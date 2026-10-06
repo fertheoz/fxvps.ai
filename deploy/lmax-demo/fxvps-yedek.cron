@@ -1,0 +1,4 @@
+# /etc/cron.d/fxvps-yedek — günlük şifreli yedek + geri yükleme provası (UTC 03:30)
+# cron.d PATH devralmaz: betik PATH'i kendisi kurar. Çıktı yedek.log'da; durum yedek.durum'da.
+SHELL=/bin/bash
+30 3 * * * root /opt/fxvps.ai/deploy/lmax-demo/yedek.sh >> /var/lib/fxvps-yedek/cron.log 2>&1
