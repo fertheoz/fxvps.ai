@@ -264,6 +264,8 @@ export const tr: Record<MessageKey, string> = {
   'obj.place': 'Yerleştir',
   'obj.objects': 'Çizgiler ve uyarılar',
   'obj.none': 'Bu grafikte çizgi ya da uyarı yok',
+  'obj.clearAll': 'Bu grafiktekilerin tümünü temizle',
+  'obj.deleteHint': 'Şekli çift tıkla seç, sonra Delete ile sil',
   'obj.above': 'fiyat yükselip şuraya gelince',
   'obj.below': 'fiyat düşüp şuraya gelince',
   'obj.fired': 'tetiklendi',

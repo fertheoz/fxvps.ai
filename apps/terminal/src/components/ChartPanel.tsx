@@ -575,6 +575,21 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       if (pressRef.current) clearTimeout(pressRef.current.timer);
     };
   }, [edit, chartTool, isActive, setChartTool]);
+  // Delete / Backspace removes the selected shape (not while typing in a field).
+  useEffect(() => {
+    if (!selectedShape || !isActive) return;
+    const del = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Delete' && ev.key !== 'Backspace') return;
+      const tag = (ev.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (ev.target as HTMLElement | null)?.isContentEditable) return;
+      if (!activeAccountId || !objects) return;
+      ev.preventDefault();
+      setObjects(activeAccountId, { ...objects, shapes: (objects.shapes ?? []).filter((x) => x.id !== selectedShape) });
+      setSelectedShape(null);
+    };
+    window.addEventListener('keydown', del);
+    return () => window.removeEventListener('keydown', del);
+  }, [selectedShape, isActive, activeAccountId, objects, setObjects]);
   const dragDraft = (e: React.PointerEvent<HTMLDivElement>) => {
     const el = host.current;
     const series = candleRef.current;

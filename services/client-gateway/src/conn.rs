@@ -315,6 +315,34 @@ async fn session(
                 Inbound::Frame(env, _) => {
                     hub.metrics.frames_in.inc();
                     if let Some(body) = env.body {
+                        // A fresh token for the same subject extends the session instead of
+                        // the client having to reconnect at the old expiry.
+                        if let Body::Auth(a) = &body {
+                            match hub.auth.verify(&a.token) {
+                                Ok(c) if c.sub == state.claims.sub && c.accounts == state.claims.accounts => {
+                                    expired.as_mut().set(tokio::time::sleep_until(token_deadline(
+                                        c.exp,
+                                        domain::now_ns() / 1_000_000_000,
+                                    )));
+                                    if out.send(Body::AuthOk(AuthOk {
+                                        subject: c.sub.clone(),
+                                        account_ids: c.accounts.clone(),
+                                        expires_at_s: c.exp,
+                                        accounts: Vec::new(),
+                                    })).is_err() {
+                                        return slow();
+                                    }
+                                    state.claims = c;
+                                }
+                                _ => {
+                                    hub.metrics.auth_failures.inc();
+                                    if out.error("", ErrorCode::Unauthenticated, "invalid token").is_err() {
+                                        return slow();
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         match handle(hub, &mut state, &mut out, body).await {
                             Ok(()) => {}
                             Err(SlowConsumer) => return slow(),
