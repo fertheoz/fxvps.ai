@@ -35,7 +35,10 @@ export function AccountDialog() {
     }
   };
   useEffect(() => {
-    if (open) void reload();
+    if (!open) return;
+    // load after mount (not synchronously inside the effect)
+    const id = setTimeout(() => void reload(), 0);
+    return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   if (!open) return null;
