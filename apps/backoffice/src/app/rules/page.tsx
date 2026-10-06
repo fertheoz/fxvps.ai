@@ -17,7 +17,7 @@ const list = (v: string) => v.split(/[,\s]+/).map((x) => x.trim()).filter(Boolea
 const uid = () => Math.random().toString(36).slice(2, 8);
 
 function blank(): RoutingRule {
-  return { id: uid(), name: "", enabled: true, groups: [], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: null, aBookPct: null, markupPoints: null, maxSlippagePoints: null, partialFill: null };
+  return { id: uid(), name: "", enabled: true, groups: [], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: null, aBookPct: null, markupPoints: null, maxSlippagePoints: null, partialFill: null, minToxicity: null, maxToxicity: null };
 }
 
 /** Partial-fill override as a select value (+ attempts). */
@@ -60,6 +60,7 @@ export default function RulesPage() {
     if (r.minLots !== null || r.maxLots !== null) parts.push(`${r.minLots ?? 0}–${r.maxLots ?? "∞"} lot`);
     if (r.kind !== "any") parts.push(t(`rules.kind.${r.kind}`));
     if (r.hoursUtc) parts.push(`${r.hoursUtc[0]}:00–${r.hoursUtc[1]}:00 UTC`);
+    if (r.minToxicity !== null || r.maxToxicity !== null) parts.push(`${t("flow.toxicity")} ${r.minToxicity ?? 0}–${r.maxToxicity ?? 100}`);
     return parts.length ? parts.join(" · ") : t("rules.matchAll");
   };
   const action = (r: RoutingRule) => {
@@ -192,6 +193,8 @@ function RuleDialog({ rule, onClose, onSave }: { rule: RoutingRule; onClose: () 
         <NumField label={t("rules.aBookPct")} value={r.aBookPct ?? 0} onChange={(v) => set("aBookPct", Math.min(100, Math.max(0, v)))} step={5} disabled={routeValue !== "split"} />
         <NumField label={t("rules.markup")} value={r.markupPoints ?? -1} onChange={(v) => set("markupPoints", v >= 0 ? v : null)} step={1} />
         <NumField label={t("rules.maxSlippage")} value={r.maxSlippagePoints ?? -1} onChange={(v) => set("maxSlippagePoints", v >= 0 ? v : null)} step={1} />
+        <NumField label={t("rules.minToxicity")} value={r.minToxicity ?? -1} onChange={(v) => set("minToxicity", v >= 0 ? Math.min(100, v) : null)} step={5} />
+        <NumField label={t("rules.maxToxicity")} value={r.maxToxicity ?? -1} onChange={(v) => set("maxToxicity", v >= 0 ? Math.min(100, v) : null)} step={5} />
         <SelectField label={t("groups.partialFillShort")} value={p.kind} options={PARTIALS} onChange={(v) => setPartial(v)} />
         <NumField label={t("groups.maxAttempts")} value={p.attempts} onChange={(v) => setPartial("retry", Math.min(10, Math.max(1, v)))} step={1} disabled={p.kind !== "retry"} />
       </div>

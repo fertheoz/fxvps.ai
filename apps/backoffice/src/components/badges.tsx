@@ -20,3 +20,9 @@ export function FixBadge({ status }: { status: FixSession["status"] }) {
 export function marginLevel(equity: number, margin: number): number | null {
   return margin > 0 ? (equity / margin) * 100 : null;
 }
+
+/** 0–100 toxic-flow score: green < 30, amber < 60, red otherwise. */
+export function ToxicityBadge({ score }: { score: number }) {
+  const tone = score >= 60 ? "danger" : score >= 30 ? "warning" : "success";
+  return <Badge tone={tone} data-testid="toxicity">{score}</Badge>;
+}

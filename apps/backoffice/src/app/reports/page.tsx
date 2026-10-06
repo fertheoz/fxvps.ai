@@ -4,11 +4,11 @@ import { createColumnHelper } from "@tanstack/react-table";
 import { Download } from "lucide-react";
 import { DataTable } from "@/components/ui/data-table";
 import { Button, PageHeader, Pnl, Stat, Tabs } from "@/components/ui/primitives";
-import { BookBadge, SideBadge } from "@/components/badges";
+import { BookBadge, SideBadge, ToxicityBadge } from "@/components/badges";
 import { useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { Trade } from "@/lib/schemas";
-import type { ExecutionRow, ExecutionSummary, LpExecution, RevenueRow, RevenueTotals, Statement } from "@/lib/api";
+import type { ClientFlowRow, ExecutionRow, ExecutionSummary, LpExecution, RevenueRow, RevenueTotals, Statement } from "@/lib/api";
 import { formatMinorPlain } from "@/lib/money";
 import { downloadCsv, toCsv } from "@/lib/utils";
 
@@ -18,7 +18,8 @@ const lc = createColumnHelper<LpExecution>();
 const rc = createColumnHelper<RevenueRow>();
 const xc = createColumnHelper<ExecutionRow>();
 const xs = createColumnHelper<ExecutionSummary>();
-type Tab = "trades" | "statements" | "lp" | "execution" | "revenue";
+const fc = createColumnHelper<ClientFlowRow>();
+type Tab = "trades" | "statements" | "lp" | "execution" | "revenue" | "flow";
 
 const pts = (v: number | null | undefined, digits = 1) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(digits)}`);
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
@@ -35,6 +36,7 @@ export default function ReportsPage() {
   const lp = useApiQuery("listLpExecutions", [], { live: 5000 });
   const revenue = useApiQuery("revenue", [], { live: 5000 });
   const execution = useApiQuery("execution", [], { live: 5000 });
+  const flow = useApiQuery("clientFlow", [], { live: 10000, enabled: tab === "flow" });
 
   const execCols = [
     xc.accessor("at", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
@@ -109,6 +111,19 @@ export default function ReportsPage() {
     </>
   );
 
+  const flowCols = [
+    fc.accessor("login", { header: t("clients.login") }),
+    fc.accessor("name", { header: t("clients.name"), cell: (c) => c.getValue() ?? "—" }),
+    fc.accessor("group", { header: t("clients.group") }),
+    fc.accessor("trades", { header: t("flow.trades") }),
+    fc.accessor("avgHoldSecs", { header: t("flow.avgHold"), cell: (c) => { const v = c.getValue(); return v < 120 ? `${Math.round(v)} s` : v < 7200 ? `${Math.round(v / 60)} min` : `${(v / 3600).toFixed(1)} h`; } }),
+    fc.accessor("shortHoldPct", { header: t("flow.shortHold"), cell: (c) => `${c.getValue().toFixed(0)}%` }),
+    fc.accessor("winRate", { header: t("flow.winRate"), cell: (c) => `${c.getValue().toFixed(0)}%` }),
+    fc.accessor("realisedPnl", { header: t("flow.realised"), cell: (c) => <Pnl value={c.getValue()}>{f.num(c.getValue(), 2)} {c.row.original.currency}</Pnl> }),
+    fc.accessor("brokerPnl", { header: t("flow.broker"), cell: (c) => <Pnl value={c.getValue()}>{f.num(c.getValue(), 2)} {c.row.original.currency}</Pnl> }),
+    fc.accessor("avgSlipGainPoints", { header: t("flow.slipGain"), cell: (c) => c.getValue().toFixed(2) }),
+    fc.accessor("toxicity", { header: t("flow.toxicity"), cell: (c) => <ToxicityBadge score={c.getValue()} /> }),
+  ];
   const tradeCols = [
     tc.accessor("closedAt", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
     tc.accessor("login", { header: t("clients.login") }),
@@ -156,7 +171,7 @@ export default function ReportsPage() {
         {actor.can("reports.export") && <Button variant="outline" onClick={exportCsv} data-testid="export-csv"><Download className="h-4 w-4" />{t("common.export")}</Button>}
       </PageHeader>
       <div className="mb-3">
-        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }]} />
+        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }, { value: "flow", label: t("reports.flow") }]} />
       </div>
       {tab === "trades" && <DataTable data={trades.data ?? []} columns={tradeCols} getRowId={(x) => x.id} />}
       {tab === "statements" && <DataTable data={statements.data ?? []} columns={stmtCols} getRowId={(x) => String(x.login)} />}
@@ -167,6 +182,12 @@ export default function ReportsPage() {
           <h3 className="mb-1 text-sm font-medium">{t("reports.bySymbol")}</h3>
           <div className="mb-4"><DataTable data={execution.data?.bySymbol ?? []} columns={sumCols} getRowId={(x) => x.symbol} /></div>
           <DataTable data={execution.data?.rows ?? []} columns={execCols} getRowId={(x) => x.id} />
+        </div>
+      )}
+      {tab === "flow" && (
+        <div data-testid="flow-report">
+          <p className="mb-2 text-xs text-muted-foreground">{t("reports.flowHint")}</p>
+          <DataTable data={flow.data ?? []} columns={flowCols} getRowId={(x) => String(x.login)} />
         </div>
       )}
       {tab === "revenue" && (

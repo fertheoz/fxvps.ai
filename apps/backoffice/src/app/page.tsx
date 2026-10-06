@@ -54,17 +54,17 @@ export default function DashboardPage() {
         <Stat label={t("dash.lpHealth")} value={s ? `${s.lpUp} / ${s.lpTotal}` : "…"} sub={d ? `p95 ${Math.round(d.execution.p95LatencyMs)} ms · ${t("reports.avgSlip")} ${d.execution.avgClientSlipPts.toFixed(2)}` : undefined} tone={s && s.lpUp < s.lpTotal ? "down" : "up"} />
       </div>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-3">
-        <Card className="xl:col-span-2">
+      <div className="mt-4 grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-3">
+        <Card className="min-w-0 overflow-hidden xl:col-span-2">
           <CardHeader><CardTitle>{t("dash.revenueChart")}</CardTitle></CardHeader>
           <CardContent>{d ? <RevenueChart data={d.buckets} fmt={compact} labels={[t("reports.markup"), t("reports.commission"), t("reports.bBook")]} /> : t("common.loading")}</CardContent>
         </Card>
-        <Card>
+        <Card className="min-w-0 overflow-hidden">
           <CardHeader><CardTitle>{t("dash.volumeChart")}</CardTitle></CardHeader>
           <CardContent>{d ? <VolumeChart data={d.buckets} labels={[t("positions.lots"), t("dash.orders"), t("reports.rejectRate")]} /> : t("common.loading")}</CardContent>
         </Card>
 
-        <Card className="xl:col-span-2">
+        <Card className="min-w-0 overflow-hidden xl:col-span-2">
           <CardHeader><CardTitle>{t("dash.exposure")}</CardTitle></CardHeader>
           <CardContent>{exp.data ? <ExposureChart data={exp.data} fmt={compact} /> : t("common.loading")}</CardContent>
         </Card>

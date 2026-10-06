@@ -102,6 +102,11 @@ pub struct RoutingRule {
     pub max_slippage_points: Option<i64>,
     #[serde(default)]
     pub partial_fill: Option<PartialFill>,
+    /// Client toxicity window `[min, max]` (0..100, see [`FlowStats::toxicity`]).
+    #[serde(default)]
+    pub min_toxicity: Option<u8>,
+    #[serde(default)]
+    pub max_toxicity: Option<u8>,
 }
 
 impl RoutingRule {
@@ -114,8 +119,14 @@ impl RoutingRule {
         centilots: i64,
         pending: bool,
         hour_utc: u8,
+        toxicity: u8,
     ) -> bool {
         if !self.enabled {
+            return false;
+        }
+        if self.min_toxicity.is_some_and(|m| toxicity < m)
+            || self.max_toxicity.is_some_and(|m| toxicity > m)
+        {
             return false;
         }
         if !self.groups.is_empty() && !self.groups.iter().any(|g| g == group) {
@@ -754,6 +765,201 @@ pub fn liquidation_order<Id: Ord + Copy>(items: &[(Id, Money)]) -> Vec<Id> {
 /// Amount to credit back so a negative balance returns to zero.
 pub fn negative_balance_compensation(group: &GroupConfig, balance: Money) -> Option<Money> {
     (group.negative_balance_protection && balance.is_negative()).then(|| balance.abs())
+}
+
+// ---------------------------------------------------------------------------
+// Stage 7: client flow profile and B-book exposure / auto-hedge policy
+// ---------------------------------------------------------------------------
+
+/// Per-client flow statistics the engine keeps from fills and closing deals.
+/// Feeds the toxicity score (rule-engine input and console profile).
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowStats {
+    /// Closing deals.
+    pub trades: u64,
+    /// Closing deals of positions held less than 60 s.
+    pub short_holds: u64,
+    pub wins: u64,
+    pub hold_secs_sum: u64,
+    /// Client realised P&L (minor units of the account currency).
+    pub pnl_minor: i128,
+    /// Our result on those deals (markup / B-book), minor units.
+    pub broker_pnl_minor: i128,
+    /// Fills with a requested price.
+    pub fills: u64,
+    /// Σ (requested − fill) × side / point: positive = the client got a
+    /// better price than requested (latency arbitrage captures improvements).
+    pub slip_gain_points_sum: i64,
+}
+
+impl FlowStats {
+    pub const SHORT_HOLD_SECS: u64 = 60;
+    /// Below this many closed trades the score is 0 (not enough evidence).
+    pub const MIN_TRADES: u64 = 5;
+
+    pub fn record_fill(&mut self, gain_points: i64) {
+        self.fills += 1;
+        self.slip_gain_points_sum = self.slip_gain_points_sum.saturating_add(gain_points);
+    }
+
+    pub fn record_close(&mut self, hold_secs: u64, pnl_minor: i128, broker_pnl_minor: i128) {
+        self.trades += 1;
+        if hold_secs < Self::SHORT_HOLD_SECS {
+            self.short_holds += 1;
+        }
+        if pnl_minor > 0 {
+            self.wins += 1;
+        }
+        self.hold_secs_sum = self.hold_secs_sum.saturating_add(hold_secs);
+        self.pnl_minor += pnl_minor;
+        self.broker_pnl_minor += broker_pnl_minor;
+    }
+
+    pub fn short_hold_ratio(&self) -> f64 {
+        if self.trades == 0 {
+            0.0
+        } else {
+            self.short_holds as f64 / self.trades as f64
+        }
+    }
+
+    pub fn win_rate(&self) -> f64 {
+        if self.trades == 0 {
+            0.0
+        } else {
+            self.wins as f64 / self.trades as f64
+        }
+    }
+
+    pub fn avg_hold_secs(&self) -> f64 {
+        if self.trades == 0 {
+            0.0
+        } else {
+            self.hold_secs_sum as f64 / self.trades as f64
+        }
+    }
+
+    pub fn avg_slip_gain_points(&self) -> f64 {
+        if self.fills == 0 {
+            0.0
+        } else {
+            self.slip_gain_points_sum as f64 / self.fills as f64
+        }
+    }
+
+    /// 0..100 toxic-flow score: 45 % short holds (scalping), 30 % win rate
+    /// above 50 %, 25 % captured price improvement (≥ 5 points = max).
+    pub fn toxicity(&self) -> u8 {
+        if self.trades < Self::MIN_TRADES {
+            return 0;
+        }
+        let short = self.short_hold_ratio();
+        let win = ((self.win_rate() - 0.5) * 2.0).clamp(0.0, 1.0);
+        let gain = (self.avg_slip_gain_points() / 5.0).clamp(0.0, 1.0);
+        (45.0 * short + 30.0 * win + 25.0 * gain)
+            .round()
+            .clamp(0.0, 100.0) as u8
+    }
+}
+
+/// What happens when B-book exposure exceeds a limit.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HedgeMode {
+    /// New risk-increasing orders of the symbol go A-book while over the limit.
+    #[default]
+    SwitchToABook,
+    /// Keep the client flow B-book and hedge the excess at the LP (omnibus
+    /// hedge book, unwound when exposure falls back under `release_pct`).
+    HedgeExcess,
+}
+
+/// B-book exposure limits and the automatic hedge (console: Risk → Hedge).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HedgePolicy {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mode: HedgeMode,
+    /// |net B-book lots| per symbol; `None` = no symbol limit.
+    #[serde(default)]
+    pub default_symbol_limit: Option<Qty>,
+    #[serde(default)]
+    pub symbol_limits: BTreeMap<String, Qty>,
+    /// Σ |net B-book lots| over all symbols.
+    #[serde(default)]
+    pub total_limit: Option<Qty>,
+    /// |net B-book lots| of one client on one symbol (SwitchToABook only).
+    #[serde(default)]
+    pub account_limit: Option<Qty>,
+    /// HedgeExcess: share of the excess that is hedged.
+    #[serde(default = "hundred")]
+    pub hedge_ratio_pct: u8,
+    /// HedgeExcess: the hedge is unwound once |net| ≤ limit × release %.
+    #[serde(default = "eighty")]
+    pub release_pct: u8,
+}
+
+fn hundred() -> u8 {
+    100
+}
+fn eighty() -> u8 {
+    80
+}
+
+impl Default for HedgePolicy {
+    fn default() -> HedgePolicy {
+        HedgePolicy {
+            enabled: false,
+            mode: HedgeMode::SwitchToABook,
+            default_symbol_limit: None,
+            symbol_limits: BTreeMap::new(),
+            total_limit: None,
+            account_limit: None,
+            hedge_ratio_pct: 100,
+            release_pct: 80,
+        }
+    }
+}
+
+impl HedgePolicy {
+    pub fn symbol_limit(&self, symbol: &str) -> Option<Qty> {
+        self.symbol_limits
+            .get(symbol)
+            .copied()
+            .or(self.default_symbol_limit)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        let pos = |q: Option<Qty>, what: &str| {
+            if q.is_some_and(|q| q.raw() <= 0) {
+                Err(format!("{what} must be positive"))
+            } else {
+                Ok(())
+            }
+        };
+        pos(self.default_symbol_limit, "defaultSymbolLimit")?;
+        pos(self.total_limit, "totalLimit")?;
+        pos(self.account_limit, "accountLimit")?;
+        if self.symbol_limits.len() > 500 {
+            return Err("too many symbol limits".into());
+        }
+        for (s, q) in &self.symbol_limits {
+            if s.is_empty() || s.len() > 16 {
+                return Err("symbol name 1..16 characters".into());
+            }
+            pos(Some(*q), "symbol limit")?;
+        }
+        if self.hedge_ratio_pct == 0 || self.hedge_ratio_pct > 100 {
+            return Err("hedgeRatioPct must be 1..100".into());
+        }
+        if self.release_pct > 100 {
+            return Err("releasePct must be 0..100".into());
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

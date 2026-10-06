@@ -51,6 +51,8 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/positions/force-close", post(force_close))
         .route("/v1/risk/margin-calls", get(margin_calls))
         .route("/v1/risk/presets", get(presets))
+        .route("/v1/risk/hedge", get(hedge_get).put(hedge_put))
+        .route("/v1/reports/clients", get(client_flow))
         .route("/v1/lp/sessions", get(lp_sessions))
         .route("/v1/lp/config", get(lp_config_get).put(lp_config_put))
         .route("/v1/lp/sessions/{id}/reconnect", post(lp_reconnect))
@@ -890,6 +892,9 @@ async fn save_rules(
         if r.hours_utc.is_some_and(|(a, b)| a > 23 || b > 24) {
             return Err(ApiError::bad("hoursUtc must be within 0..24"));
         }
+        if r.min_toxicity.is_some_and(|t| t > 100) || r.max_toxicity.is_some_and(|t| t > 100) {
+            return Err(ApiError::bad("toxicity must be 0..100"));
+        }
     }
     let n = rules.len();
     let mut store = ctx.store.lock().await;
@@ -1373,6 +1378,42 @@ async fn force_close(
     topics.push("listAudit");
     ctx.notify(&topics);
     Ok(Json(json!({ "closed": closed })))
+}
+
+async fn hedge_get(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "risk.view")?;
+    Ok(Json(ctx.q(views::hedge_policy).await?))
+}
+
+async fn hedge_put(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(policy): Json<risk::HedgePolicy>,
+) -> ApiResult {
+    need(&actor, "risk.edit")?;
+    policy.validate().map_err(ApiError::bad)?;
+    let details = format!(
+        "{} {:?} symbol={:?} total={:?} account={:?} ratio={}% release={}%",
+        if policy.enabled { "on" } else { "off" },
+        policy.mode,
+        policy.default_symbol_limit.map(|q| q.raw() as f64 / 1e8),
+        policy.total_limit.map(|q| q.raw() as f64 / 1e8),
+        policy.account_limit.map(|q| q.raw() as f64 / 1e8),
+        policy.hedge_ratio_pct,
+        policy.release_pct
+    );
+    let mut store = ctx.store.lock().await;
+    ctx.cmd(Command::SetHedge(policy)).await?;
+    store.append(&actor, AdminCmd::HedgeSaved { details })?;
+    drop(store);
+    ctx.notify(&["hedgePolicy", "exposure", "listAudit"]);
+    Ok(Json(ctx.q(views::hedge_policy).await?))
+}
+
+async fn client_flow(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "reports.view")?;
+    let st = ctx.view_state().await;
+    Ok(Json(ctx.q(move |e| views::client_flow(e, &st)).await?))
 }
 
 async fn margin_calls(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

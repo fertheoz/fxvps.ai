@@ -21,6 +21,45 @@ export interface SymbolExposure {
   bBookLots: number;
   /** LP-side net lots (hedge); mismatch with aBookLots raises an alert. */
   lpLots: number;
+  /** Broker hedge of the B-book excess at the LP (stage 7). */
+  hedgeLots?: number;
+  hedgePendingLots?: number;
+  unhedgedBLots?: number;
+  limitLots?: number | null;
+  overLimit?: boolean;
+  hedgeRealized?: number;
+  hedgeCurrency?: string | null;
+}
+
+export type HedgeMode = "switch_to_a_book" | "hedge_excess";
+export const HEDGE_MODES: readonly HedgeMode[] = ["switch_to_a_book", "hedge_excess"];
+
+/** B-book exposure limits / auto-hedge (lots as numbers; raw 1e8 on the wire). */
+export interface HedgePolicy {
+  enabled: boolean;
+  mode: HedgeMode;
+  defaultSymbolLimit: number | null;
+  symbolLimits: Record<string, number>;
+  totalLimit: number | null;
+  accountLimit: number | null;
+  hedgeRatioPct: number;
+  releasePct: number;
+}
+
+export interface ClientFlowRow {
+  login: number;
+  name: string | null;
+  group: string;
+  currency: string;
+  trades: number;
+  fills: number;
+  avgHoldSecs: number;
+  shortHoldPct: number;
+  winRate: number;
+  realisedPnl: number;
+  brokerPnl: number;
+  avgSlipGainPoints: number;
+  toxicity: number;
 }
 
 export interface DashboardStats {
@@ -92,6 +131,9 @@ export interface RoutingRule {
   markupPoints: number | null;
   maxSlippagePoints: number | null;
   partialFill: "CancelRemainder" | "AllOrNone" | { Retry: { max_attempts: number } } | null;
+  /** Client toxicity window 0..100 (stage 7 flow profile); null = any. */
+  minToxicity: number | null;
+  maxToxicity: number | null;
 }
 
 export interface RulesDryRun {
@@ -265,6 +307,10 @@ export interface AdminApi {
   dashboard(): Promise<DashboardStats>;
   dashboardSeries(range: DashboardRange): Promise<DashboardSeries>;
   exposure(): Promise<SymbolExposure[]>;
+  hedgePolicy(): Promise<HedgePolicy>;
+  saveHedgePolicy(p: HedgePolicy, actor: Actor): Promise<HedgePolicy>;
+  /** Per-client flow profile with the toxicity score the rules use. */
+  clientFlow(): Promise<ClientFlowRow[]>;
 
   listClients(q?: ListQuery): Promise<Client[]>;
   getClient(id: string): Promise<Client | null>;

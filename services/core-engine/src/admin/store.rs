@@ -177,6 +177,10 @@ pub enum AdminCmd {
     AggregationSaved {
         cfg: crate::lp_agg::AggConfig,
     },
+    /// B-book exposure / auto-hedge policy (lives in the engine journal).
+    HedgeSaved {
+        details: String,
+    },
     AccountGroupSet {
         account: u64,
         group: String,
@@ -359,6 +363,9 @@ impl AdminState {
             }
             AdminCmd::LpConfigSaved { details } => {
                 self.audit(r, "lp.config".into(), "fix-gateway".into(), details.clone())
+            }
+            AdminCmd::HedgeSaved { details } => {
+                self.audit(r, "risk.hedge".into(), "engine".into(), details.clone())
             }
             AdminCmd::AggregationSaved { cfg } => {
                 self.aggregation = Some(cfg.clone());

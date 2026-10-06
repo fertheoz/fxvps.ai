@@ -5,7 +5,7 @@ import { createColumnHelper } from "@tanstack/react-table";
 import { ArrowLeft } from "lucide-react";
 import { DataTable } from "@/components/ui/data-table";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, PageHeader, Pnl, Select, Stat, Tabs } from "@/components/ui/primitives";
-import { BookBadge, KycBadge, marginLevel, SideBadge, StatusBadge } from "@/components/badges";
+import { BookBadge, KycBadge, marginLevel, SideBadge, StatusBadge, ToxicityBadge } from "@/components/badges";
 import { BalanceOps } from "@/components/balance-ops";
 import { api, useApiMutation, useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
@@ -48,6 +48,7 @@ export default function ClientCardPage() {
   const execution = useApiQuery("execution", [], { live: 10000 });
   const audit = useApiQuery("listAudit", [], { live: 15000 });
   const groups = useApiQuery("listGroups", []);
+  const flow = useApiQuery("clientFlow", [], { live: 15000 });
   const client = (clients.data ?? []).find((c) => c.login === login) ?? null;
   const subs = client ? (clients.data ?? []).filter((c) => c.parentId === client.id) : [];
   const kycMut = useApiMutation((k: Client["kyc"]) => api().setKyc(client!.id, k, actor));
@@ -165,6 +166,7 @@ export default function ClientCardPage() {
         <KycBadge kyc={client.kyc} />
         <Badge tone="muted">{client.group}</Badge>
         <Badge tone="muted">1:{client.leverage}</Badge>
+        {(() => { const fl = (flow.data ?? []).find((r) => r.login === client.login); return fl ? <span className="flex items-center gap-1 text-xs text-muted-foreground">{t("flow.toxicity")} <ToxicityBadge score={fl.toxicity} /></span> : null; })()}
         <span className="text-muted-foreground">{client.email} · {client.country} · {t("clients.lastIp")} {client.lastIp}</span>
         {client.parentId && <Badge tone="muted">{t("card.subOf")} {(clients.data ?? []).find((c) => c.id === client.parentId)?.login}</Badge>}
       </div>
