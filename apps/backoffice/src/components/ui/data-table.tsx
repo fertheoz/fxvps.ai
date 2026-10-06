@@ -2,12 +2,46 @@
 import * as React from "react";
 import {
   flexRender, getCoreRowModel, getFilteredRowModel, getPaginationRowModel, getSortedRowModel, useReactTable,
-  type ColumnDef, type RowSelectionState, type SortingState,
+  type ColumnDef, type ColumnFiltersState, type FilterFn, type RowSelectionState, type SortingState, type VisibilityState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Filter, X } from "lucide-react";
 import { Button, Input } from "./primitives";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/hooks";
+
+/** Columns holding a timestamp (ISO string) get a from/to filter instead of a text one. */
+const isDateColumn = (id: string) => /(^|[a-z])(at|time|date)$/i.test(id) || /^(at|time|date)$/i.test(id);
+
+type DateRange = { from?: string; to?: string };
+
+/** Case-insensitive "contains" on the cell's string form (login numbers, symbols, names…). */
+const textFilter: FilterFn<unknown> = (row, id, value: string) => {
+  const v = row.getValue(id);
+  if (v === null || v === undefined) return false;
+  return String(v).toLowerCase().includes(value.toLowerCase());
+};
+
+/** Inclusive from/to on an ISO timestamp (values from `datetime-local` inputs, local time). */
+const dateRangeFilter: FilterFn<unknown> = (row, id, value: DateRange) => {
+  const raw = row.getValue(id);
+  const ts = typeof raw === "string" || typeof raw === "number" ? new Date(raw).getTime() : NaN;
+  if (Number.isNaN(ts)) return false;
+  if (value.from && ts < new Date(value.from).getTime()) return false;
+  if (value.to && ts > new Date(value.to).getTime()) return false;
+  return true;
+};
+
+const columnId = (c: ColumnDef<unknown, unknown>): string => c.id ?? (c as { accessorKey?: string }).accessorKey ?? "";
+
+function readVisibility(key: string | undefined): VisibilityState {
+  if (!key) return {};
+  try {
+    const raw = localStorage.getItem(`dt:${key}:cols`);
+    return raw ? (JSON.parse(raw) as VisibilityState) : {};
+  } catch {
+    return {};
+  }
+}
 
 export function DataTable<T>({
   data, columns, onRowClick, pageSize = 15, toolbar, selectable, onSelectionChange, getRowId, searchable = true, testId,
@@ -27,10 +61,29 @@ export function DataTable<T>({
   const t = useT();
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [filter, setFilter] = React.useState("");
+  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
+  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(() => readVisibility(testId));
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
+  /** Column whose inline filter editor is open (double-click on its header). */
+  const [editing, setEditing] = React.useState<string | null>(null);
+  const [colsOpen, setColsOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!testId) return;
+    try {
+      localStorage.setItem(`dt:${testId}:cols`, JSON.stringify(columnVisibility));
+    } catch {
+      /* private mode */
+    }
+  }, [columnVisibility, testId]);
 
   const cols = React.useMemo<ColumnDef<T>[]>(() => {
-    if (!selectable) return columns;
+    // Every column gets a filter: a date range on timestamp columns, "contains" elsewhere.
+    const withFilters = columns.map((c) => ({
+      ...c,
+      filterFn: c.filterFn ?? (isDateColumn(columnId(c as ColumnDef<unknown, unknown>)) ? "dateRange" : "text"),
+    })) as ColumnDef<T>[];
+    if (!selectable) return withFilters;
     return [
       {
         id: "_select",
@@ -41,17 +94,22 @@ export function DataTable<T>({
           <input type="checkbox" aria-label="select row" checked={row.getIsSelected()} onClick={(e) => e.stopPropagation()} onChange={row.getToggleSelectedHandler()} />
         ),
         enableSorting: false,
+        enableColumnFilter: false,
+        enableHiding: false,
       },
-      ...columns,
+      ...withFilters,
     ];
   }, [columns, selectable]);
 
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
     data, columns: cols, getRowId,
-    state: { sorting, globalFilter: filter, rowSelection },
+    state: { sorting, globalFilter: filter, columnFilters, columnVisibility, rowSelection },
+    filterFns: { text: textFilter as FilterFn<T>, dateRange: dateRangeFilter as FilterFn<T> },
     onSortingChange: setSorting,
     onGlobalFilterChange: setFilter,
+    onColumnFiltersChange: setColumnFilters,
+    onColumnVisibilityChange: setColumnVisibility,
     onRowSelectionChange: (updater) => {
       const next = typeof updater === "function" ? updater(rowSelection) : updater;
       setRowSelection(next);
@@ -66,6 +124,20 @@ export function DataTable<T>({
     autoResetPageIndex: false,
   });
 
+  const headerText = (id: string) => {
+    const h = table.getColumn(id)?.columnDef.header;
+    return typeof h === "string" ? h : id;
+  };
+  const activeFilters = columnFilters.filter((f) => {
+    const v = f.value as string | DateRange | undefined;
+    return typeof v === "string" ? v !== "" : !!(v && (v.from || v.to));
+  });
+  const describe = (v: unknown) => {
+    if (typeof v === "string") return v;
+    const r = v as DateRange;
+    return `${r.from ? r.from.replace("T", " ") : "…"} → ${r.to ? r.to.replace("T", " ") : "…"}`;
+  };
+
   const rows = table.getRowModel().rows;
   return (
     <div className="grid gap-2" data-testid={testId}>
@@ -73,6 +145,40 @@ export function DataTable<T>({
         <div className="flex flex-wrap items-center gap-2">
           {searchable && <Input placeholder={t("common.search")} value={filter} onChange={(e) => setFilter(e.target.value)} className="max-w-xs" />}
           {toolbar}
+          <div className="relative ml-auto">
+            <Button size="sm" variant="outline" onClick={() => setColsOpen((o) => !o)} data-testid="dt-columns" title={t("common.columns")}>
+              <Columns3 className="h-4 w-4" />
+              {t("common.columns")}
+            </Button>
+            {colsOpen && (
+              <div className="absolute right-0 z-20 mt-1 grid min-w-[12rem] gap-1 rounded-md border border-border bg-card p-2 text-sm shadow-lg" onMouseLeave={() => setColsOpen(false)}>
+                {table.getAllLeafColumns().filter((c) => c.getCanHide()).map((c) => (
+                  <label key={c.id} className="flex items-center gap-2 px-1 py-0.5">
+                    <input type="checkbox" checked={c.getIsVisible()} onChange={c.getToggleVisibilityHandler()} />
+                    {headerText(c.id)}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {activeFilters.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 text-xs" data-testid="dt-filters">
+          <Filter className="h-3 w-3 text-muted-foreground" />
+          {activeFilters.map((f) => (
+            <button key={f.id} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-2 py-0.5 hover:bg-muted" onClick={() => setEditing(f.id)} title={t("common.editFilter")}>
+              <span className="text-muted-foreground">{headerText(f.id)}:</span> {describe(f.value)}
+              <X
+                className="h-3 w-3"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  table.getColumn(f.id)?.setFilterValue(undefined);
+                }}
+              />
+            </button>
+          ))}
+          <button className="px-1 text-muted-foreground hover:text-foreground" onClick={() => table.resetColumnFilters()}>{t("common.clearFilters")}</button>
         </div>
       )}
       <div className="overflow-x-auto rounded-lg border border-border bg-card">
@@ -80,16 +186,65 @@ export function DataTable<T>({
           <thead className="bg-muted/50 text-xs text-muted-foreground">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
-                {hg.headers.map((h) => (
-                  <th key={h.id} className="whitespace-nowrap px-3 py-2 text-left font-medium">
-                    {h.isPlaceholder ? null : h.column.getCanSort() ? (
-                      <button className="inline-flex items-center gap-1 cursor-pointer" onClick={h.column.getToggleSortingHandler()}>
-                        {flexRender(h.column.columnDef.header, h.getContext())}
-                        {h.column.getIsSorted() === "asc" ? <ArrowUp className="h-3 w-3" /> : h.column.getIsSorted() === "desc" ? <ArrowDown className="h-3 w-3" /> : null}
-                      </button>
-                    ) : flexRender(h.column.columnDef.header, h.getContext())}
-                  </th>
-                ))}
+                {hg.headers.map((h) => {
+                  const canFilter = h.column.getCanFilter() && h.column.id !== "_select";
+                  const value = h.column.getFilterValue();
+                  const active = typeof value === "string" ? value !== "" : !!(value && ((value as DateRange).from || (value as DateRange).to));
+                  return (
+                    <th
+                      key={h.id}
+                      className={cn("relative whitespace-nowrap px-3 py-2 text-left font-medium", active && "text-foreground")}
+                      onDoubleClick={canFilter ? () => setEditing(editing === h.column.id ? null : h.column.id) : undefined}
+                      title={canFilter ? t("common.dblClickFilter") : undefined}
+                    >
+                      {h.isPlaceholder ? null : h.column.getCanSort() ? (
+                        <button
+                          className="inline-flex items-center gap-1 cursor-pointer"
+                          onClick={(e) => {
+                            // A double-click opens the filter; don't flip the sort twice on the way.
+                            if (e.detail > 1) return;
+                            h.column.getToggleSortingHandler()?.(e);
+                          }}
+                        >
+                          {flexRender(h.column.columnDef.header, h.getContext())}
+                          {h.column.getIsSorted() === "asc" ? <ArrowUp className="h-3 w-3" /> : h.column.getIsSorted() === "desc" ? <ArrowDown className="h-3 w-3" /> : null}
+                          {active && <Filter className="h-3 w-3 text-primary" />}
+                        </button>
+                      ) : flexRender(h.column.columnDef.header, h.getContext())}
+                      {editing === h.column.id && (
+                        <div className="absolute left-0 top-full z-20 mt-1 grid gap-1 rounded-md border border-border bg-card p-2 shadow-lg" data-testid={`dt-filter-${h.column.id}`} onDoubleClick={(e) => e.stopPropagation()}>
+                          {isDateColumn(h.column.id) ? (
+                            <>
+                              <label className="grid gap-0.5 text-[11px]">
+                                {t("common.from")}
+                                <input type="datetime-local" className="rounded border border-border bg-background px-1 py-0.5 text-xs" value={(value as DateRange | undefined)?.from ?? ""} onChange={(e) => h.column.setFilterValue({ ...((value as DateRange) ?? {}), from: e.target.value })} />
+                              </label>
+                              <label className="grid gap-0.5 text-[11px]">
+                                {t("common.to")}
+                                <input type="datetime-local" className="rounded border border-border bg-background px-1 py-0.5 text-xs" value={(value as DateRange | undefined)?.to ?? ""} onChange={(e) => h.column.setFilterValue({ ...((value as DateRange) ?? {}), to: e.target.value })} />
+                              </label>
+                            </>
+                          ) : (
+                            <input
+                              autoFocus
+                              className="w-40 rounded border border-border bg-background px-1 py-0.5 text-xs"
+                              placeholder={t("common.filterValue")}
+                              value={(value as string | undefined) ?? ""}
+                              onChange={(e) => h.column.setFilterValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === "Escape") setEditing(null);
+                              }}
+                            />
+                          )}
+                          <div className="flex justify-between gap-2 text-[11px]">
+                            <button className="text-muted-foreground hover:text-foreground" onClick={() => h.column.setFilterValue(undefined)}>{t("common.clear")}</button>
+                            <button className="text-primary" onClick={() => setEditing(null)}>{t("common.done")}</button>
+                          </div>
+                        </div>
+                      )}
+                    </th>
+                  );
+                })}
               </tr>
             ))}
           </thead>

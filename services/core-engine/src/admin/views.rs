@@ -400,6 +400,172 @@ pub fn trades(e: &Engine) -> Value {
     Value::Array(rows)
 }
 
+/// Per-symbol accumulator of the execution-quality report.
+#[derive(Default)]
+struct ExecAgg {
+    orders: u32,
+    filled: u32,
+    partial: u32,
+    rejected: u32,
+    slips: Vec<f64>,
+    improved: u32,
+    capture_sum: f64,
+    capture_n: u32,
+    latency_sum_ms: f64,
+    latency_n: u32,
+}
+
+impl ExecAgg {
+    fn json(&self, symbol: &str) -> Value {
+        let mut s = self.slips.clone();
+        s.sort_by(|a, b| a.total_cmp(b));
+        let avg = |v: &[f64]| {
+            if v.is_empty() {
+                0.0
+            } else {
+                v.iter().sum::<f64>() / v.len() as f64
+            }
+        };
+        let p95 = if s.is_empty() {
+            0.0
+        } else {
+            s[((s.len() - 1) as f64 * 0.95).round() as usize]
+        };
+        let rate = |n: u32| {
+            if self.orders == 0 {
+                0.0
+            } else {
+                f64::from(n) / f64::from(self.orders)
+            }
+        };
+        json!({
+            "symbol": symbol,
+            "orders": self.orders,
+            "fillRate": rate(self.filled + self.partial),
+            "partialRate": rate(self.partial),
+            "rejectRate": rate(self.rejected),
+            "avgSlipPts": avg(&s),
+            "p95SlipPts": p95,
+            "improvedRate": if s.is_empty() { 0.0 } else { f64::from(self.improved) / s.len() as f64 },
+            "avgCapturePts": if self.capture_n == 0 { 0.0 } else { self.capture_sum / f64::from(self.capture_n) },
+            "avgLatencyMs": if self.latency_n == 0 { 0.0 } else { self.latency_sum_ms / f64::from(self.latency_n) },
+        })
+    }
+}
+
+/// Execution quality: one row per client order that reached a terminal state
+/// (newest first, capped), with the client's slippage against the price it
+/// asked for (points, positive = worse for the client), the LP leg behind it
+/// (average price, time to first fill, number of fills) and the difference we
+/// captured between the client and LP prices. Plus a per-symbol summary.
+pub fn execution(e: &Engine) -> Value {
+    let mut lp_of: BTreeMap<oms::OrderId, &oms::LpOrder> = BTreeMap::new();
+    for l in e.lp_orders() {
+        for c in &l.children {
+            lp_of.insert(*c, l);
+        }
+    }
+    let points: BTreeMap<&str, f64> = e
+        .symbols()
+        .map(|s| (s.symbol.as_str(), price_f(s.point())))
+        .collect();
+    let mut by_symbol: BTreeMap<String, ExecAgg> = BTreeMap::new();
+    let mut rows: Vec<Value> = Vec::new();
+    for o in e.orders() {
+        if !matches!(
+            o.status,
+            OrderStatus::Filled | OrderStatus::PartiallyFilled | OrderStatus::Rejected
+        ) {
+            continue;
+        }
+        let point = points.get(o.req.symbol.as_str()).copied().unwrap_or(0.0);
+        let sign = if o.req.side == Side::Buy { 1.0 } else { -1.0 };
+        let requested = o.req.requested_price.or(o.req.limit_price).map(price_f);
+        let filled = o.filled.raw() > 0;
+        let fill = filled.then(|| price_f(o.avg_price));
+        let slip = match (requested, fill) {
+            (Some(r), Some(f)) if point > 0.0 => Some(sign * (f - r) / point),
+            _ => None,
+        };
+        let lp = lp_of.get(&o.id).copied();
+        let lp_avg = lp.and_then(|l| {
+            let (mut lots, mut notional) = (0f64, 0f64);
+            for f in &l.fills {
+                lots += qty_f(f.volume);
+                notional += qty_f(f.volume) * price_f(f.price);
+            }
+            (lots > 0.0).then_some(notional / lots)
+        });
+        let capture = match (fill, lp_avg) {
+            (Some(f), Some(l)) if point > 0.0 => Some(sign * (f - l) / point),
+            _ => None,
+        };
+        let latency_ms = lp.and_then(|l| {
+            l.fills
+                .iter()
+                .map(|f| f.ts)
+                .min()
+                .map(|t| t.saturating_sub(l.created_ts) as f64 / 1e6)
+        });
+        let agg = by_symbol.entry(o.req.symbol.clone()).or_default();
+        agg.orders += 1;
+        match o.status {
+            OrderStatus::Filled => agg.filled += 1,
+            OrderStatus::PartiallyFilled => agg.partial += 1,
+            _ => agg.rejected += 1,
+        }
+        if let Some(s) = slip {
+            agg.slips.push(s);
+            if s < 0.0 {
+                agg.improved += 1;
+            }
+        }
+        if let Some(c) = capture {
+            agg.capture_sum += c;
+            agg.capture_n += 1;
+        }
+        if let Some(ms) = latency_ms {
+            agg.latency_sum_ms += ms;
+            agg.latency_n += 1;
+        }
+        rows.push(json!({
+            "id": o.id.to_string(),
+            "at": iso(o.created_ts),
+            "login": o.req.account,
+            "symbol": o.req.symbol,
+            "side": side_str(o.req.side),
+            "type": match o.req.order_type {
+                OrderType::Market => "market",
+                OrderType::Limit => "limit",
+                OrderType::Stop => "stop",
+                OrderType::StopLimit => "stop_limit",
+            },
+            "lots": qty_f(o.req.volume),
+            "filledLots": qty_f(o.filled),
+            "status": match o.status {
+                OrderStatus::Filled => "filled",
+                OrderStatus::PartiallyFilled => "partial",
+                _ => "rejected",
+            },
+            "reason": o.reject_reason,
+            "book": if lp.is_some() { "A" } else { book(o.routing) },
+            "requested": requested,
+            "fill": fill,
+            "clientSlipPts": slip,
+            "lpPrice": lp_avg,
+            "capturePts": capture,
+            "lpLatencyMs": latency_ms,
+            "lpFills": lp.map_or(0, |l| l.fills.len()),
+            "lpStatus": lp.map(|l| if l.reject_reason.is_some() { "rejected" } else if l.done { "filled" } else { "working" }),
+            "rearmed": o.rearm_px.is_some(),
+        }));
+    }
+    rows.reverse();
+    rows.truncate(1000);
+    let summary: Vec<Value> = by_symbol.iter().map(|(s, a)| a.json(s)).collect();
+    json!({ "rows": rows, "bySymbol": summary })
+}
+
 /// Orders sent to the LP with their executions and the client orders they were
 /// allocated to, newest first.
 pub fn lp_executions(e: &Engine) -> Value {
