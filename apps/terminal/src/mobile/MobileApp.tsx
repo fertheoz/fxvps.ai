@@ -21,6 +21,7 @@ import { useSession } from '../store/session';
 import { bulkTargets, selectActiveAccount, selectHistory, selectOrders, selectPositions, useTerminal } from '../store/terminal';
 import { ChartAttribution, ChartPanel } from '../components/ChartPanel';
 import { ObjectList } from '../components/ObjectList';
+import { IndicatorSettings } from '../components/IndicatorSettings';
 import { OrderTicket } from '../components/OrderTicket';
 
 /** Phone layout: one view at a time, bottom tab bar, order ticket as a bottom sheet. */
@@ -460,6 +461,10 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
             <div className="px-2 pb-4 text-[14px]">
               <div className="px-3 pb-1 text-[11px] uppercase tracking-wider text-muted">{t('obj.objects')}</div>
               <ObjectList symbol={slot.symbol} />
+            </div>
+            <div className="px-5 pb-4">
+              <div className="pb-2 text-[11px] uppercase tracking-wider text-muted">{t('ind.title')}</div>
+              <IndicatorSettings compact />
             </div>
           </div>
         </div>

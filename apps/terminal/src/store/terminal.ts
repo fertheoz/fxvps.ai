@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   Account,
   ChartObjects,
+  ChartTemplate,
   ConnectionState,
   Deal,
   JournalEntry,
@@ -36,6 +37,21 @@ export interface Indicators {
   rsi: boolean;
   volume: boolean;
 }
+
+/** Parameters of the built-in indicators. */
+export interface IndicatorSettings {
+  sma: { period: number; color: string };
+  ema: { period: number; color: string };
+  bollinger: { period: number; dev: number; color: string };
+  rsi: { period: number; color: string };
+}
+
+export const DEFAULT_INDICATOR_SETTINGS: IndicatorSettings = {
+  sma: { period: 20, color: '#f59e0b' },
+  ema: { period: 50, color: '#8b5cf6' },
+  bollinger: { period: 20, dev: 2, color: '#06b6d4' },
+  rsi: { period: 14, color: '#ec4899' },
+};
 
 export interface Toast {
   id: number;
@@ -80,6 +96,7 @@ export interface TerminalState {
   charts: ChartSlot[];
   activeChart: number;
   indicators: Indicators;
+  indicatorSettings: IndicatorSettings;
   /** Draw the ask price as a second line (candles follow the bid). */
   showAskLine: boolean;
   oneClickVolume: number;
@@ -109,6 +126,11 @@ export interface TerminalState {
   setChartTimeframe(tf: Timeframe, index?: number): void;
   setActiveChart(i: number): void;
   toggleIndicator(k: keyof Indicators): void;
+  setIndicatorSettings(patch: Partial<IndicatorSettings>): void;
+  /** Templates live in the account's server-side chart objects. */
+  saveTemplate(name: string): void;
+  applyTemplate(id: string): void;
+  deleteTemplate(id: string): void;
   toggleAskLine(): void;
   setOneClickVolume(v: number): void;
   setToolboxTab(t: ToolboxTab): void;
@@ -166,6 +188,7 @@ export const useTerminal = create<TerminalState>()(
       charts: defaultCharts,
       activeChart: 0,
       indicators: { sma: false, ema: true, bollinger: false, rsi: false, volume: true },
+      indicatorSettings: DEFAULT_INDICATOR_SETTINGS,
       showAskLine: false,
       oneClickVolume: 10,
       toolboxTab: 'positions',
@@ -292,6 +315,43 @@ export const useTerminal = create<TerminalState>()(
       setActiveChart(activeChart) {
         set({ activeChart });
       },
+      setIndicatorSettings(patch) {
+        set({ indicatorSettings: { ...get().indicatorSettings, ...patch } });
+      },
+      saveTemplate(name) {
+        const acc = get().activeAccountId;
+        if (!acc) return;
+        const cur = get().objects[acc] ?? { lines: [], alerts: [], shapes: [] };
+        const tpl: ChartTemplate = {
+          id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+          name,
+          indicators: { ...get().indicators },
+          settings: { ...get().indicatorSettings },
+        };
+        get().setObjects(acc, { ...cur, templates: [...(cur.templates ?? []), tpl] });
+      },
+      applyTemplate(id) {
+        const acc = get().activeAccountId;
+        const tpl = acc ? get().objects[acc]?.templates?.find((x) => x.id === id) : undefined;
+        if (!tpl) return;
+        const d = DEFAULT_INDICATOR_SETTINGS;
+        const s = tpl.settings;
+        set({
+          indicators: { ...get().indicators, ...(tpl.indicators as Partial<Indicators>) },
+          indicatorSettings: {
+            sma: { ...d.sma, ...s.sma },
+            ema: { ...d.ema, ...s.ema },
+            bollinger: { ...d.bollinger, ...s.bollinger },
+            rsi: { ...d.rsi, ...s.rsi },
+          },
+        });
+      },
+      deleteTemplate(id) {
+        const acc = get().activeAccountId;
+        const cur = acc ? get().objects[acc] : undefined;
+        if (!acc || !cur) return;
+        get().setObjects(acc, { ...cur, templates: (cur.templates ?? []).filter((x) => x.id !== id) });
+      },
       toggleAskLine() {
         set({ showAskLine: !get().showAskLine });
       },
@@ -344,6 +404,7 @@ export const useTerminal = create<TerminalState>()(
         layout: s.layout,
         charts: s.charts,
         indicators: s.indicators,
+        indicatorSettings: s.indicatorSettings,
         showAskLine: s.showAskLine,
         oneClickVolume: s.oneClickVolume,
         activeAccountId: s.activeAccountId,

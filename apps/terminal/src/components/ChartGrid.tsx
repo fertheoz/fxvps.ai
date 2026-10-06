@@ -1,17 +1,12 @@
 import { useState } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { ObjectList } from './ObjectList';
+import { IndicatorSettings } from './IndicatorSettings';
 import { useT } from '../hooks';
 import { useTerminal, type ChartLayout, type Indicators } from '../store/terminal';
 import { ChartPanel } from './ChartPanel';
 
-const IND: { key: keyof Indicators; label: string }[] = [
-  { key: 'sma', label: 'SMA 20' },
-  { key: 'ema', label: 'EMA 50' },
-  { key: 'bollinger', label: 'BB 20,2' },
-  { key: 'rsi', label: 'RSI 14' },
-  { key: 'volume', label: 'Vol' },
-];
+const IND: (keyof Indicators)[] = ['sma', 'ema', 'bollinger', 'rsi', 'volume'];
 
 export function ChartGrid() {
   const t = useT();
@@ -19,6 +14,10 @@ export function ChartGrid() {
   const setLayout = useTerminal((s) => s.setLayout);
   const indicators = useTerminal((s) => s.indicators);
   const toggle = useTerminal((s) => s.toggleIndicator);
+  const cfg = useTerminal((s) => s.indicatorSettings);
+  const [indOpen, setIndOpen] = useState(false);
+  const label = (k: keyof Indicators) =>
+    k === 'sma' ? `SMA ${cfg.sma.period}` : k === 'ema' ? `EMA ${cfg.ema.period}` : k === 'bollinger' ? `BB ${cfg.bollinger.period},${cfg.bollinger.dev}` : k === 'rsi' ? `RSI ${cfg.rsi.period}` : 'Vol';
   const askLine = useTerminal((s) => s.showAskLine);
   const toggleAsk = useTerminal((s) => s.toggleAskLine);
   const tool = useTerminal((s) => s.chartTool);
@@ -76,8 +75,22 @@ export function ChartGrid() {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="relative flex items-center gap-1">
           <span className="text-muted">{t('chart.indicators')}</span>
+          <button
+            className="px-1.5 h-5 rounded text-[11px] border border-line text-muted hover:text-fg"
+            onClick={() => setIndOpen((o) => !o)}
+            aria-expanded={indOpen}
+            title={t('ind.title')}
+            data-testid="ind-settings"
+          >
+            ⚙
+          </button>
+          {indOpen && (
+            <div className="absolute top-6 left-0 z-30 w-[360px] rounded-md border border-line bg-panel shadow-xl p-3">
+              <IndicatorSettings />
+            </div>
+          )}
           <button
             aria-pressed={askLine}
             className={`px-1.5 h-5 rounded text-[11px] ${askLine ? 'bg-accent/20 text-accent border border-accent/40' : 'border border-line text-muted hover:text-fg'}`}
@@ -86,14 +99,14 @@ export function ChartGrid() {
           >
             {t('chart.askLine')}
           </button>
-          {IND.map((i) => (
+          {IND.map((k) => (
             <button
-              key={i.key}
-              aria-pressed={indicators[i.key]}
-              className={`px-1.5 h-5 rounded text-[11px] ${indicators[i.key] ? 'bg-accent/20 text-accent border border-accent/40' : 'border border-line text-muted hover:text-fg'}`}
-              onClick={() => toggle(i.key)}
+              key={k}
+              aria-pressed={indicators[k]}
+              className={`px-1.5 h-5 rounded text-[11px] ${indicators[k] ? 'bg-accent/20 text-accent border border-accent/40' : 'border border-line text-muted hover:text-fg'}`}
+              onClick={() => toggle(k)}
             >
-              {i.label}
+              {label(k)}
             </button>
           ))}
         </div>
