@@ -40,7 +40,7 @@ pub mod stack;
 pub type Query = Box<dyn FnOnce(&Engine) -> Value + Send>;
 
 pub enum Request {
-    Cmd(Command, oneshot::Sender<Vec<Event>>),
+    Cmd(Box<Command>, oneshot::Sender<Vec<Event>>),
     Query(Query, oneshot::Sender<Value>),
     /// Typed read; the closure delivers its own result.
     Read(Box<dyn FnOnce(&Engine) + Send>),
@@ -95,7 +95,7 @@ pub struct EngineHandle {
 impl EngineHandle {
     pub async fn command(&self, cmd: Command) -> Result<Vec<Event>, String> {
         let (t, r) = oneshot::channel();
-        self.send(Request::Cmd(cmd, t)).await?;
+        self.send(Request::Cmd(Box::new(cmd), t)).await?;
         r.await.map_err(|e| e.to_string())
     }
 
@@ -133,7 +133,7 @@ impl EngineHandle {
     pub fn command_blocking(&self, cmd: Command) -> Result<Vec<Event>, String> {
         let (t, r) = oneshot::channel();
         self.tx
-            .send(Request::Cmd(cmd, t))
+            .send(Request::Cmd(Box::new(cmd), t))
             .map_err(|e| e.to_string())?;
         r.blocking_recv().map_err(|e| e.to_string())
     }
@@ -283,7 +283,7 @@ impl Writer {
             match req {
                 Request::Cmd(cmd, reply) => {
                     let mut events = Vec::new();
-                    let mut queue = VecDeque::from([cmd]);
+                    let mut queue = VecDeque::from([*cmd]);
                     while let Some(c) = queue.pop_front() {
                         let quote_sym = match &c {
                             Command::Quote { symbol, .. } => Some(symbol.clone()),
