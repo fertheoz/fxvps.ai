@@ -14,6 +14,7 @@ import { Toolbox } from './components/Toolbox';
 import { PinButton, SideDock } from './components/SideDock';
 import { ConnectDialog } from './components/ConnectDialog';
 import { CommandPalette, ShortcutsDialog, TicketDialog, Toasts } from './components/Dialogs';
+import { AccountDialog } from './components/AccountDialog';
 import { MobileApp } from './mobile/MobileApp';
 
 // One bootstrap per API instance for the app's lifetime (StrictMode mounts effects twice).
@@ -157,6 +158,7 @@ export function App({ api }: { api: TradingApi }) {
       <TicketDialog />
       <CommandPalette />
       <ShortcutsDialog />
+      <AccountDialog />
       <Toasts />
     </div>
   );

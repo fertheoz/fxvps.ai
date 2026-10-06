@@ -123,6 +123,8 @@ export interface TerminalState {
   ticket: TicketPreset | null;
   paletteOpen: boolean;
   shortcutsOpen: boolean;
+  /** Funding / verification dialog (client self-service). */
+  accountOpen: boolean;
   toasts: Toast[];
 
   // actions
@@ -172,6 +174,7 @@ export interface TerminalState {
   closeTicket(): void;
   setPaletteOpen(o: boolean): void;
   setShortcutsOpen(o: boolean): void;
+  setAccountOpen(o: boolean): void;
   toast(kind: Toast['kind'], text: string): void;
   dismissToast(id: number): void;
 }
@@ -238,6 +241,7 @@ export const useTerminal = create<TerminalState>()(
       ticket: null,
       paletteOpen: false,
       shortcutsOpen: false,
+      accountOpen: false,
       toasts: [],
 
       applyQuotes(batch) {
@@ -483,6 +487,9 @@ export const useTerminal = create<TerminalState>()(
       },
       setShortcutsOpen(shortcutsOpen) {
         set({ shortcutsOpen });
+      },
+      setAccountOpen(accountOpen) {
+        set({ accountOpen });
       },
       toast(kind, text) {
         const id = ++toastSeq;

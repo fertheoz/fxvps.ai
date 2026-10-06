@@ -195,6 +195,8 @@ pub struct CoreStack {
     pub engine: EngineHandle,
     /// Shared multi-LP book and policy (admin API `/v1/lp/aggregation`).
     pub agg: Arc<Aggregator>,
+    /// External account id <-> engine number map (client self-service routes).
+    pub names: AccountNames,
     gateways: Vec<GatewayHandle>,
     writer: std::thread::JoinHandle<()>,
     bridges: Vec<tokio::task::JoinHandle<()>>,
@@ -371,9 +373,10 @@ impl CoreStack {
                 }
             }
         });
-        let core = Arc::new(InProcessCore::new(engine.clone(), events, names).await?);
+        let core = Arc::new(InProcessCore::new(engine.clone(), events, names.clone()).await?);
         Ok(CoreStack {
             rollover_task,
+            names,
             core,
             engine,
             agg,

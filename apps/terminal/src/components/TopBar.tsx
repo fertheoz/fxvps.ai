@@ -40,6 +40,7 @@ export function TopBar() {
   const setLang = useTerminal((s) => s.setLang);
   const setPalette = useTerminal((s) => s.setPaletteOpen);
   const setShortcuts = useTerminal((s) => s.setShortcutsOpen);
+  const setAccountOpen = useTerminal((s) => s.setAccountOpen);
   const m = useMetrics();
   const [gwOpen, setGwOpen] = useState(false);
   const installable = useInstallPrompt();
@@ -112,6 +113,14 @@ export function TopBar() {
             {t('top.install')}
           </button>
         )}
+        <button
+          className="px-2 py-1 rounded border border-line text-muted hover:text-fg"
+          onClick={() => setAccountOpen(true)}
+          title={t('acct.title')}
+          data-testid="account-dialog-button"
+        >
+          {t('acct.short')}
+        </button>
         <UserMenu />
         <button
           className="px-2 py-1 rounded border border-line text-muted hover:text-fg max-w-[220px] truncate"

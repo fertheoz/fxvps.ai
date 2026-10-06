@@ -54,6 +54,9 @@ export default function ClientCardPage() {
   const kycMut = useApiMutation((k: Client["kyc"]) => api().setKyc(client!.id, k, actor));
   const groupMut = useApiMutation((g: string) => api().setGroup(client!.id, g, actor));
   const leiMut = useApiMutation((lei: string) => api().setProfile(client!.id, { lei: lei.trim() || null }, actor));
+  const ibMut = useApiMutation((p: { sharePct?: number; ibAccount?: number | null }) => api().setIb(client!.id, p, actor));
+  const docs = useApiQuery("listKycDocs", [client?.id ?? ""], { enabled: !!client, live: 15000 });
+  const openDoc = async (doc: string) => { const b = await api().kycDocBlob(client!.id, doc); window.open(URL.createObjectURL(b), "_blank"); };
   const [lei, setLei] = React.useState<string | null>(null);
 
   const my = <T extends { login: number }>(rows: T[] | undefined) => (rows ?? []).filter((r) => r.login === login);
@@ -277,6 +280,30 @@ export default function ClientCardPage() {
             </CardContent>
           </Card>
           <Card><CardContent className="pt-4"><BalanceOps client={client} /></CardContent></Card>
+          <Card>
+            <CardHeader><CardTitle>{t("card.kycDocs")}</CardTitle></CardHeader>
+            <CardContent className="grid gap-1 text-sm" data-testid="card-kyc-docs">
+              {(docs.data ?? []).length === 0 && <span className="text-muted-foreground">{t("card.noDocs")}</span>}
+              {(docs.data ?? []).map((d) => (
+                <div key={d.id} className="flex items-center justify-between gap-2 border-b border-border/60 py-1 last:border-0">
+                  <span><Badge tone="muted">{d.kind}</Badge> {d.filename} <span className="text-xs text-muted-foreground">· {(d.size / 1024).toFixed(0)} KB · {f.date(d.uploadedAt)}</span></span>
+                  <Button size="sm" variant="outline" onClick={() => void openDoc(d.id)}>{t("card.open")}</Button>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>{t("card.ib")}</CardTitle></CardHeader>
+            <CardContent className="grid gap-3 text-sm">
+              <label className="grid gap-1">{t("card.ibShare")}
+                <input type="number" min={0} max={50} className="w-32 rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" defaultValue={client.ibSharePct ?? 0} disabled={!actor.can("clients.edit") || ibMut.isPending} onBlur={(e) => { const v = Math.max(0, Math.min(50, Math.round(Number(e.target.value)))); if (v !== (client.ibSharePct ?? 0)) ibMut.mutate({ sharePct: v }); }} data-testid="card-ib-share" />
+              </label>
+              <label className="grid gap-1">{t("card.ibAccount")}
+                <input type="number" className="w-40 rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" defaultValue={client.ibAccount ?? ""} disabled={!actor.can("clients.edit") || ibMut.isPending} onBlur={(e) => { const v = e.target.value.trim() === "" ? null : Number(e.target.value); if (v !== (client.ibAccount ?? null)) ibMut.mutate({ ibAccount: v }); }} data-testid="card-ib-account" />
+              </label>
+              {ibMut.error && <span className="text-xs text-red-600 dark:text-red-400">{String((ibMut.error as Error).message ?? ibMut.error)}</span>}
+            </CardContent>
+          </Card>
         </div>
       )}
       {tab === "audit" && <DataTable data={au} columns={auditCols} getRowId={(x) => x.id} testId="card-audit" />}

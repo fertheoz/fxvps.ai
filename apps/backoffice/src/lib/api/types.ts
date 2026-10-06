@@ -314,6 +314,39 @@ export interface RolloverResult {
   reason: string;
 }
 
+export interface KycDocMeta {
+  id: string;
+  account: number;
+  kind: string;
+  filename: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+export interface FundingRequest {
+  id: string;
+  account: number;
+  clientName?: string | null;
+  kind: "deposit" | "withdraw";
+  method: "usdt_trc20" | "bank";
+  amount: number;
+  currency: string;
+  details: string;
+  requestedBy: string;
+  requestedAt: number;
+  requestedAtIso?: string;
+  status: "requested" | "approved" | "rejected" | "paid";
+  decidedBy: string | null;
+  decidedAt: number | null;
+  decidedAtIso?: string | null;
+  note: string | null;
+  opId: string | null;
+}
+export interface IbRow { ib: number; name: string | null; currency: string | null; sharePct: number; clients: number; deals: number; lots: number; commission: number; markup: number; payout: number }
+export interface IbReport { from: string; to: string | null; rows: IbRow[] }
+
 export interface TransactionRow {
   txId: string;
   tradingDateTime: string;
@@ -417,6 +450,13 @@ export interface AdminApi {
   setGroup(id: string, group: string, actor: Actor): Promise<Client>;
   /** Reporting identity (LEI) of a client; null clears it. */
   setProfile(id: string, p: { lei: string | null }, actor: Actor): Promise<Client>;
+  /** Introducing broker: this account's share and/or the IB it belongs to. */
+  setIb(id: string, p: { sharePct?: number; ibAccount?: number | null }, actor: Actor): Promise<Client>;
+  listKycDocs(id: string): Promise<KycDocMeta[]>;
+  kycDocBlob(id: string, doc: string): Promise<Blob>;
+  listFunding(status?: string): Promise<FundingRequest[]>;
+  decideFunding(id: string, decision: "approve" | "reject" | "paid", note: string | undefined, actor: Actor): Promise<FundingRequest>;
+  ibReport(from?: string, to?: string): Promise<IbReport>;
   /** MiFIR-style transaction report rows for [from, to] (YYYY-MM-DD). */
   transactions(from?: string, to?: string): Promise<TransactionReport>;
   bestExecution(from?: string, to?: string): Promise<BestExecutionReport>;

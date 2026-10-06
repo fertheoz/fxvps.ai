@@ -34,7 +34,73 @@ pub fn router(hub: Arc<Hub>) -> Router {
     if hub.cfg.metrics_listen.is_none() {
         r = r.route("/metrics", get(metrics_handler));
     }
+    if hub.cfg.client_api_upstream.is_some() {
+        // Client self-service (funding requests, KYC documents): forwarded to the
+        // admin API's `/v1/client/*` with the client's own bearer token.
+        r = r
+            .route("/api/client/{*path}", axum::routing::any(client_api_proxy))
+            .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024));
+    }
     r.with_state(hub)
+}
+
+static PROXY_HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+async fn client_api_proxy(
+    State(hub): State<Arc<Hub>>,
+    axum::extract::Path(path): axum::extract::Path<String>,
+    req: axum::extract::Request,
+) -> Response {
+    let Some(up) = hub.cfg.client_api_upstream.clone() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let (parts, body) = req.into_parts();
+    let bytes = match axum::body::to_bytes(body, 8 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+    };
+    let url = match parts.uri.query() {
+        Some(q) => format!("{up}/v1/client/{path}?{q}"),
+        None => format!("{up}/v1/client/{path}"),
+    };
+    let client = PROXY_HTTP.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default()
+    });
+    let mut r = client
+        .request(parts.method.clone(), &url)
+        .body(bytes.to_vec());
+    for name in [
+        "authorization",
+        "content-type",
+        "accept",
+        "x-filename",
+        "x-doc-kind",
+        "x-forwarded-for",
+    ] {
+        if let Some(v) = parts.headers.get(name) {
+            r = r.header(name, v.clone());
+        }
+    }
+    match r.send().await {
+        Ok(resp) => {
+            let status =
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let ct = resp
+                .headers()
+                .get("content-type")
+                .cloned()
+                .unwrap_or_else(|| axum::http::HeaderValue::from_static("application/json"));
+            let body = resp.bytes().await.unwrap_or_default();
+            (status, [(axum::http::header::CONTENT_TYPE, ct)], body).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "client API upstream unreachable");
+            StatusCode::BAD_GATEWAY.into_response()
+        }
+    }
 }
 
 /// `/metrics` (and `/healthz`) for the separate metrics listener.

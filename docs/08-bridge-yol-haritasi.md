@@ -165,7 +165,7 @@ rozet) + gece yedeğinin konteyner dışında sakladığı **append-only çapa**
 ekstre** `/clients/statement/?login=&from=&to=` (tarayıcı PDF). Kalan: e-posta
 ile ekstre/bildirim (mailer ile birlikte Etap 12).
 
-### Etap 12 — Müşteri yaşam döngüsü ve ödeme
+### Etap 12 — Müşteri yaşam döngüsü ve ödeme ✅ (demo→gerçek dönüşüm ve KYC sağlayıcı entegrasyonu sonraya)
 Konsolda hesap var ama müşteri hunisi yok: (a) **KYC akışı** (belge yükleme,
 durum makinesi, onay/ret nedeni, sağlayıcı entegrasyon noktası),
 (b) **para yatırma/çekme talepleri** (kripto USDT TRC-20 — mt5forexvps'teki
@@ -174,6 +174,17 @@ mevcut 4-göz mekanizmasına bağlanır, (c) **IB/partner ağacı**: alt hesapla
 zaten var → komisyon paylaşımı, IB raporu, IB portalı (salt-okunur),
 (d) **demo→gerçek dönüşüm**: demo hesap süresi, bakiye sıfırlama, "gerçek
 hesaba geç" düğmesi.
+
+Yapılan: **müşteri self-servis API** (`/api/client/*` terminal origin'inde →
+geçit → admin `/v1/client/*`, müşteri jetonu `accounts` iddiasıyla doğrulanır):
+`me`, para yatırma/çekme talebi (USDT TRC-20 / banka, asgari tutar, bakiye
+kontrolü), KYC belge yükleme (JPEG/PNG/WebP/PDF ≤6 MB, sha256, dosya
+`core-data/kyc/<login>/`, ilk yüklemede KYC → pending). Terminalde **"Para
+işlemleri"** diyaloğu (talimatlar, talep formu, geçmiş; doğrulama sekmesi).
+Konsolda Onaylar sayfasında **müşteri para talepleri** (onayla → bakiye işlemi,
+eşik üstünde çift onay; reddet; çekmeyi "ödendi" işaretle), kartta KYC
+belgeleri (aç) ve not, Ayarlar'da yatırma talimatları. **IB**: hesaba IB payı ve
+IB bağlantısı, `GET /v1/reports/ib` + Raporlar sekmesi + CSV.
 
 ### Etap 13 — Operasyon ayarları ve otomasyon
 Sabitlerin hepsi ayara dönsün: (a) **uyarı eşikleri ve kanalları** (Telegram

@@ -48,6 +48,8 @@ pub struct AdminConfig {
     pub lp_admin: Option<LpAdmin>,
     /// Multi-LP aggregator of an in-process stack; `None`: `/v1/lp/aggregation` answers 404.
     pub agg: Option<Arc<crate::lp_agg::Aggregator>>,
+    /// Account name map of the in-process stack (client self-service routes).
+    pub names: Option<crate::api::AccountNames>,
 }
 
 /// fix-gateway admin endpoint (`FIX_ADMIN_TOKEN` on the gateway side).
@@ -70,6 +72,7 @@ impl AdminConfig {
             lp_status: None,
             lp_admin: None,
             agg: None,
+            names: None,
         }
     }
 
@@ -110,6 +113,10 @@ pub struct AdminCtx {
     pub agg: Option<Arc<crate::lp_agg::Aggregator>>,
     /// Operational alerts (stage 9).
     pub alerts: Arc<alerts::AlertBook>,
+    /// External account id -> engine number (client self-service, stage 12).
+    pub names: Option<crate::api::AccountNames>,
+    /// Engine data directory (KYC documents live under `kyc/`).
+    pub data_dir: PathBuf,
     pub http: reqwest::Client,
 }
 
@@ -203,6 +210,58 @@ fn bearer(parts: &Parts) -> Option<&str> {
         .map(str::trim)
 }
 
+/// A trading client calling the self-service routes (`/v1/client/*`):
+/// identity token with an `accounts` claim, resolved to engine logins.
+#[derive(Clone, Debug)]
+pub struct ClientActor {
+    pub sub: String,
+    pub name: String,
+    pub account_ids: Vec<String>,
+    /// (external id, engine login) for the accounts known to this engine.
+    pub logins: Vec<(String, u64)>,
+}
+
+impl ClientActor {
+    pub fn login_of(&self, external: &str) -> Option<u64> {
+        self.logins
+            .iter()
+            .find(|(n, _)| n == external)
+            .map(|(_, l)| *l)
+    }
+    pub fn owns(&self, login: u64) -> bool {
+        self.logins.iter().any(|(_, l)| *l == login)
+    }
+}
+
+impl FromRequestParts<AdminCtx> for ClientActor {
+    type Rejection = ApiError;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        ctx: &AdminCtx,
+    ) -> Result<ClientActor, ApiError> {
+        let token = bearer(parts).ok_or_else(|| ApiError::unauthorized("missing bearer token"))?;
+        let c = ctx
+            .auth
+            .verify_client(token)
+            .map_err(|e| ApiError::unauthorized(format!("invalid token: {}", e.0)))?;
+        let names = ctx
+            .names
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("client self-service is not available here"))?;
+        let logins = c
+            .accounts
+            .iter()
+            .filter_map(|n| names.number(n).map(|l| (n.clone(), l)))
+            .collect();
+        Ok(ClientActor {
+            name: c.name.unwrap_or_else(|| c.sub.clone()),
+            sub: c.sub,
+            account_ids: c.accounts,
+            logins,
+        })
+    }
+}
+
 impl FromRequestParts<AdminCtx> for Actor {
     type Rejection = ApiError;
     async fn from_request_parts(parts: &mut Parts, ctx: &AdminCtx) -> Result<Actor, ApiError> {
@@ -277,6 +336,8 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
         lp_admin: cfg.lp_admin.clone(),
         agg: cfg.agg.clone(),
         alerts: Arc::default(),
+        names: cfg.names.clone(),
+        data_dir: cfg.data_dir.clone(),
         http: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
@@ -286,7 +347,10 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
     alerts::spawn(ctx.clone());
     let legacy =
         crate::router(engine).layer(middleware::from_fn_with_state(ctx.clone(), legacy_guard));
-    let mut app = routes::router().with_state(ctx).merge(legacy);
+    let mut app = routes::router()
+        .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024))
+        .with_state(ctx)
+        .merge(legacy);
     if let Some(o) = &cfg.cors_origins {
         app = app.layer(cors(o));
     }
