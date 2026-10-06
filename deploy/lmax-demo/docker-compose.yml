@@ -2,6 +2,7 @@
 # 127.0.0.1 only (host networking inside the CT); Cloudflare Tunnel publishes:
 #   console.fxvps.ai -> 127.0.0.1:8080  (back office; behind Cloudflare Access)
 #   trade.fxvps.ai   -> 127.0.0.1:8082  (client terminal; public, identity login)
+# Blue/green trading (8088|8089, admin 8090|8091) behind nginx upstreams; deploy with ./dagit.sh.
 #   id.fxvps.ai      -> 127.0.0.1:8081  (identity service; public)
 # Start: docker compose --profile tunnel up -d
 x-logs: &logs
@@ -59,24 +60,71 @@ services:
     restart: unless-stopped
     logging: *logs
 
-  # client-gateway with core-engine + fix-gateway in one process (one FIX
-  # gateway per LP, aggregated): client WebSocket, back office admin API, LP config.
-  trading:
+  # Message bus between the FIX gateways and the trading core (JetStream keeps
+  # LP executions for 10 min so a core hand-over never loses one).
+  nats:
+    image: nats:2.10-alpine
+    network_mode: host
+    command: ["-a", "127.0.0.1", "-p", "4222", "-js", "--store_dir", "/data", "-m", "8222"]
+    volumes: ["./nats-data:/data"]
+    restart: unless-stopped
+    logging: *logs
+
+  # FIX gateways as their own processes: the LP sessions survive every trading
+  # deploy. LMAX: managed config (console → LP page), status/admin on 9890.
+  # Orders to LMAX are braked to 80/s (LMAX allows 100/s).
+  lp-gateway-lmax:
+    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-fix-gateway:${FIXVPS_TAG:-latest}
+    network_mode: host
+    environment:
+      FIX_CONFIG_FILE: /var/lib/fix-gateway/lp.json
+      FIX_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN:?set FIX_ADMIN_TOKEN in .env}
+      FIX_STATUS_ADDR: 127.0.0.1:9890
+      NATS_URL: nats://127.0.0.1:4222
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes: ["./fix-store:/var/lib/fix-gateway"]
+    depends_on: [nats]
+    stop_grace_period: 15s
+    restart: unless-stopped
+    logging: *logs
+
+  lp-gateway-sim:
+    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-fix-gateway:${FIXVPS_TAG:-latest}
+    network_mode: host
+    environment:
+      FIX_CONFIG_FILE: /etc/fxvps/lp-sim-gateway.json
+      FIX_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN:?set FIX_ADMIN_TOKEN in .env}
+      FIX_STATUS_ADDR: 127.0.0.1:9892
+      NATS_URL: nats://127.0.0.1:4222
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes: ["./lp-sim-gateway.json:/etc/fxvps/lp-sim-gateway.json:ro"]
+    depends_on: [nats, lp-simulator]
+    restart: unless-stopped
+    logging: *logs
+
+  # Trading core, blue/green: both colours run the same image; the holder of
+  # core-data/writer.lock serves (WS 8088|8089, admin 8090|8091), the other
+  # waits warm (journal replayed) and takes over within ~1 s when the active
+  # one stops — deploys swap colours (dagit.sh), nginx follows the open port.
+  trading-blue: &trading
     image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-client-gateway:${FIXVPS_TAG:-latest}
     network_mode: host
     command: ["--listen", "127.0.0.1:8088", "--data-dir", "/var/lib/core-engine"]
-    environment:
-      # LP settings (entered in the console, file mode 0600); a change restarts this service.
+    environment: &trading-env
+      FXVPS_STANDBY: "1"
+      FIX_TRANSPORT: nats
+      NATS_URL: nats://127.0.0.1:4222
+      # LP configs: read for instruments / symbol maps; the sessions live in lp-gateway-*.
       FIX_CONFIG_FILE: /var/lib/fix-gateway/lp.json
-      # Further LPs aggregated with the primary (comma separated gateway configs).
       FIX_LP_FILES: /etc/fxvps/lp-sim-gateway.json
-      # Backup drill status (yedek.sh) watched by the alert engine; journal auto-compaction.
+      CORE_LP_ADMIN_URL: http://127.0.0.1:9890
+      FIX_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN:?set FIX_ADMIN_TOKEN in .env}
+      # Backup / load-test status watched by the alert engine; journal auto-compaction.
       CORE_BACKUP_STATUS_FILE: /var/lib/fxvps-yedek/yedek.durum
-      # LP simulator scenario control (console LP page)
+      CORE_LOADTEST_STATUS_FILE: /var/lib/fxvps-yedek/yuk.durum
+      CORE_LOADTEST_RESULT_FILE: /var/lib/fxvps-yedek/yuk-sinavi/latest.json
       CORE_LP_SIM_URL: http://127.0.0.1:9882
       CORE_JOURNAL_COMPACT_MB: "256"
-      FIX_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN:?set FIX_ADMIN_TOKEN in .env}
-      FIX_STATUS_ADDR: 127.0.0.1:9890
       # Back office admin API: identity tokens, admin role + 2FA for changes.
       CORE_ADMIN_ADDR: 127.0.0.1:8090
       CORE_JWT_JWKS_URL: http://127.0.0.1:8081/.well-known/jwks.json
@@ -91,19 +139,28 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
     # chown 65532:65532 fix-store core-data
     volumes:
-      - "./fix-store:/var/lib/fix-gateway"
+      - "./fix-store:/var/lib/fix-gateway:ro"
       - "./core-data:/var/lib/core-engine"
       - "./lp-sim-gateway.json:/etc/fxvps/lp-sim-gateway.json:ro"
       - "/var/lib/fxvps-yedek:/var/lib/fxvps-yedek:ro"
-    depends_on: [identity, lp-simulator]
+    depends_on: [identity, nats]
+    # SIGTERM → final snapshot → lock released → the other colour takes over
+    stop_grace_period: 30s
     restart: unless-stopped
     logging: *logs
+
+  trading-green:
+    <<: *trading
+    command: ["--listen", "127.0.0.1:8089", "--data-dir", "/var/lib/core-engine"]
+    environment:
+      <<: *trading-env
+      CORE_ADMIN_ADDR: 127.0.0.1:8091
 
   console:
     image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-backoffice-console:${FIXVPS_TAG:-latest}
     network_mode: host
     volumes: ["./console-nginx.conf:/etc/nginx/conf.d/default.conf:ro"]
-    depends_on: [trading]
+    depends_on: [trading-blue, trading-green]
     restart: unless-stopped
     logging: *logs
 
@@ -111,7 +168,7 @@ services:
     image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-terminal-trade:${FIXVPS_TAG:-latest}
     network_mode: host
     volumes: ["./terminal-nginx.conf:/etc/nginx/conf.d/default.conf:ro"]
-    depends_on: [trading]
+    depends_on: [trading-blue, trading-green]
     restart: unless-stopped
     logging: *logs
 

@@ -1,0 +1,3 @@
+# /etc/cron.d/fxvps-yuk — gece yük sınavı (UTC 03:50, yedekten sonra). Canlıya dokunmaz.
+SHELL=/bin/bash
+50 3 * * * root /opt/fxvps.ai/deploy/lmax-demo/yuk-sinavi.sh >> /var/lib/fxvps-yedek/yuk-cron.log 2>&1

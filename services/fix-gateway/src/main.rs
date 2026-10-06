@@ -79,7 +79,22 @@ async fn managed_mode(path: String) -> Result<(), Box<dyn std::error::Error>> {
         fix_gateway::status_http::spawn_with_admin(&addr, table.clone(), Some(admin)).await?;
     tracing::info!(%local, config = %path, "managed mode: GET /status, GET|PUT /config");
 
-    let ctrl_c = tokio::signal::ctrl_c();
+    let ctrl_c = async {
+        #[cfg(unix)]
+        {
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+    };
     tokio::pin!(ctrl_c);
     loop {
         let Some(cfg) = managed.current().filter(|c| c.enabled) else {
@@ -92,6 +107,8 @@ async fn managed_mode(path: String) -> Result<(), Box<dyn std::error::Error>> {
                 _ = &mut ctrl_c => return Ok(()),
             }
         };
+        #[cfg(feature = "nats")]
+        let cfg_lp = cfg.lp.clone();
         let gw = match fix_gateway::start(cfg) {
             Ok(gw) => gw,
             Err(e) => {
@@ -102,6 +119,38 @@ async fn managed_mode(path: String) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         };
+        // Remote core over NATS (`NATS_URL`): quotes/events/status out, orders in.
+        #[cfg(feature = "nats")]
+        let bridge = std::env::var("NATS_URL")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(|url| {
+                let (ev, orders, st, lp) = (
+                    gw.subscribe(),
+                    gw.orders(),
+                    gw.status_source(),
+                    cfg_lp.clone(),
+                );
+                tokio::spawn(async move {
+                    loop {
+                        match fix_gateway::nats::serve_gateway(
+                            &url,
+                            &lp,
+                            ev.resubscribe(),
+                            orders.clone(),
+                            st.clone(),
+                        )
+                        .await
+                        {
+                            Ok(()) => break,
+                            Err(e) => {
+                                tracing::error!(error = %e, "NATS bridge failed; retrying in 2 s");
+                                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            }
+                        }
+                    }
+                })
+            });
         let mut rx = gw.subscribe();
         let src = gw.status_source();
         let mirror = {
@@ -126,6 +175,10 @@ async fn managed_mode(path: String) -> Result<(), Box<dyn std::error::Error>> {
             _ = managed.changed() => false,
             _ = &mut ctrl_c => true,
         };
+        #[cfg(feature = "nats")]
+        if let Some(b) = bridge {
+            b.abort();
+        }
         gw.shutdown().await;
         mirror.abort();
         log.abort();

@@ -104,6 +104,10 @@ export default function DashboardPage() {
                 <span className="text-muted-foreground">{t("perf.title")} {t("perf.p50")} / {t("perf.p99")}</span>
                 <span className={`text-right ${perf.data.budget.ok ? "" : "text-amber-600 dark:text-amber-400"}`}>{perf.data.engine.p50Us} / {perf.data.engine.p99Us} µs <span className="text-muted-foreground">({t("perf.budget")} {perf.data.budget.p99Us})</span></span>
                 <span className="text-muted-foreground">{t("perf.replica")}</span><span className="text-right">{perf.data.replica ? `${perf.data.replica.lagCommands} ${t("perf.commands")}` : "—"}</span>
+                {perf.data.loadtest && (<>
+                  <span className="text-muted-foreground">{t("perf.loadtest")} · {f.date(perf.data.loadtest.at)}</span>
+                  <span className={`text-right ${perf.data.loadtest.ok ? "" : "text-amber-600 dark:text-amber-400"}`} data-testid="dash-loadtest">{perf.data.loadtest.connected}/{perf.data.loadtest.clients} · {Math.round(perf.data.loadtest.ordersPerMin).toLocaleString()} {t("perf.perMin")} · p99 {Math.round(perf.data.loadtest.ackP99Ms)} ms</span>
+                </>)}
               </div>
             )}
           </CardContent>

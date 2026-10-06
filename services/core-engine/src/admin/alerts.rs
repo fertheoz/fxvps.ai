@@ -292,6 +292,33 @@ pub fn infra_conditions(ctx: &AdminCtx, now_ms: u64, grace_ms: u64) -> Vec<Condi
         }
     }
     // Backup drill status file written by deploy/lmax-demo/yedek.sh
+    // Nightly load test (deploy/lmax-demo/yuk-sinavi.sh): failed or missing for 36 h.
+    if let Ok(path) = std::env::var("CORE_LOADTEST_STATUS_FILE") {
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            let fresh = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|d| d.as_secs() < 36 * 3_600);
+            if !s.starts_with("OK") {
+                out.push(Condition {
+                    kind: "loadtest",
+                    target: "nightly".into(),
+                    severity: Severity::Warning,
+                    title: "Nightly load test below target".into(),
+                    detail: s.trim().chars().take(200).collect(),
+                });
+            } else if !fresh {
+                out.push(Condition {
+                    kind: "loadtest",
+                    target: "stale".into(),
+                    severity: Severity::Info,
+                    title: "No load test result in 36 h".into(),
+                    detail: s.trim().chars().take(200).collect(),
+                });
+            }
+        }
+    }
     if let Ok(path) = std::env::var("CORE_BACKUP_STATUS_FILE") {
         match std::fs::read_to_string(&path) {
             Ok(s) => {

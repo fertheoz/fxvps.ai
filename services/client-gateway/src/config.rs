@@ -128,6 +128,10 @@ impl ClientGatewayConfig {
             "FXVPS_MAX_CONNECTIONS_PER_SUBJECT",
             self.max_connections_per_subject,
         )?;
+        // Per-account order rate (load tests raise it on an isolated instance).
+        self.orders_per_second =
+            num("FXVPS_ORDERS_PER_SECOND", self.orders_per_second as usize)? as u32;
+        self.order_burst = num("FXVPS_ORDER_BURST", self.order_burst as usize)? as u32;
         Ok(())
     }
 

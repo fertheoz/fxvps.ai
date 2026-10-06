@@ -247,6 +247,18 @@ pub fn recover(settings: &Settings) -> std::io::Result<(Engine, u64)> {
             if line.trim().is_empty() {
                 continue;
             }
+            // Lines up to the snapshot are skipped without a full parse: the
+            // envelope serialises `seq` first (`{"seq":N,...`). This is what
+            // keeps a start (and a blue/green take-over) fast on a long journal.
+            if let Some(n) = line
+                .strip_prefix("{\"seq\":")
+                .and_then(|r| r.split(',').next())
+                .and_then(|d| d.parse::<u64>().ok())
+            {
+                if n <= seq {
+                    continue;
+                }
+            }
             // a torn last line (crash mid-write) is ignored
             let Ok(env) = serde_json::from_str::<Envelope>(&line) else {
                 break;
@@ -371,6 +383,24 @@ fn short_digest(engine: &Engine) -> String {
     let mut h = DefaultHasher::new();
     engine.state_digest().hash(&mut h);
     format!("{:016x}", h.finish())
+}
+
+/// Exclusive writer lock of a data directory (`writer.lock`, advisory
+/// `flock`): exactly one engine process journals at a time. `Ok(None)` = held
+/// by another process (blue/green standby keeps waiting). Released when the
+/// returned file is dropped or the process exits.
+pub fn try_writer_lock(dir: &FsPath) -> std::io::Result<Option<File>> {
+    fs::create_dir_all(dir)?;
+    let f = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("writer.lock"))?;
+    match f.try_lock() {
+        Ok(()) => Ok(Some(f)),
+        Err(fs::TryLockError::WouldBlock) => Ok(None),
+        Err(fs::TryLockError::Error(e)) => Err(e),
+    }
 }
 
 fn now_ns() -> u64 {
@@ -534,7 +564,22 @@ pub fn spawn_with(
     lp: LpMode,
     publisher: Option<output::Publisher>,
 ) -> std::io::Result<(EngineHandle, JoinHandle<()>)> {
-    let (mut engine, seq) = recover(&settings)?;
+    spawn_with_state(settings, lp, publisher, None)
+}
+
+/// Like [`spawn_with`], starting from an engine the caller already rebuilt
+/// (blue/green standby, see [`replica::Replica`]); `None` recovers from disk.
+/// The caller must hold the [`writer_lock`] of the data directory.
+pub fn spawn_with_state(
+    settings: Settings,
+    lp: LpMode,
+    publisher: Option<output::Publisher>,
+    warm: Option<(Engine, u64)>,
+) -> std::io::Result<(EngineHandle, JoinHandle<()>)> {
+    let (mut engine, seq) = match warm {
+        Some(w) => w,
+        None => recover(&settings)?,
+    };
     let lp = match lp {
         LpMode::Simulated => {
             let router = RecordingRouter::default();

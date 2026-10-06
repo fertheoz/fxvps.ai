@@ -201,3 +201,41 @@ fn verify_and_compact_keep_the_digest() {
     assert!(again.seq > before.seq);
     assert_ne!(again.digest, before.digest);
 }
+
+#[test]
+fn writer_lock_is_exclusive_and_warm_start_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let lock = core_engine::try_writer_lock(dir.path()).unwrap();
+    assert!(lock.is_some());
+    assert!(
+        core_engine::try_writer_lock(dir.path()).unwrap().is_none(),
+        "second holder refused"
+    );
+    let mut s = Settings::new(dir.path());
+    s.snapshot_every = 3; // snapshot + tail exercises the fast skip
+    let (h, join) = spawn(s.clone()).unwrap();
+    for c in setup_cmds() {
+        h.command_blocking(c).unwrap();
+    }
+    h.shutdown();
+    join.join().unwrap();
+    let before = core_engine::verify(dir.path()).unwrap();
+    // standby: replica catches up, then hands its engine to the writer
+    let rep = core_engine::replica::Replica::open(dir.path()).unwrap();
+    let (engine, seq) = rep.into_parts();
+    assert_eq!(seq, before.seq);
+    let (h, join) =
+        core_engine::spawn_with_state(s, core_engine::LpMode::Simulated, None, Some((engine, seq)))
+            .unwrap();
+    h.shutdown();
+    join.join().unwrap();
+    assert_eq!(
+        core_engine::verify(dir.path()).unwrap().digest,
+        before.digest
+    );
+    drop(lock);
+    assert!(
+        core_engine::try_writer_lock(dir.path()).unwrap().is_some(),
+        "released on drop"
+    );
+}

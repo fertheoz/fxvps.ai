@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-nats = ["dep:async-nats"]
+nats = ["dep:async-nats", "dep:time", "dep:futures-util"]
 
 [dependencies]
 domain.workspace = true
@@ -27,6 +27,8 @@ serde_json.workspace = true
 toml.workspace = true
 thiserror.workspace = true
 async-nats = { workspace = true, optional = true }
+time = { version = "0.3", optional = true, features = ["std"] }
+futures-util = { version = "0.3", optional = true, default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tokio-rustls.workspace = true

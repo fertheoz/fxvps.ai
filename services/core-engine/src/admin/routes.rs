@@ -2473,6 +2473,12 @@ async fn perf(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
         "writerSeq": writer_seq,
         "replica": replica_seq.map(|s| json!({ "seq": s, "lagCommands": writer_seq.saturating_sub(s), "reloads": reloads, "applied": applied })),
         "budget": { "p99Us": 5_000, "ok": lat.p99_us <= 5_000 },
+        // last nightly load test summary (yuk-sinavi.sh writes it)
+        "loadtest": std::env::var("CORE_LOADTEST_RESULT_FILE")
+            .ok()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .map(|v| v["summary"].clone()),
     })))
 }
 

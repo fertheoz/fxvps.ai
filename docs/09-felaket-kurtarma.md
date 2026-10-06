@@ -35,6 +35,16 @@ yok, dağıtım geri alınabilir, yedek kanıtlı".
 ## Journal büyümesi
 `CORE_JOURNAL_COMPACT_MB` (varsayılan 256): başlangıçta journal bu boyutu aşmışsa motor snapshot alır ve eski journal'ı `core-data/archive/journal-<seq>.jsonl` olarak kenara koyar (durum değişmez; `verify` digest'i aynı kalır). Elle: `core-engine compact --data-dir …` (yazıcı kapalıyken).
 
-## Yapılmayan / sonraya
-* **Mavi/yeşil (sıfır kesintili) devir:** LMAX tek CompID ile iki eşzamanlı oturum kabul etmez; devir için ya ikinci CompID ya da FIX oturumunu süreçler arası taşıyan ayrı fix-gateway süreci (Etap 14, NATS ayrımı) gerekir. Bugün dağıtım ≈ 30–45 sn kopma.
+## Kesintisiz dağıtım (mavi/yeşil, 7 Eki)
+* **Süreç ayrımı:** FIX oturumları `lp-gateway-lmax` / `lp-gateway-sim` konteynerlerinde (fix-gateway, `NATS_URL`). Trading çekirdeği LP'lerle **NATS** üzerinden konuşur: fiyatlar `fx.lp.<lp>.quotes`, icralar/retler JetStream `FXLP` (`fx.lp.<lp>.events`, 10 dk saklama; yeniden başlayan çekirdek son 120 sn'yi yeniden okur, motor exec id ile tekrarı ayıklar), durum `fx.lp.<lp>.status`, emirler istek/yanıt `fx.lp.<lp>.orders` (yanıtsız/zaman aşımı → emir reddi, sessiz kayıp yok). Trading yeniden başlarken **LMAX oturumu düşmez**.
+* **LMAX freni:** gateway, trading oturumuna giden emirleri **saniyede 80** ile sınırlar (LMAX sınırı 100/sn); 250 ms'den fazla bekleyecek emir reddedilir (`max_orders_per_sec`, 0 = kapalı).
+* **Mavi/yeşil:** `trading-blue` (WS 8088, admin 8090) ve `trading-green` (8089/8091) aynı imaj; `core-data/writer.lock`'u tutan (flock) hizmet verir, diğeri journal'ı **sıcak** tutar (replica). nginx upstream'leri kapalı portu atlar. `./dagit.sh trading`: bekleyen renk yeni imajla ısınır → aktif renk SIGTERM (son snapshot, kilit bırakılır) → bekleyen devralır (ölçülen süre `dagit.log`'da `DEVİR OK … ms`) → eski renk yeni imajla yedek olur. 60 sn'de devralma yoksa eski imaj geri gelir. Terminal 300 ms'de yeniden bağlanır.
+* **Açılış hızı:** snapshot öncesi journal satırları tam ayrıştırılmadan atlanır (`{"seq":N` öneki) → yeniden başlatma ve ısınma saniyeler mertebesinde.
+* Tek seferlik geçiş: `gecis-bluegreen.sh` (eski tek `trading`'den; bir kez ~30-60 sn kesinti).
+* Statik konsol/terminal nginx'i güncellenirken (yeni ön yüz imajı) WS ~1 sn kopar; terminal kendiliğinden yeniden bağlanır.
+
+## Gece yük sınavı (`yuk-sinavi.sh`, cron 03:50 UTC)
+* Ayrı, geçici `client-gateway --demo` örneği (127.0.0.1:18088, kendi simülasyon LP'si, /tmp journal) — **canlıya ve LMAX'e dokunmaz**; CPU sınırlı (sunucu 2, loadgen 1 çekirdek).
+* 1.000 eşzamanlı bağlantı, dakikada 10.000 emir, 120 sn. Ölçüt: bağlantı ≥ %99, emir hızı ≥ %95 hedef, yanıt ≥ %99, ret < %1, yanıt p99 < 250 ms.
+* Sonuç `/var/lib/fxvps-yedek/yuk-sinavi/` (+`latest.json`), durum `yuk.durum` → dashboard "Gece yük sınavı" satırı, düşerse uyarı.
 * Offsite (başka veri merkezi) kopya: `rclone` hedefi tanımlanınca `yedek.sh` sonuna tek satır.

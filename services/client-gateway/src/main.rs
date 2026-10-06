@@ -55,8 +55,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     let dev_key = auth.dev_key;
-    let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;
-    let addr = listener.local_addr()?;
+    let listen = cfg.listen.clone();
+    let flag = |k: &str| std::env::var(k).is_ok_and(|v| v == "1" || v == "true");
+    // Blue/green (`FXVPS_STANDBY=1`): only the holder of the data directory's
+    // writer lock serves; a second process waits warm and takes over when the
+    // active one stops (deploy) or dies. LP sessions live in separate
+    // fix-gateway processes (`FIX_TRANSPORT=nats`), so they stay up.
+    let standby = flag("FXVPS_STANDBY");
+    let nats_url = (std::env::var("FIX_TRANSPORT").as_deref() == Ok("nats"))
+        .then(|| std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into()));
+    let mut writer_lock = None;
+    let mut candle_path = None;
 
     // Managed LP config (written by the back office through the admin API).
     let managed_path = std::env::var("FIX_CONFIG_FILE")
@@ -124,7 +133,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             st.extra_gateways.push(g);
         }
-        let stack = CoreStack::start(st).await?;
+        st.nats_url = nats_url.clone();
+        let mut warm = None;
+        if standby {
+            let dir = std::path::PathBuf::from(&data_dir);
+            match core_engine::try_writer_lock(&dir)? {
+                Some(l) => {
+                    tracing::info!("writer lock acquired: active");
+                    writer_lock = Some(l);
+                }
+                None => {
+                    tracing::info!("another process is active: standby, warming up");
+                    let d = dir.clone();
+                    let mut rep =
+                        tokio::task::spawn_blocking(move || core_engine::replica::Replica::open(d))
+                            .await
+                            .map_err(|e| e.to_string())??;
+                    tracing::info!(seq = rep.seq(), "standby warm");
+                    let mut n = 0u64;
+                    let lock = loop {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        if let Some(l) = core_engine::try_writer_lock(&dir)? {
+                            break l;
+                        }
+                        n += 1;
+                        if n.is_multiple_of(10) {
+                            rep = tokio::task::spawn_blocking(move || {
+                                let _ = rep.refresh();
+                                rep
+                            })
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        }
+                        if n.is_multiple_of(600) {
+                            tracing::info!(seq = rep.seq(), "standby warm");
+                        }
+                    };
+                    let t0 = std::time::Instant::now();
+                    rep = tokio::task::spawn_blocking(move || {
+                        let _ = rep.refresh();
+                        rep
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    tracing::info!(
+                        seq = rep.seq(),
+                        catch_up_ms = t0.elapsed().as_millis() as u64,
+                        "writer lock acquired: taking over"
+                    );
+                    warm = Some(rep.into_parts());
+                    writer_lock = Some(lock);
+                }
+            }
+        }
+        let stack = CoreStack::start_warm(st, warm).await?;
         let core: Arc<dyn CoreApi> = stack.core.clone();
         let hub = Hub::with_instruments(cfg, auth, &instruments, Some(core.clone()));
         tokio::spawn(hub.clone().run_core_bridge(core.subscribe()));
@@ -132,6 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // `candles-seed.txt` (optional back-fill from another source, see
         // deploy/lmax-demo/seed-candles.py) is loaded first: our own bars win.
         let candle_file = std::path::Path::new(&data_dir).join("candles.txt");
+        candle_path = Some(candle_file.clone());
         for f in [
             candle_file.with_file_name("candles-seed.txt"),
             candle_file.clone(),
@@ -172,6 +235,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(n) => tracing::info!(accounts = n, "client preferences loaded"),
         Err(e) => tracing::warn!("client preferences not loaded: {e}"),
     }
+    let listener = tokio::net::TcpListener::bind(&listen).await?;
+    let addr = listener.local_addr()?;
     tracing::info!(%addr, "client-gateway listening (ws://{addr}/ws, /healthz, /metrics)");
     // Machine-readable line for scripts/tests (e.g. with `--listen 127.0.0.1:0`).
     println!("FXVPS_WS_URL=ws://{addr}/ws");
@@ -194,7 +259,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|v| !v.is_empty())
     {
         use core_engine::admin;
-        let flag = |k: &str| std::env::var(k).is_ok_and(|v| v == "1" || v == "true");
         let engine = match admin_engine.take() {
             Some(e) => e,
             None => {
@@ -211,7 +275,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         acfg.lp_status = Some(table.clone());
         acfg.agg = lp_agg.clone();
         acfg.names = fix_handle.as_ref().map(|s| s.names.clone());
-        if let Some(path) = &managed_path {
+        if nats_url.is_some() {
+            // The fix-gateway process owns the LP config and its admin endpoint.
+            if let (Ok(url), Ok(token)) = (
+                std::env::var("CORE_LP_ADMIN_URL"),
+                std::env::var("FIX_ADMIN_TOKEN"),
+            ) {
+                if !url.is_empty() && token.len() >= 16 {
+                    acfg.lp_admin = Some(admin::LpAdmin { url, token });
+                }
+            }
+        } else if let Some(path) = &managed_path {
             let token = std::env::var("FIX_ADMIN_TOKEN")
                 .ok()
                 .filter(|t| t.len() >= 16)
@@ -249,10 +323,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    let terminate = async {
+        #[cfg(unix)]
+        {
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut s) => {
+                    s.recv().await;
+                }
+                Err(_) => std::future::pending::<()>().await,
+            }
+        }
+        #[cfg(not(unix))]
+        std::future::pending::<()>().await
+    };
+    let saver_hub = hub.clone();
     tokio::select! {
         r = client_gateway::serve(hub, listener) => r?,
         _ = tokio::signal::ctrl_c() => {}
+        _ = terminate => tracing::info!("SIGTERM: handing over"),
         _ = restart.notified() => {}
+    }
+    // Keep the chart history across the hand-over.
+    if let Some(f) = candle_path {
+        let h = saver_hub.clone();
+        match tokio::task::spawn_blocking(move || h.save_candles(&f)).await {
+            Ok(Ok(())) => tracing::info!("candle history saved"),
+            Ok(Err(e)) => tracing::warn!("candle history not saved: {e}"),
+            Err(e) => tracing::warn!("candle history not saved: {e}"),
+        }
     }
     if let Some((h, join)) = standalone {
         h.shutdown();
@@ -264,5 +362,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(s) = fix_handle {
         s.shutdown().await;
     }
+    // final snapshot written: release the journal to the standby
+    drop(writer_lock);
     Ok(())
 }
