@@ -3,6 +3,7 @@
 # CANLIYA DOKUNMAZ: ayrı, geçici bir client-gateway --demo örneği (kendi
 # içindeki simülasyon LP'si, /tmp journal'ı, 127.0.0.1:18088) kurulur, LMAX'e
 # tek emir gitmez, canlı journal'a yazılmaz. CPU sınırlı (sunucu 2, yük 1 çekirdek).
+# Simülatöre giden emirlerde LMAX freni (80/sn) kapalı: motorun kendi kapasitesi ölçülür.
 # Sonuç: /var/lib/fxvps-yedek/yuk-sinavi/<zaman>.json + latest.json,
 # durum: yuk.durum (OK/HATA) → konsol uyarı motoru ve dashboard.
 set -euo pipefail
@@ -28,6 +29,7 @@ docker rm -f $GW >/dev/null 2>&1 || true
 docker run -d --name $GW --network host --cpus 2 --memory 2g \
   -e FXVPS_MAX_CONNECTIONS=0 -e FXVPS_MAX_CONNECTIONS_PER_IP=0 -e FXVPS_MAX_CONNECTIONS_PER_SUBJECT=0 \
   -e FXVPS_ORDERS_PER_SECOND=500 -e FXVPS_ORDER_BURST=1000 -e RUST_LOG=warn \
+  -e FIX_MAX_ORDERS_PER_SEC=0 \
   "$PREFIX-client-gateway:$TAG" --demo --listen "127.0.0.1:$PORT" --data-dir /tmp/yuk >/dev/null
 for i in $(seq 1 60); do curl -sf --max-time 1 "http://127.0.0.1:$PORT/healthz" >/dev/null && break; sleep 1; done
 curl -sf --max-time 1 "http://127.0.0.1:$PORT/healthz" >/dev/null || fail "sınav örneği açılmadı"
@@ -49,7 +51,7 @@ sent = r.get("orders_sent", 0)
 acks, rejects = r.get("acks", 0), r.get("rejects", 0)
 ack = r.get("ack_latency", {})
 s = {
-    "at": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+    "at": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None).isoformat() + "Z",
     "clients": clients,
     "connected": r.get("connected", 0),
     "ordersSent": sent,

@@ -1296,7 +1296,9 @@ impl Engine {
     }
 
     fn on_lp_fill(&mut self, lp_id: LpOrderId, exec_id: &str, volume: Qty, price: Price) -> R<()> {
-        if !self.st.lp_exec_ids.insert(exec_id.to_string()) {
+        // per LP order: exec ids are only unique per LP session (a simulator
+        // restarts at E1), while a replayed fill repeats both
+        if !self.st.lp_exec_ids.insert(format!("{lp_id}:{exec_id}")) {
             return Ok(()); // duplicate execution report
         }
         let lp = self.st.lp_orders.get(&lp_id).ok_or("unknown LP order")?;

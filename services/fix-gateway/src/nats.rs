@@ -116,6 +116,9 @@ pub async fn serve_gateway(
                 let Ok(payload) = serde_json::to_vec(&ev) else {
                     continue;
                 };
+                if matches!(ev, GatewayEvent::SessionStats { .. }) {
+                    continue; // carried by the status heartbeat
+                }
                 if matches!(ev, GatewayEvent::Quote(_)) {
                     if let Err(e) = client.publish(quotes.clone(), payload.into()).await {
                         warn!(error = %e, "NATS quote publish failed");
