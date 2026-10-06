@@ -122,14 +122,15 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
 
 export function Tabs<T extends string>({ value, onChange, items }: { value: T; onChange: (v: T) => void; items: { value: T; label: React.ReactNode }[] }) {
   return (
-    <div role="tablist" className="inline-flex rounded-md border border-border bg-muted/50 p-0.5">
+    // Scrolls sideways on phones instead of wrapping the tab labels.
+    <div role="tablist" className="inline-flex max-w-full overflow-x-auto rounded-md border border-border bg-muted/50 p-0.5">
       {items.map((it) => (
         <button
           key={it.value}
           role="tab"
           aria-selected={value === it.value}
           onClick={() => onChange(it.value)}
-          className={cn("rounded px-3 py-1 text-sm cursor-pointer", value === it.value ? "bg-card shadow-sm font-medium" : "text-muted-foreground hover:text-foreground")}
+          className={cn("whitespace-nowrap rounded px-3 py-1 text-sm cursor-pointer", value === it.value ? "bg-card shadow-sm font-medium" : "text-muted-foreground hover:text-foreground")}
         >
           {it.label}
         </button>
