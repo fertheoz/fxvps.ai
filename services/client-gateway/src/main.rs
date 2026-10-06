@@ -210,6 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let table = lp_status.clone().unwrap_or_default();
         acfg.lp_status = Some(table.clone());
         acfg.agg = lp_agg.clone();
+        acfg.names = fix_handle.as_ref().map(|s| s.names.clone());
         if let Some(path) = &managed_path {
             let token = std::env::var("FIX_ADMIN_TOKEN")
                 .ok()

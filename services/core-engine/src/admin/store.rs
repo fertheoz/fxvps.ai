@@ -90,6 +90,89 @@ pub struct SettingsRec {
     /// Our own LEI, stamped as executing entity on transaction reports.
     #[serde(default)]
     pub broker_lei: String,
+    /// Shown to clients in the terminal's funding dialog (stage 12).
+    #[serde(default)]
+    pub funding: FundingInstructions,
+}
+
+#[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FundingInstructions {
+    /// Deposit address for USDT on TRON (TRC-20); empty = crypto deposits off.
+    #[serde(default)]
+    pub usdt_trc20_address: String,
+    /// Free-text bank transfer instructions (beneficiary, IBAN, reference rule).
+    #[serde(default)]
+    pub bank_details: String,
+    /// Minor units of the account currency; 0 = no minimum.
+    #[serde(default)]
+    pub min_deposit_minor: i64,
+    #[serde(default)]
+    pub min_withdraw_minor: i64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FundingKind {
+    Deposit,
+    Withdraw,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FundingMethod {
+    UsdtTrc20,
+    Bank,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FundingStatus {
+    Requested,
+    /// Deposit credited / withdrawal debited from the trading account.
+    Approved,
+    Rejected,
+    /// Withdrawal money actually sent (after `Approved`).
+    Paid,
+}
+
+/// A client's deposit / withdrawal request (self-service), decided by staff.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FundingRequest {
+    pub id: String,
+    pub account: u64,
+    pub kind: FundingKind,
+    pub method: FundingMethod,
+    /// Minor units of the account currency.
+    pub amount: i64,
+    pub currency: String,
+    /// Client-supplied reference: tx hash / sender name / destination address or IBAN.
+    pub details: String,
+    pub requested_by: String,
+    pub requested_at: u64,
+    pub status: FundingStatus,
+    pub decided_by: Option<String>,
+    pub decided_at: Option<u64>,
+    pub note: Option<String>,
+    /// Balance operation created on approval.
+    pub op_id: Option<String>,
+}
+
+/// Metadata of an uploaded KYC document (bytes live under `<data_dir>/kyc/<account>/`).
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KycDoc {
+    pub id: String,
+    pub account: u64,
+    /// `id_front` | `id_back` | `proof_of_address` | `selfie` | `other`
+    pub kind: String,
+    pub filename: String,
+    pub content_type: String,
+    pub size: u64,
+    pub sha256: String,
+    pub uploaded_by: String,
+    pub uploaded_at: u64,
 }
 
 impl Default for SettingsRec {
@@ -102,6 +185,7 @@ impl Default for SettingsRec {
             require_mfa: true,
             default_book: "A".into(),
             broker_lei: String::new(),
+            funding: FundingInstructions::default(),
         }
     }
 }
@@ -177,6 +261,8 @@ pub enum AdminCmd {
     KycSet {
         account: u64,
         kyc: String,
+        #[serde(default)]
+        note: Option<String>,
     },
     AccountOpened {
         account: u64,
@@ -187,6 +273,29 @@ pub enum AdminCmd {
     ProfileUpdated {
         account: u64,
         lei: Option<String>,
+    },
+    /// Client self-service (stage 12).
+    FundingRequested {
+        req: FundingRequest,
+    },
+    FundingDecided {
+        id: String,
+        status: FundingStatus,
+        note: Option<String>,
+        op_id: Option<String>,
+    },
+    KycDocAdded {
+        doc: KycDoc,
+    },
+    /// Introducing-broker share of a parent account's children commission (percent).
+    IbShareSet {
+        account: u64,
+        pct: u8,
+    },
+    /// Which IB account a client belongs to (`None` = none).
+    IbLinked {
+        account: u64,
+        ib: Option<u64>,
     },
     GroupSaved {
         group: String,
@@ -279,6 +388,16 @@ pub struct AdminState {
     /// Multi-LP aggregation policy (stage 6); `None` = engine default.
     #[serde(default)]
     pub aggregation: Option<crate::lp_agg::AggConfig>,
+    /// Client funding requests and KYC documents (stage 12), IB shares (account -> pct).
+    #[serde(default)]
+    pub funding: BTreeMap<String, FundingRequest>,
+    #[serde(default)]
+    pub kyc_docs: Vec<KycDoc>,
+    #[serde(default)]
+    pub ib_share: BTreeMap<u64, u8>,
+    /// client account -> IB account
+    #[serde(default)]
+    pub ib_of: BTreeMap<u64, u64>,
     /// Oldest first.
     pub audit: Vec<AuditRec>,
 }
@@ -451,14 +570,19 @@ impl AdminState {
                     format!("{} <{}> in {group}", profile.name, profile.email),
                 );
             }
-            AdminCmd::KycSet { account, kyc } => {
+            AdminCmd::KycSet { account, kyc, note } => {
                 let old = self.kyc_of(*account).to_string();
                 self.kyc.insert(*account, kyc.clone());
                 self.audit(
                     r,
                     "kyc.update".into(),
                     format!("#{account}"),
-                    format!("{old} → {kyc}"),
+                    format!(
+                        "{old} → {kyc}{}",
+                        note.as_deref()
+                            .map(|n| format!(" ({n})"))
+                            .unwrap_or_default()
+                    ),
                 );
             }
             AdminCmd::LpConfigSaved { details } => {
@@ -482,6 +606,98 @@ impl AdminState {
                     "profile.update".into(),
                     format!("#{account}"),
                     format!("LEI {old} → {}", lei.clone().unwrap_or_default()),
+                )
+            }
+            AdminCmd::FundingRequested { req } => {
+                self.funding.insert(req.id.clone(), req.clone());
+                self.audit(
+                    r,
+                    format!(
+                        "funding.{}",
+                        match req.kind {
+                            FundingKind::Deposit => "deposit",
+                            FundingKind::Withdraw => "withdraw",
+                        }
+                    ),
+                    format!("#{}", req.account),
+                    format!(
+                        "{} {} {} via {:?}: {}",
+                        req.id, req.amount, req.currency, req.method, req.details
+                    ),
+                )
+            }
+            AdminCmd::FundingDecided {
+                id,
+                status,
+                note,
+                op_id,
+            } => {
+                if let Some(f) = self.funding.get_mut(id) {
+                    f.status = *status;
+                    f.decided_by = Some(r.actor.name.clone());
+                    f.decided_at = Some(r.ts);
+                    f.note = note.clone();
+                    if op_id.is_some() {
+                        f.op_id = op_id.clone();
+                    }
+                }
+                let acc = self.funding.get(id).map(|f| f.account).unwrap_or(0);
+                self.audit(
+                    r,
+                    "funding.decide".into(),
+                    format!("#{acc}"),
+                    format!(
+                        "{id} → {status:?}{}",
+                        note.as_deref()
+                            .map(|n| format!(" ({n})"))
+                            .unwrap_or_default()
+                    ),
+                )
+            }
+            AdminCmd::KycDocAdded { doc } => {
+                self.kyc_docs.push(doc.clone());
+                self.audit(
+                    r,
+                    "kyc.document".into(),
+                    format!("#{}", doc.account),
+                    format!(
+                        "{} {} ({} B, {})",
+                        doc.kind,
+                        doc.filename,
+                        doc.size,
+                        &doc.sha256[..12.min(doc.sha256.len())]
+                    ),
+                )
+            }
+            AdminCmd::IbLinked { account, ib } => {
+                let old = self.ib_of.get(account).copied();
+                match ib {
+                    Some(i) => {
+                        self.ib_of.insert(*account, *i);
+                    }
+                    None => {
+                        self.ib_of.remove(account);
+                    }
+                }
+                self.audit(
+                    r,
+                    "ib.link".into(),
+                    format!("#{account}"),
+                    format!("IB {:?} → {:?}", old, ib),
+                )
+            }
+            AdminCmd::IbShareSet { account, pct } => {
+                let old = self.ib_share.get(account).copied().unwrap_or(0);
+                if *pct == 0 {
+                    self.ib_share.remove(account);
+                } else {
+                    self.ib_share.insert(*account, *pct);
+                }
+                self.audit(
+                    r,
+                    "ib.share".into(),
+                    format!("#{account}"),
+                    format!("{old}% → {pct}%"),
                 )
             }
             AdminCmd::AlertRaised {

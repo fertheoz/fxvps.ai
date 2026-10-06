@@ -193,6 +193,18 @@ struct RawClaims {
     /// Cloudflare Access tokens carry the user's e-mail and no role.
     #[serde(default)]
     email: Option<String>,
+    /// Trading accounts of a client token (identity service).
+    #[serde(default)]
+    accounts: Vec<String>,
+}
+
+/// Verified identity token of a trading client (self-service API).
+#[derive(Clone, Debug)]
+pub struct ClientClaims {
+    pub sub: String,
+    pub name: Option<String>,
+    /// External account ids (`DEMO-1`, ...).
+    pub accounts: Vec<String>,
 }
 
 /// Back-office role of a token: `role`, else the most privileged back-office
@@ -587,6 +599,56 @@ impl Authenticator {
     pub async fn refresh_from(&self, url: &str) -> Result<usize, AuthError> {
         let set = fetch_jwks(&reqwest::Client::new(), url).await?;
         self.replace_jwks(&set)
+    }
+
+    /// Verifies a client token (same keys / issuer / audience as staff tokens)
+    /// and returns its account list; no back-office role is required.
+    pub fn verify_client(&self, token: &str) -> Result<ClientClaims, AuthError> {
+        let header = decode_header(token).map_err(|e| AuthError(e.to_string()))?;
+        let keys = self.keys.read().map_err(|_| AuthError("poisoned".into()))?;
+        let mut last = AuthError("no key for token".into());
+        for k in keys.iter().filter(|k| k.alg == header.alg) {
+            if let (Some(want), Some(have)) = (&header.kid, &k.kid) {
+                if want != have {
+                    continue;
+                }
+            }
+            let mut v = Validation::new(k.alg);
+            v.leeway = LEEWAY_SECS;
+            let mut req = vec!["exp", "sub"];
+            if k.dev {
+                v.set_issuer(&[DEV_ISSUER]);
+                req.push("iss");
+            } else {
+                if let Some(i) = &self.issuer {
+                    v.set_issuer(&[i]);
+                    req.push("iss");
+                }
+                match &self.audience {
+                    Some(a) => {
+                        v.set_audience(&[a]);
+                        req.push("aud");
+                    }
+                    None => v.validate_aud = false,
+                }
+            }
+            v.set_required_spec_claims(&req);
+            match decode::<RawClaims>(token, &k.key, &v) {
+                Ok(d) => {
+                    let c = d.claims;
+                    if c.accounts.is_empty() {
+                        return Err(AuthError("token carries no trading accounts".into()));
+                    }
+                    return Ok(ClientClaims {
+                        sub: c.sub,
+                        name: c.name.or(c.email),
+                        accounts: c.accounts,
+                    });
+                }
+                Err(e) => last = AuthError(e.to_string()),
+            }
+        }
+        Err(last)
     }
 
     pub fn verify(&self, token: &str) -> Result<Actor, AuthError> {

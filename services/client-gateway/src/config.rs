@@ -38,6 +38,10 @@ pub struct ClientGatewayConfig {
     /// Serve `/metrics` on this separate address instead of the public listener
     /// (e.g. `0.0.0.0:9090`, reachable only by Prometheus via NetworkPolicy).
     pub metrics_listen: Option<String>,
+    /// Admin API base (`http://127.0.0.1:8090`) whose `/v1/client/*` routes are
+    /// exposed to clients as `/api/client/*` on this listener; `None` = no self-service.
+    #[serde(default)]
+    pub client_api_upstream: Option<String>,
     /// Allowed WebSocket `Origin`s (empty = any; native clients send none).
     pub allowed_origins: Vec<String>,
 }
@@ -60,6 +64,7 @@ impl Default for ClientGatewayConfig {
             max_connections_per_ip: 50,
             max_connections_per_subject: 20,
             metrics_listen: None,
+            client_api_upstream: None,
             allowed_origins: Vec::new(),
         }
     }
@@ -103,6 +108,11 @@ impl ClientGatewayConfig {
         };
         if let Some(v) = var("FXVPS_METRICS_LISTEN") {
             self.metrics_listen = Some(v);
+        }
+        if let Some(v) = var("FXVPS_CLIENT_API_UPSTREAM")
+            .or_else(|| var("CORE_ADMIN_ADDR").map(|a| format!("http://{a}")))
+        {
+            self.client_api_upstream = Some(v.trim_end_matches('/').to_string());
         }
         if let Some(v) = var("FXVPS_ALLOWED_ORIGINS") {
             self.allowed_origins = v

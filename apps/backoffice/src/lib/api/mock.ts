@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
@@ -28,6 +28,13 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     latency > 0 ? new Promise((res) => setTimeout(() => res(clone(v)), latency * (0.5 + rnd()))) : Promise.resolve(clone(v));
 
   let lpConfig: LpConfig | null = null;
+  const funding: FundingRequest[] = [
+    { id: "fr-1", account: s.clients[0]?.login ?? 1001, clientName: s.clients[0]?.name, kind: "deposit", method: "usdt_trc20", amount: 500_00, currency: "USD", details: "tx 0x9a…c1", requestedBy: "client", requestedAt: Date.now() * 1e6 - 2e12, status: "requested", decidedBy: null, decidedAt: null, note: null, opId: null },
+    { id: "fr-2", account: s.clients[1]?.login ?? 1002, clientName: s.clients[1]?.name, kind: "withdraw", method: "bank", amount: 1200_00, currency: "USD", details: "TR12 0006 … 55", requestedBy: "client", requestedAt: Date.now() * 1e6 - 9e12, status: "approved", decidedBy: "dealer", decidedAt: Date.now() * 1e6 - 8e12, note: null, opId: "op-77" },
+  ];
+  const kycDocs: KycDocMeta[] = [
+    { id: "kd-1", account: s.clients[0]?.login ?? 1001, kind: "id_front", filename: "passport.jpg", contentType: "image/jpeg", size: 412_000, sha256: "ab12cd34ef56", uploadedBy: "client", uploadedAt: new Date(Date.now() - 3e8).toISOString() },
+  ];
   const alerts: Alert[] = [
     { id: "al-1", kind: "exposure", target: "XAUUSD", severity: "critical", title: "B-book exposure over limit", detail: "XAUUSD: B-book 6.2 lots, limit 5 lots", raisedAt: Date.now() * 1e6 - 9e11, resolvedAt: null, acked: false },
     { id: "al-2", kind: "lp_deviation", target: "SIM", severity: "warning", title: "SIM prices excluded by the deviation guard", detail: "EURUSD, GBPUSD", raisedAt: Date.now() * 1e6 - 3e12, resolvedAt: null, acked: true },
@@ -305,6 +312,37 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       c.group = group;
       c.leverage = g.leverage;
       return delay(c);
+    },
+    async setIb(id, p, actor) {
+      guard(actor, "clients.edit");
+      const c = s.clients.find((x) => x.id === id);
+      if (!c) throw new Error("Client not found");
+      if (p.sharePct !== undefined) c.ibSharePct = p.sharePct;
+      if (p.ibAccount !== undefined) c.ibAccount = p.ibAccount;
+      audit(actor, "ib.update", `#${c.login}`, `share ${c.ibSharePct ?? 0}% ib ${c.ibAccount ?? "-"}`);
+      return delay(c);
+    },
+    async listKycDocs(id) {
+      const c = s.clients.find((x) => x.id === id);
+      return delay(kycDocs.filter((d) => c && d.account === c.login));
+    },
+    async kycDocBlob() { return delay(new Blob(["demo"], { type: "text/plain" })); },
+    async listFunding(status = "open") {
+      return delay(funding.filter((f) => status === "all" || (status === "open" ? f.status === "requested" : f.status === status)));
+    },
+    async decideFunding(id, decision, note, actor) {
+      guard(actor, "clients.edit");
+      const f = funding.find((x) => x.id === id);
+      if (!f) throw new Error("not found");
+      f.status = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "paid";
+      f.decidedBy = actor.name; f.decidedAt = Date.now() * 1e6; f.note = note ?? null;
+      if (decision === "approve") { const c = s.clients.find((x) => x.login === f.account); if (c) c.balance += f.kind === "deposit" ? f.amount : -f.amount; }
+      audit(actor, "funding.decide", `#${f.account}`, `${f.id} → ${f.status}`);
+      return delay(f);
+    },
+    async ibReport() {
+      const ibs = s.clients.filter((c) => (c.ibSharePct ?? 0) > 0);
+      return delay({ from: new Date(Date.now() - 30 * 864e5).toISOString(), to: null, rows: ibs.map((c) => ({ ib: c.login, name: c.name, currency: c.currency, sharePct: c.ibSharePct ?? 0, clients: s.clients.filter((x) => x.ibAccount === c.login).length, deals: 40, lots: 31.5, commission: 220_00, markup: 410_00, payout: Math.round((220_00 + 410_00) * (c.ibSharePct ?? 0) / 100) })) });
     },
     async setProfile(id, p, actor) {
       guard(actor, "clients.edit");

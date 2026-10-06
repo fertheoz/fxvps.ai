@@ -106,6 +106,17 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     setKyc: (id, kyc, actor) => call("PATCH", `/v1/accounts/${enc(id)}/kyc`, { kyc }, actor),
     setGroup: (id, group, actor) => call("PATCH", `/v1/accounts/${enc(id)}/group`, { group }, actor),
     setProfile: (id, p, actor) => call("PATCH", `/v1/accounts/${enc(id)}/profile`, p, actor),
+    setIb: (id, p, actor) => call("PATCH", `/v1/accounts/${enc(id)}/ib`, p, actor),
+    listKycDocs: (id) => call("GET", `/v1/accounts/${enc(id)}/kyc/documents`),
+    kycDocBlob: async (id, doc) => {
+      const token = await getToken();
+      const res = await doFetch(`${base}/v1/accounts/${enc(id)}/kyc/documents/${enc(doc)}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+      if (!res.ok) throw new ApiError(res.status, "http_error", `document ${res.status}`);
+      return await res.blob();
+    },
+    listFunding: (status = "open") => call("GET", `/v1/funding?status=${enc(status)}`),
+    decideFunding: (id, decision, note, actor) => call("POST", `/v1/funding/${enc(id)}/decide`, { decision, note }, actor),
+    ibReport: (from, to) => call("GET", `/v1/reports/ib${from || to ? `?from=${from ?? ""}&to=${to ?? ""}` : ""}`),
     transactions: (from, to) => call("GET", `/v1/reports/transactions${from || to ? `?from=${from ?? ""}&to=${to ?? ""}` : ""}`),
     bestExecution: (from, to) => call("GET", `/v1/reports/best-execution${from || to ? `?from=${from ?? ""}&to=${to ?? ""}` : ""}`),
     auditChain: () => call("GET", "/v1/audit/chain"),

@@ -100,6 +100,10 @@ export const Client = z.object({
   lastIp: z.string(),
   /** Legal Entity Identifier (transaction reporting). */
   lei: z.string().nullable().optional(),
+  /** Introducing broker (stage 12). */
+  ibSharePct: z.number().int().min(0).max(100).optional(),
+  ibAccount: z.number().int().nullable().optional(),
+  kycDocs: z.number().int().optional(),
 });
 export type Client = z.infer<typeof Client>;
 
@@ -219,5 +223,6 @@ export const Settings = z.object({
   requireMfa: z.boolean(),
   defaultBook: Book,
   brokerLei: z.string().optional(),
+  funding: z.object({ usdtTrc20Address: z.string(), bankDetails: z.string(), minDepositMinor: z.number().int().min(0), minWithdrawMinor: z.number().int().min(0) }).optional(),
 });
 export type Settings = z.infer<typeof Settings>;

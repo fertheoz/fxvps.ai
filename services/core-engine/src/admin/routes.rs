@@ -3,9 +3,10 @@
 
 use super::auth::{self, Actor, Claims, Role};
 use super::store::{
-    AdminCmd, AdminState, AdminUserRec, BalanceKind, BalanceOp, OpStatus, SettingsRec,
+    AdminCmd, AdminState, AdminUserRec, BalanceKind, BalanceOp, FundingKind, FundingMethod,
+    FundingRequest, FundingStatus, KycDoc, OpStatus, SettingsRec,
 };
-use super::{need, views, AdminCtx, ApiError, ApiResult};
+use super::{need, views, AdminCtx, ApiError, ApiResult, ClientActor};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, patch, post, put};
@@ -37,6 +38,15 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/accounts/{id}/kyc", patch(set_kyc))
         .route("/v1/accounts/{id}/group", patch(set_group))
         .route("/v1/accounts/{id}/profile", patch(set_profile))
+        .route("/v1/accounts/{id}/kyc/documents", get(kyc_docs))
+        .route("/v1/accounts/{id}/kyc/documents/{doc}", get(kyc_doc_file))
+        .route("/v1/accounts/{id}/ib", patch(set_ib))
+        .route("/v1/funding", get(funding_list))
+        .route("/v1/funding/{id}/decide", post(funding_decide))
+        .route("/v1/reports/ib", get(ib_report))
+        .route("/v1/client/me", get(client_me))
+        .route("/v1/client/funding", post(client_funding_request))
+        .route("/v1/client/kyc/documents", post(client_kyc_upload))
         .route("/v1/reports/transactions", get(transactions))
         .route("/v1/reports/best-execution", get(best_execution))
         .route("/v1/audit/chain", get(audit_chain))
@@ -794,6 +804,8 @@ async fn reject(
 #[derive(Deserialize)]
 struct KycReq {
     kyc: String,
+    #[serde(default)]
+    note: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -929,6 +941,512 @@ async fn audit_chain(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     })))
 }
 
+// ---------------------------------------------------------------------------
+// stage 12: client self-service (funding, KYC documents), IB
+// ---------------------------------------------------------------------------
+
+fn client_as_actor(c: &ClientActor) -> Actor {
+    Actor {
+        sub: c.sub.clone(),
+        name: format!("client:{}", c.name),
+        role: Role::Readonly,
+        mfa_ok: true,
+    }
+}
+
+/// Everything the terminal's account dialog needs in one call.
+async fn client_me(State(ctx): State<AdminCtx>, client: ClientActor) -> ApiResult {
+    let st = ctx.view_state().await;
+    let logins: Vec<(String, u64)> = client.logins.clone();
+    let accounts = ctx
+        .q(move |e| {
+            logins
+                .iter()
+                .filter_map(|(ext, l)| {
+                    let v = views::client(e, *l, &st)?;
+                    Some(json!({
+                        "externalId": ext, "login": l, "name": v["name"], "group": v["group"],
+                        "currency": v["currency"], "balance": v["balance"], "equity": v["equity"],
+                        "margin": v["margin"], "kyc": v["kyc"],
+                    }))
+                })
+                .collect::<Vec<Value>>()
+        })
+        .await?;
+    let st = ctx.view_state().await;
+    let mine = |a: u64| client.owns(a);
+    let funding: Vec<Value> = st
+        .funding
+        .values()
+        .filter(|f| mine(f.account))
+        .map(|f| json!(f))
+        .collect();
+    let documents: Vec<Value> = st
+        .kyc_docs
+        .iter()
+        .filter(|d| mine(d.account))
+        .map(|d| json!({ "id": d.id, "account": d.account, "kind": d.kind, "filename": d.filename, "size": d.size, "uploadedAt": views::iso(d.uploaded_at) }))
+        .collect();
+    Ok(Json(json!({
+        "subject": client.sub,
+        "name": client.name,
+        "accounts": accounts,
+        "unknownAccounts": client.account_ids.iter().filter(|a| client.login_of(a).is_none()).collect::<Vec<_>>(),
+        "funding": funding,
+        "documents": documents,
+        "instructions": st.settings.funding,
+    })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientFundingReq {
+    account: String,
+    kind: FundingKind,
+    method: FundingMethod,
+    /// Minor units of the account currency.
+    amount: i64,
+    #[serde(default)]
+    details: String,
+}
+
+async fn client_funding_request(
+    State(ctx): State<AdminCtx>,
+    client: ClientActor,
+    Json(req): Json<ClientFundingReq>,
+) -> ApiResult {
+    let login = client
+        .login_of(&req.account)
+        .ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "forbidden", "not your account"))?;
+    if req.amount <= 0 {
+        return Err(ApiError::bad("amount must be positive (minor units)"));
+    }
+    let details: String = req.details.trim().chars().take(300).collect();
+    if details.is_empty() {
+        return Err(ApiError::bad(
+            "details are required (tx hash, sender, destination address or IBAN)",
+        ));
+    }
+    let (ccy, balance) = ctx
+        .q(move |e| {
+            let a = e.account(login)?;
+            let g = e.group(&a.group)?;
+            Some((
+                g.currency.as_str().to_string(),
+                e.balance(login).map(|m| m.minor as i64).unwrap_or(0),
+            ))
+        })
+        .await?
+        .ok_or_else(|| ApiError::not_found("unknown account"))?;
+    let mut store = ctx.store.lock().await;
+    let fi = store.state.settings.funding.clone();
+    match (req.kind, req.method) {
+        (FundingKind::Deposit, FundingMethod::UsdtTrc20) if fi.usdt_trc20_address.is_empty() => {
+            return Err(ApiError::bad("crypto deposits are not enabled"))
+        }
+        (FundingKind::Deposit, FundingMethod::Bank) if fi.bank_details.is_empty() => {
+            return Err(ApiError::bad("bank deposits are not enabled"))
+        }
+        _ => {}
+    }
+    match req.kind {
+        FundingKind::Deposit if fi.min_deposit_minor > 0 && req.amount < fi.min_deposit_minor => {
+            return Err(ApiError::bad("below the minimum deposit"))
+        }
+        FundingKind::Withdraw
+            if fi.min_withdraw_minor > 0 && req.amount < fi.min_withdraw_minor =>
+        {
+            return Err(ApiError::bad("below the minimum withdrawal"))
+        }
+        FundingKind::Withdraw if req.amount > balance => {
+            return Err(ApiError::bad("exceeds the account balance"))
+        }
+        _ => {}
+    }
+    let open = store
+        .state
+        .funding
+        .values()
+        .filter(|f| f.account == login && f.status == FundingStatus::Requested)
+        .count();
+    if open >= 5 {
+        return Err(ApiError::bad("too many open requests"));
+    }
+    let fr = FundingRequest {
+        id: format!("fr-{}", store.next_seq()),
+        account: login,
+        kind: req.kind,
+        method: req.method,
+        amount: req.amount,
+        currency: ccy,
+        details,
+        requested_by: client.name.clone(),
+        requested_at: now_ns(),
+        status: FundingStatus::Requested,
+        decided_by: None,
+        decided_at: None,
+        note: None,
+        op_id: None,
+    };
+    store.append(
+        &client_as_actor(&client),
+        AdminCmd::FundingRequested { req: fr.clone() },
+    )?;
+    drop(store);
+    ctx.notify(&["listFunding", "listAudit"]);
+    Ok(Json(json!(fr)))
+}
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    account: String,
+}
+
+const KYC_KINDS: [&str; 5] = ["id_front", "id_back", "proof_of_address", "selfie", "other"];
+const KYC_TYPES: [&str; 4] = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+
+/// Raw upload: body = file bytes, `X-Filename`, `X-Doc-Kind`, `Content-Type`.
+async fn client_kyc_upload(
+    State(ctx): State<AdminCtx>,
+    client: ClientActor,
+    Query(q): Query<UploadQuery>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult {
+    let login = client
+        .login_of(&q.account)
+        .ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "forbidden", "not your account"))?;
+    let hdr = |k: &str| {
+        headers
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+    let kind = hdr("x-doc-kind").unwrap_or_else(|| "other".into());
+    if !KYC_KINDS.contains(&kind.as_str()) {
+        return Err(ApiError::bad("invalid document kind"));
+    }
+    let content_type = hdr("content-type")
+        .map(|c| c.split(';').next().unwrap_or("").trim().to_lowercase())
+        .unwrap_or_default();
+    if !KYC_TYPES.contains(&content_type.as_str()) {
+        return Err(ApiError::bad("only JPEG, PNG, WebP or PDF"));
+    }
+    if body.is_empty() || body.len() > 6 * 1024 * 1024 {
+        return Err(ApiError::bad("file must be 1 B .. 6 MB"));
+    }
+    let filename: String = hdr("x-filename")
+        .unwrap_or_else(|| "document".into())
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .take(80)
+        .collect();
+    let filename = if filename.is_empty() {
+        "document".to_string()
+    } else {
+        filename
+    };
+    let sha = {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(&body))
+    };
+    let mut store = ctx.store.lock().await;
+    if store
+        .state
+        .kyc_docs
+        .iter()
+        .filter(|d| d.account == login)
+        .count()
+        >= 20
+    {
+        return Err(ApiError::bad("document limit reached"));
+    }
+    let id = format!("kd-{}", store.next_seq());
+    let dir = ctx.data_dir.join("kyc").join(login.to_string());
+    tokio::fs::create_dir_all(&dir).await?;
+    tokio::fs::write(dir.join(format!("{id}-{filename}")), &body).await?;
+    let doc = KycDoc {
+        id,
+        account: login,
+        kind,
+        filename,
+        content_type,
+        size: body.len() as u64,
+        sha256: sha,
+        uploaded_by: client.name.clone(),
+        uploaded_at: now_ns(),
+    };
+    let actor = client_as_actor(&client);
+    store.append(&actor, AdminCmd::KycDocAdded { doc: doc.clone() })?;
+    if store.state.kyc_of(login) == "none" {
+        store.append(
+            &actor,
+            AdminCmd::KycSet {
+                account: login,
+                kyc: "pending".into(),
+                note: Some("documents uploaded by the client".into()),
+            },
+        )?;
+    }
+    drop(store);
+    ctx.notify(&["listClients", "getClient", "listKycDocs", "listAudit"]);
+    Ok(Json(
+        json!({ "id": doc.id, "kind": doc.kind, "filename": doc.filename, "size": doc.size, "uploadedAt": views::iso(doc.uploaded_at) }),
+    ))
+}
+
+async fn kyc_docs(State(ctx): State<AdminCtx>, actor: Actor, Path(id): Path<String>) -> ApiResult {
+    need(&actor, "clients.view")?;
+    let account = parse_id(&id)?;
+    let st = &ctx.store.lock().await.state;
+    Ok(Json(Value::Array(
+        st.kyc_docs
+            .iter()
+            .filter(|d| d.account == account)
+            .map(|d| json!({ "id": d.id, "account": d.account, "kind": d.kind, "filename": d.filename, "contentType": d.content_type, "size": d.size, "sha256": d.sha256, "uploadedBy": d.uploaded_by, "uploadedAt": views::iso(d.uploaded_at) }))
+            .collect(),
+    )))
+}
+
+async fn kyc_doc_file(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Path((id, doc)): Path<(String, String)>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::response::IntoResponse;
+    need(&actor, "clients.view")?;
+    let account = parse_id(&id)?;
+    let d = ctx
+        .store
+        .lock()
+        .await
+        .state
+        .kyc_docs
+        .iter()
+        .find(|d| d.account == account && d.id == doc)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("unknown document"))?;
+    let path = ctx
+        .data_dir
+        .join("kyc")
+        .join(account.to_string())
+        .join(format!("{}-{}", d.id, d.filename));
+    let bytes = tokio::fs::read(&path).await?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, d.content_type.clone()),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("inline; filename=\"{}\"", d.filename),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IbReq {
+    /// IB share of this account's clients' commission, 0..50 (this account is an IB).
+    #[serde(default)]
+    share_pct: Option<u8>,
+    /// IB this (client) account belongs to; null clears.
+    #[serde(default)]
+    ib_account: Option<Option<u64>>,
+}
+
+async fn set_ib(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(req): Json<IbReq>,
+) -> ApiResult {
+    need(&actor, "clients.edit")?;
+    let account = parse_id(&id)?;
+    if !ctx.q(move |e| e.account(account).is_some()).await? {
+        return Err(ApiError::not_found("unknown account"));
+    }
+    if let Some(p) = req.share_pct {
+        if p > 50 {
+            return Err(ApiError::bad("sharePct must be 0..50"));
+        }
+    }
+    if let Some(Some(ib)) = req.ib_account {
+        if ib == account || !ctx.q(move |e| e.account(ib).is_some()).await? {
+            return Err(ApiError::bad("unknown IB account"));
+        }
+    }
+    let mut store = ctx.store.lock().await;
+    if let Some(p) = req.share_pct {
+        store.append(&actor, AdminCmd::IbShareSet { account, pct: p })?;
+    }
+    if let Some(ib) = req.ib_account {
+        store.append(&actor, AdminCmd::IbLinked { account, ib })?;
+    }
+    drop(store);
+    ctx.notify(&["listClients", "getClient", "ibReport", "listAudit"]);
+    let st = ctx.view_state().await;
+    ctx.q(move |e| views::client(e, account, &st))
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("unknown account"))
+}
+
+#[derive(Deserialize)]
+struct FundingQuery {
+    #[serde(default)]
+    status: Option<String>,
+}
+
+async fn funding_list(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<FundingQuery>,
+) -> ApiResult {
+    need(&actor, "clients.view")?;
+    let st = ctx.view_state().await;
+    Ok(Json(views::funding(&st, q.status.as_deref())))
+}
+
+#[derive(Deserialize)]
+struct DecideReq {
+    /// "approve" | "reject" | "paid"
+    decision: String,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// Staff decision on a client funding request. Approving creates the balance
+/// operation (subject to the 4-eyes threshold like any other balance op).
+async fn funding_decide(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(req): Json<DecideReq>,
+) -> ApiResult {
+    let note = req
+        .note
+        .map(|n| n.trim().chars().take(300).collect::<String>())
+        .filter(|n| !n.is_empty());
+    let mut store = ctx.store.lock().await;
+    let fr = store
+        .state
+        .funding
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("unknown funding request"))?;
+    let (status, op_id) = match req.decision.as_str() {
+        "reject" => {
+            need(&actor, "clients.edit")?;
+            if fr.status != FundingStatus::Requested {
+                return Err(ApiError::bad("already decided"));
+            }
+            (FundingStatus::Rejected, None)
+        }
+        "paid" => {
+            need(&actor, "clients.edit")?;
+            if fr.kind != FundingKind::Withdraw || fr.status != FundingStatus::Approved {
+                return Err(ApiError::bad(
+                    "only an approved withdrawal can be marked paid",
+                ));
+            }
+            (FundingStatus::Paid, None)
+        }
+        "approve" => {
+            if fr.status != FundingStatus::Requested {
+                return Err(ApiError::bad("already decided"));
+            }
+            let kind = match fr.kind {
+                FundingKind::Deposit => BalanceKind::Deposit,
+                FundingKind::Withdraw => BalanceKind::Withdraw,
+            };
+            need(&actor, kind.permission())?;
+            let account = fr.account;
+            let balance = ctx
+                .q(move |e| e.balance(account).map(|m| m.minor as i64).unwrap_or(0))
+                .await?;
+            let mut op = BalanceOp {
+                id: format!("op-{}", store.next_seq()),
+                account,
+                kind,
+                amount: fr.amount,
+                currency: fr.currency.clone(),
+                reason: format!(
+                    "client request {} via {:?}: {}",
+                    fr.id, fr.method, fr.details
+                ),
+                idempotency_key: format!("funding:{}", fr.id),
+                requested_by: actor.clone(),
+                requested_at: now_ns(),
+                status: OpStatus::PendingApproval,
+                decided_by: None,
+                decided_at: None,
+                decision_note: None,
+                new_balance: balance,
+                new_credit: store.state.credit_of(account),
+            };
+            if fr.amount >= store.state.settings.four_eyes_threshold {
+                store.append(&actor, AdminCmd::BalanceQueued { op: op.clone() })?;
+            } else {
+                let (b, c) = execute(&ctx, &store.state, &op).await?;
+                op.status = OpStatus::Applied;
+                op.new_balance = b;
+                op.new_credit = c;
+                store.append(&actor, AdminCmd::BalanceApplied { op: op.clone() })?;
+            }
+            (FundingStatus::Approved, Some(op.id))
+        }
+        _ => return Err(ApiError::bad("decision must be approve, reject or paid")),
+    };
+    store.append(
+        &actor,
+        AdminCmd::FundingDecided {
+            id: id.clone(),
+            status,
+            note,
+            op_id,
+        },
+    )?;
+    let out = store.state.funding.get(&id).cloned();
+    drop(store);
+    ctx.notify(&[
+        "listFunding",
+        "listApprovals",
+        "listClients",
+        "getClient",
+        "listAudit",
+        "statements",
+        "dashboard",
+    ]);
+    Ok(Json(json!(out)))
+}
+
+/// IB report: per IB account, linked clients' volume and commission in
+/// `[from, to)` and the IB's share.
+async fn ib_report(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<ReportRange>,
+) -> ApiResult {
+    need(&actor, "reports.view")?;
+    let now = now_ns();
+    let from = q
+        .from
+        .as_deref()
+        .and_then(parse_iso_ns)
+        .unwrap_or(now.saturating_sub(30 * DAY_NS));
+    let to =
+        q.to.as_deref()
+            .and_then(parse_iso_ns)
+            .map(|t| t + DAY_NS)
+            .unwrap_or(u64::MAX);
+    let st = ctx.view_state().await;
+    Ok(Json(
+        ctx.q(move |e| views::ib_report(e, &st, from, to)).await?,
+    ))
+}
+
 async fn set_kyc(
     State(ctx): State<AdminCtx>,
     actor: Actor,
@@ -948,6 +1466,10 @@ async fn set_kyc(
         AdminCmd::KycSet {
             account,
             kyc: req.kyc,
+            note: req
+                .note
+                .map(|n| n.trim().chars().take(500).collect())
+                .filter(|n: &String| !n.is_empty()),
         },
     )?;
     ctx.notify(&["listClients", "getClient", "listAudit"]);

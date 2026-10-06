@@ -6,6 +6,7 @@ import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { ApprovalRequest } from "@/lib/api";
+import { FundingSection } from "@/components/funding";
 
 export default function ApprovalsPage() {
   const t = useT();
@@ -65,6 +66,7 @@ export default function ApprovalsPage() {
           ))}
         </div>
       )}
+      <FundingSection />
       <Dialog
         open={!!rejecting}
         onClose={() => setRejecting(null)}

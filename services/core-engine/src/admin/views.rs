@@ -84,6 +84,9 @@ pub fn client(e: &Engine, id: u64, admin: &AdminState) -> Option<Value> {
         "name": admin.profiles.get(&id).map_or_else(|| format!("Account {id}"), |p| p.name.clone()),
         "email": admin.profiles.get(&id).map_or_else(|| format!("account{id}@example.com"), |p| p.email.clone()),
         "lei": admin.profiles.get(&id).and_then(|p| p.lei.clone()),
+        "ibSharePct": admin.ib_share.get(&id).copied().unwrap_or(0),
+        "ibAccount": admin.ib_of.get(&id).copied(),
+        "kycDocs": admin.kyc_docs.iter().filter(|d| d.account == id).count(),
         "country": "ZZ",
         "group": a.group,
         "status": "active",
@@ -473,6 +476,92 @@ pub fn best_execution(e: &Engine, from: u64, to: u64) -> Value {
                 "priceImprovementPct": if a.priced > 0 { f64::from(a.improved) / f64::from(a.priced) * 100.0 } else { 0.0 },
                 "p50LatencyMs": p50_latency,
                 "p95LatencyMs": p95(&mut a.lat),
+            })
+        })
+        .collect();
+    json!({ "from": iso(from), "to": if to == u64::MAX { Value::Null } else { json!(iso(to)) }, "rows": rows })
+}
+
+/// Client funding requests for the back office, newest first.
+pub fn funding(admin: &AdminState, status: Option<&str>) -> Value {
+    let mut rows: Vec<&super::store::FundingRequest> = admin
+        .funding
+        .values()
+        .filter(|f| match status {
+            None | Some("all") | Some("") => true,
+            Some("open") => f.status == super::store::FundingStatus::Requested,
+            Some(s) => format!("{:?}", f.status).to_lowercase() == s,
+        })
+        .collect();
+    rows.sort_by_key(|f| std::cmp::Reverse(f.requested_at));
+    Value::Array(
+        rows.into_iter()
+            .map(|f| {
+                let mut v = json!(f);
+                v["requestedAtIso"] = json!(iso(f.requested_at));
+                v["decidedAtIso"] = f
+                    .decided_at
+                    .map(iso)
+                    .map(Value::String)
+                    .unwrap_or(Value::Null);
+                v["clientName"] = admin
+                    .profiles
+                    .get(&f.account)
+                    .map(|p| p.name.clone())
+                    .map(Value::String)
+                    .unwrap_or(Value::Null);
+                v
+            })
+            .collect(),
+    )
+}
+
+/// Introducing brokers: linked clients' lots, commission and A-book markup in
+/// `[from, to)` and the IB's payout at its share.
+pub fn ib_report(e: &Engine, admin: &AdminState, from: u64, to: u64) -> Value {
+    #[derive(Default)]
+    struct Acc {
+        clients: std::collections::BTreeSet<u64>,
+        lots: f64,
+        commission: i128,
+        markup: i128,
+        deals: u32,
+    }
+    let mut by: BTreeMap<u64, Acc> = BTreeMap::new();
+    for (client, ib) in &admin.ib_of {
+        by.entry(*ib).or_default().clients.insert(*client);
+    }
+    for d in e.deals().iter().filter(|d| d.ts >= from && d.ts < to) {
+        let Some(ib) = admin.ib_of.get(&d.account) else {
+            continue;
+        };
+        let a = by.entry(*ib).or_default();
+        a.deals += 1;
+        a.lots += qty_f(d.volume);
+        a.commission += -d.commission.minor;
+        if d.entry == oms::DealEntry::Out && d.lp_price.is_some() {
+            a.markup += d.broker_pnl;
+        }
+    }
+    let rows: Vec<Value> = by
+        .into_iter()
+        .map(|(ib, a)| {
+            let pct = admin.ib_share.get(&ib).copied().unwrap_or(0) as i128;
+            let ccy = e
+                .account(ib)
+                .and_then(|acc| e.group(&acc.group))
+                .map(|g| g.currency.to_string());
+            json!({
+                "ib": ib,
+                "name": admin.profiles.get(&ib).map(|p| p.name.clone()),
+                "currency": ccy,
+                "sharePct": pct,
+                "clients": a.clients.len(),
+                "deals": a.deals,
+                "lots": a.lots,
+                "commission": minor(a.commission),
+                "markup": minor(a.markup),
+                "payout": minor((a.commission + a.markup) * pct / 100),
             })
         })
         .collect();

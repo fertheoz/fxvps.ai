@@ -8,7 +8,7 @@ import { BookBadge, SideBadge, ToxicityBadge } from "@/components/badges";
 import { useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { Trade } from "@/lib/schemas";
-import type { BestExecutionRow, ClientFlowRow, ExecutionRow, ExecutionSummary, LpExecution, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
+import type { BestExecutionRow, ClientFlowRow, IbRow, ExecutionRow, ExecutionSummary, LpExecution, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
 import { formatMinorPlain } from "@/lib/money";
 import { downloadCsv, toCsv } from "@/lib/utils";
 
@@ -21,7 +21,8 @@ const xs = createColumnHelper<ExecutionSummary>();
 const fc = createColumnHelper<ClientFlowRow>();
 const txc = createColumnHelper<TransactionRow>();
 const bxc = createColumnHelper<BestExecutionRow>();
-type Tab = "trades" | "statements" | "lp" | "execution" | "revenue" | "flow" | "transactions" | "bestexec";
+const ibc = createColumnHelper<IbRow>();
+type Tab = "trades" | "statements" | "lp" | "execution" | "revenue" | "flow" | "transactions" | "bestexec" | "ib";
 
 const pts = (v: number | null | undefined, digits = 1) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(digits)}`);
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
@@ -42,6 +43,7 @@ export default function ReportsPage() {
   const [range, setRange] = React.useState<{ from: string; to: string }>({ from: "", to: "" });
   const tx = useApiQuery("transactions", [range.from || undefined, range.to || undefined], { enabled: tab === "transactions" });
   const bx = useApiQuery("bestExecution", [range.from || undefined, range.to || undefined], { enabled: tab === "bestexec" });
+  const ib = useApiQuery("ibReport", [range.from || undefined, range.to || undefined], { enabled: tab === "ib" });
 
   const execCols = [
     xc.accessor("at", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
@@ -158,6 +160,17 @@ export default function ReportsPage() {
     bxc.accessor("p50LatencyMs", { header: t("reports.p50Latency"), cell: (c) => `${f.num(c.getValue())} ms` }),
     bxc.accessor("p95LatencyMs", { header: t("reports.p95Latency"), cell: (c) => `${f.num(c.getValue())} ms` }),
   ];
+  const ibCols = [
+    ibc.accessor("ib", { header: "IB" }),
+    ibc.accessor("name", { header: t("clients.name"), cell: (c) => c.getValue() ?? "—" }),
+    ibc.accessor("sharePct", { header: t("ib.share"), cell: (c) => `${c.getValue()}%` }),
+    ibc.accessor("clients", { header: t("ib.clients") }),
+    ibc.accessor("deals", { header: t("ib.deals") }),
+    ibc.accessor("lots", { header: t("positions.lots"), cell: (c) => c.getValue().toFixed(2) }),
+    ibc.accessor("commission", { header: t("reports.commission"), cell: (c) => f.money(c.getValue(), c.row.original.currency ?? "USD") }),
+    ibc.accessor("markup", { header: t("reports.markup"), cell: (c) => f.money(c.getValue(), c.row.original.currency ?? "USD") }),
+    ibc.accessor("payout", { header: t("ib.payout"), cell: (c) => <Pnl value={c.getValue()}>{f.money(c.getValue(), c.row.original.currency ?? "USD")}</Pnl> }),
+  ];
   const tradeCols = [
     tc.accessor("closedAt", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
     tc.accessor("login", { header: t("clients.login") }),
@@ -181,7 +194,10 @@ export default function ReportsPage() {
   ];
 
   const exportCsv = () => {
-    if (tab === "transactions") {
+    if (tab === "ib") {
+      const rows = (ib.data?.rows ?? []).map((x) => [x.ib, x.name ?? "", x.sharePct, x.clients, x.deals, x.lots.toFixed(2), formatMinorPlain(x.commission, x.currency ?? "USD"), formatMinorPlain(x.markup, x.currency ?? "USD"), formatMinorPlain(x.payout, x.currency ?? "USD")]);
+      downloadCsv("ib-report.csv", toCsv(["ib", "name", "share_pct", "clients", "deals", "lots", "commission", "markup", "payout"], rows));
+    } else if (tab === "transactions") {
       const rows = (tx.data?.rows ?? []).map((x) => [x.txId, x.tradingDateTime, x.executingEntity, x.buyerId, x.sellerId, x.clientLogin, x.instrument, x.assetClass ?? "", x.isin, x.side, x.entry, x.price, x.priceCurrency ?? "", x.quantityLots, x.quantityUnits, x.notional.toFixed(2), x.tradingCapacity, x.venue, x.executionLp ?? "", x.book, formatMinorPlain(x.commission, "USD"), formatMinorPlain(x.swap, "USD"), formatMinorPlain(x.realisedPnl, "USD"), x.reason]);
       downloadCsv("transactions.csv", toCsv(["tx_id", "trading_date_time", "executing_entity_lei", "buyer_id", "seller_id", "client_login", "instrument", "asset_class", "isin", "side", "entry", "price", "price_currency", "quantity_lots", "quantity_units", "notional", "trading_capacity", "venue", "execution_lp", "book", "commission", "swap", "realised_pnl", "reason"], rows));
     } else if (tab === "bestexec") {
@@ -211,7 +227,7 @@ export default function ReportsPage() {
         {actor.can("reports.export") && <Button variant="outline" onClick={exportCsv} data-testid="export-csv"><Download className="h-4 w-4" />{t("common.export")}</Button>}
       </PageHeader>
       <div className="mb-3">
-        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }, { value: "flow", label: t("reports.flow") }, { value: "transactions", label: t("reports.transactions") }, { value: "bestexec", label: t("reports.bestExec") }]} />
+        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }, { value: "flow", label: t("reports.flow") }, { value: "transactions", label: t("reports.transactions") }, { value: "bestexec", label: t("reports.bestExec") }, { value: "ib", label: t("reports.ib") }]} />
       </div>
       {tab === "trades" && <DataTable data={trades.data ?? []} columns={tradeCols} getRowId={(x) => x.id} />}
       {tab === "statements" && <DataTable data={statements.data ?? []} columns={stmtCols} getRowId={(x) => String(x.login)} />}
@@ -224,7 +240,13 @@ export default function ReportsPage() {
           <DataTable data={execution.data?.rows ?? []} columns={execCols} getRowId={(x) => x.id} />
         </div>
       )}
-      {(tab === "transactions" || tab === "bestexec") && (
+      {tab === "ib" && (
+        <div data-testid="ib-report">
+          <p className="mb-2 text-xs text-muted-foreground">{t("reports.ibHint")}</p>
+          <DataTable data={ib.data?.rows ?? []} columns={ibCols} getRowId={(x) => String(x.ib)} />
+        </div>
+      )}
+      {(tab === "transactions" || tab === "bestexec" || tab === "ib") && (
         <div className="mb-3 flex flex-wrap items-end gap-2 text-sm">
           <label className="grid gap-1 text-xs text-muted-foreground">{t("reports.range")}
             <span className="flex gap-1"><input type="date" className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /><input type="date" className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} /></span>

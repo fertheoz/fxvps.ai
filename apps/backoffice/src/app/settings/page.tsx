@@ -52,6 +52,13 @@ function SettingsForm({ initial }: { initial: Settings }) {
         <SelectField label={t("settings.requireMfa")} value={draft.requireMfa ? "yes" : "no"} options={["yes", "no"] as const} onChange={(v) => set("requireMfa", v === "yes")} disabled={!editable} />
         <SelectField label={t("settings.defaultBook")} value={draft.defaultBook} options={Book.options} onChange={(v) => set("defaultBook", v)} disabled={!editable} />
         <TextField label={t("settings.brokerLei")} value={draft.brokerLei ?? ""} onChange={(v) => set("brokerLei", v.toUpperCase())} error={errors.brokerLei} disabled={!editable} />
+        <h3 className="mt-2 text-sm font-semibold sm:col-span-2">{t("settings.funding")}</h3>
+        <TextField label={t("settings.usdt")} value={draft.funding?.usdtTrc20Address ?? ""} onChange={(v) => set("funding", { ...(draft.funding ?? { usdtTrc20Address: "", bankDetails: "", minDepositMinor: 0, minWithdrawMinor: 0 }), usdtTrc20Address: v.trim() })} disabled={!editable} />
+        <label className="grid gap-1 text-sm">{t("settings.bank")}
+          <textarea className="min-h-20 rounded-md border border-border bg-background p-2 text-sm text-foreground" value={draft.funding?.bankDetails ?? ""} onChange={(e) => set("funding", { ...(draft.funding ?? { usdtTrc20Address: "", bankDetails: "", minDepositMinor: 0, minWithdrawMinor: 0 }), bankDetails: e.target.value })} disabled={!editable} />
+        </label>
+        <NumField label={t("settings.minDeposit")} value={draft.funding?.minDepositMinor ?? 0} onChange={(v) => set("funding", { ...(draft.funding ?? { usdtTrc20Address: "", bankDetails: "", minDepositMinor: 0, minWithdrawMinor: 0 }), minDepositMinor: Math.max(0, Math.round(v)) })} step={100} disabled={!editable} />
+        <NumField label={t("settings.minWithdraw")} value={draft.funding?.minWithdrawMinor ?? 0} onChange={(v) => set("funding", { ...(draft.funding ?? { usdtTrc20Address: "", bankDetails: "", minDepositMinor: 0, minWithdrawMinor: 0 }), minWithdrawMinor: Math.max(0, Math.round(v)) })} step={100} disabled={!editable} />
         {editable && <div className="sm:col-span-2"><Button onClick={() => { const v = validate(); if (v) mut.mutate(v); }} disabled={mut.isPending}>{t("common.save")}</Button></div>}
       </CardContent>
     </Card>
