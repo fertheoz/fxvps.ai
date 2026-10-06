@@ -65,6 +65,12 @@ pub enum GatewayEvent {
         /// Unix ms of the last inbound message.
         last_msg_ms: u64,
     },
+    /// A trading-session message the gateway does not model (e.g. the LP's
+    /// PositionReport AP / RequestForPositionsAck AO), fields as text.
+    LpMessage {
+        msg_type: String,
+        fields: Vec<(u32, String)>,
+    },
 }
 
 /// Commands accepted from internal components (OMS, tests).
@@ -82,6 +88,14 @@ pub enum OrderCommand {
         orig_cl_ord_id: String,
         order: Order,
     },
+    /// RequestForPositions (AN): the LP answers with PositionReports (AP),
+    /// published as [`GatewayEvent::LpMessage`] (omnibus reconciliation).
+    Positions {
+        req_id: String,
+        /// Body fields after PosReqID (LP-specific); empty = the defaults.
+        #[serde(default)]
+        fields: Vec<(u32, String)>,
+    },
 }
 
 impl OrderCommand {
@@ -89,6 +103,7 @@ impl OrderCommand {
         match self {
             OrderCommand::Submit(o) | OrderCommand::Replace { order: o, .. } => &o.cl_ord_id,
             OrderCommand::Cancel { cl_ord_id, .. } => cl_ord_id,
+            OrderCommand::Positions { req_id, .. } => req_id,
         }
     }
 }
@@ -579,6 +594,21 @@ fn to_body(cfg: &GatewayConfig, c: &OrderCommand) -> Result<Body, String> {
             price: order.limit_price,
             time_in_force: Some(order.tif),
         }),
+        OrderCommand::Positions { req_id, fields } => {
+            let mut f: Vec<(u32, Vec<u8>)> = vec![(710, req_id.clone().into_bytes())]; // PosReqID
+            if fields.is_empty() {
+                let ts = now_timestamp();
+                f.push((724, b"0".to_vec())); // PosReqType = positions
+                f.push((715, ts.get(..8).unwrap_or_default().as_bytes().to_vec())); // ClearingBusinessDate
+                f.push((60, ts.into_bytes())); // TransactTime
+            } else {
+                f.extend(fields.iter().map(|(t, v)| (*t, v.clone().into_bytes())));
+            }
+            Body::Unknown {
+                msg_type: "AN".into(),
+                fields: f,
+            }
+        }
     })
 }
 
@@ -696,6 +726,12 @@ async fn trade_task(
                                 cl_ord_id: r.cl_ord_id.clone(),
                                 orig_cl_ord_id: r.orig_cl_ord_id.clone(),
                                 text: r.text.clone(),
+                            });
+                        }
+                        Body::Unknown { msg_type, fields } => {
+                            let _ = events.send(GatewayEvent::LpMessage {
+                                msg_type: msg_type.clone(),
+                                fields: fields.iter().map(|(t, v)| (*t, String::from_utf8_lossy(v).into_owned())).collect(),
                             });
                         }
                         other => warn!(msg_type = other.msg_type(), "unexpected message on trading session"),
