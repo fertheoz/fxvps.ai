@@ -5,7 +5,10 @@ use crate::router::{LpOrderRequest, LpRouter, NullRouter};
 use crate::types::*;
 use ledger::{AccountId, AccountKind, Ledger, LedgerSnapshot, Posting, TxnKind, TxnRequest};
 use money::{Money, Price, Qty, Rounding, SCALE};
-use risk::{AccountRisk, GroupCommission, OrderIntent, PartialFill, Quote, QuoteBook, RiskError};
+use risk::{
+    AccountRisk, GroupCommission, OrderIntent, PartialFill, Quote, QuoteBook, RiskError,
+    RoutingRule,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -52,6 +55,9 @@ struct State {
     /// Deal history (append only; deal id = index + 1).
     #[serde(default)]
     deals: Vec<Deal>,
+    /// Routing rule table, evaluated top to bottom at order entry.
+    #[serde(default)]
+    rules: Vec<RoutingRule>,
 }
 
 /// Serializable engine snapshot.
@@ -257,6 +263,43 @@ impl Engine {
         Price::from_raw(point * g.markup_points_for(symbol, side))
     }
 
+    /// Markup for one order: a routing-rule override, else the group's.
+    fn order_markup(&self, o: &Order, g: &GroupConfig, side: Side) -> Price {
+        match o.markup_override {
+            Some(pts) => {
+                let point = self
+                    .st
+                    .symbols
+                    .get(&o.req.symbol)
+                    .map_or(0, |s| s.point().raw());
+                Price::from_raw(point * pts)
+            }
+            None => self.markup(g, &o.req.symbol, side),
+        }
+    }
+
+    /// Routing rule table (top to bottom).
+    pub fn rules(&self) -> &[RoutingRule] {
+        &self.st.rules
+    }
+
+    /// First enabled rule matching an order of `account` (in `group`) on `symbol`.
+    pub fn match_rule(
+        &self,
+        group: &str,
+        account: AccountNo,
+        symbol: &str,
+        volume: Qty,
+        pending: bool,
+    ) -> Option<&RoutingRule> {
+        let hour = ((self.st.now / 1_000_000_000) % 86_400 / 3_600) as u8;
+        let centilots = volume.raw() / 1_000_000;
+        self.st
+            .rules
+            .iter()
+            .find(|r| r.matches(group, account, symbol, centilots, pending, hour))
+    }
+
     fn client_quote(&self, g: &GroupConfig, symbol: &str) -> Result<Quote, RiskError> {
         let q = self
             .st
@@ -356,6 +399,9 @@ impl Engine {
             }
             Command::SetGroup(g) => {
                 self.st.groups.insert(g.name.clone(), g.clone());
+            }
+            Command::SetRules(rules) => {
+                self.st.rules = rules.clone();
             }
             Command::OpenAccount { account, group } => {
                 if !self.st.groups.contains_key(group) {
@@ -640,13 +686,21 @@ impl Engine {
         let id = self.st.next_id;
         self.st.next_id += 1;
         self.st.client_ids.insert(key, id);
+        // First matching routing rule decides the book and may override group levers.
+        let pending = req.order_type != OrderType::Market;
+        let rule = self
+            .match_rule(&acc.group, req.account, &req.symbol, req.volume, pending)
+            .cloned();
+        let routing = rule
+            .as_ref()
+            .map_or(g.routing, |r| r.book_for(id, g.routing));
         let order = Order {
             id,
             req,
             status: OrderStatus::New,
             filled: Qty::ZERO,
             avg_price: Price::ZERO,
-            routing: g.routing,
+            routing,
             close_position: close,
             position: None,
             stop_triggered: false,
@@ -656,6 +710,10 @@ impl Engine {
             origin,
             rearm_px: None,
             lp_attempts: 0,
+            rule: rule.as_ref().map(|r| r.id.clone()),
+            markup_override: rule.as_ref().and_then(|r| r.markup_points),
+            max_slippage_override: rule.as_ref().and_then(|r| r.max_slippage_points),
+            partial_fill_override: rule.as_ref().and_then(|r| r.partial_fill),
         };
         self.st.orders.insert(id, order);
         if let Err(reason) = self.validate_order(id, &g) {
@@ -832,16 +890,17 @@ impl Engine {
                 if let Some(l) = o.limit_leg() {
                     // "Limit or better" is guaranteed by the LP, not by us: the client
                     // limit net of the markup goes out as an IOC limit order.
-                    let m = self.markup(&g, &o.req.symbol, o.req.side).raw() * o.req.side.sign();
+                    let m = self.order_markup(o, &g, o.req.side).raw() * o.req.side.sign();
                     let lp_limit = Price::from_raw(l.raw() - m);
                     self.send_lp_limit(o.req.symbol.clone(), o.req.side, vec![id], Some(lp_limit));
-                } else if let (Some(req), Some(max)) =
-                    (o.req.requested_price, g.max_slippage_points)
-                {
+                } else if let (Some(req), Some(max)) = (
+                    o.req.requested_price,
+                    o.max_slippage_override.or(g.max_slippage_points),
+                ) {
                     // Slippage cap: the LP may fill up to `max` points past the requested
                     // price (client terms), as an IOC limit net of the markup.
                     let point = self.st.symbols[&o.req.symbol].point().raw();
-                    let m = self.markup(&g, &o.req.symbol, o.req.side).raw() * o.req.side.sign();
+                    let m = self.order_markup(o, &g, o.req.side).raw() * o.req.side.sign();
                     let lp_limit = Price::from_raw(req.raw() + o.req.side.sign() * point * max - m);
                     self.send_lp_limit(o.req.symbol.clone(), o.req.side, vec![id], Some(lp_limit));
                 } else if self.st.config.aggregate_a_book && o.close_position.is_none() {
@@ -913,9 +972,12 @@ impl Engine {
         });
     }
 
-    /// Partial-fill policy of the order's group.
+    /// Partial-fill policy of the order: a rule override, else the group's.
     fn policy(&self, id: OrderId) -> PartialFill {
         let o = &self.st.orders[&id];
+        if let Some(p) = o.partial_fill_override {
+            return p;
+        }
         let acc = &self.st.accounts[&o.req.account];
         self.st.groups[&acc.group].partial_fill
     }
@@ -970,7 +1032,7 @@ impl Engine {
             let o = &self.st.orders[&oid];
             let acc = &self.st.accounts[&o.req.account];
             let g = &self.st.groups[&acc.group];
-            let m = self.markup(g, &symbol, side).raw() * side.sign();
+            let m = self.order_markup(o, g, side).raw() * side.sign();
             let mut client_px = Price::from_raw(price.raw() + m);
             // Asymmetric slippage: an improvement on the requested price stays with us.
             if !g.pass_price_improvement {

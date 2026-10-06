@@ -613,6 +613,85 @@ fn group_commission_per_lot_and_per_million() {
 }
 
 #[test]
+fn routing_rules_decide_book_and_override_markup() {
+    use risk::{OrderKindFilter, RoutingRule};
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::BBook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 5;
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "10000");
+    let rule = |id: &str,
+                symbols: Vec<&str>,
+                routing: Option<Routing>,
+                pct: Option<u8>,
+                markup: Option<i64>| RoutingRule {
+        id: id.into(),
+        name: id.into(),
+        enabled: true,
+        groups: vec![],
+        accounts: vec![],
+        symbols: symbols.into_iter().map(String::from).collect(),
+        min_centilots: None,
+        max_centilots: None,
+        kind: OrderKindFilter::Any,
+        hours_utc: None,
+        routing,
+        a_book_pct: pct,
+        markup_points: markup,
+        max_slippage_points: None,
+        partial_fill: None,
+    };
+    // EURUSD -> A-book with a 20-point markup; everything else stays in the B-book group.
+    h.cmd(Command::SetRules(vec![rule(
+        "eur-a",
+        vec!["EURUSD"],
+        Some(Routing::ABook),
+        None,
+        Some(20),
+    )]));
+    let id = h.market(1, "r1", Side::Buy, "1");
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1, "routed to the LP by the rule");
+    h.cmd(Command::LpFill {
+        lp_order_id: sent[0].lp_order_id,
+        exec_id: "f".into(),
+        volume: qty("1"),
+        price: px("1.10010"),
+    });
+    let o = h.e.order(id).unwrap();
+    assert_eq!(o.rule.as_deref(), Some("eur-a"));
+    assert_eq!(o.routing, Routing::ABook);
+    assert_eq!(o.avg_price, px("1.10030")); // LP + 20 points (rule), not 5 (group)
+                                            // A disabled rule and a non-matching symbol fall back to the group (B-book, no LP order).
+    let mut off = rule("off", vec!["EURUSD"], Some(Routing::ABook), None, None);
+    off.enabled = false;
+    h.cmd(Command::SetRules(vec![off]));
+    h.market(1, "r2", Side::Buy, "1");
+    assert!(h.router.take().is_empty());
+    // Hybrid split: 100% A sends to the LP, 0% keeps B.
+    h.cmd(Command::SetRules(vec![rule(
+        "all-a",
+        vec![],
+        None,
+        Some(100),
+        None,
+    )]));
+    h.market(1, "r3", Side::Buy, "1");
+    assert_eq!(h.router.take().len(), 1);
+    h.cmd(Command::SetRules(vec![rule(
+        "all-b",
+        vec![],
+        None,
+        Some(0),
+        None,
+    )]));
+    h.market(1, "r4", Side::Buy, "1");
+    assert!(h.router.take().is_empty());
+}
+
+#[test]
 fn partial_fill_policies() {
     use risk::PartialFill;
     // Retry: the remainder goes to the LP again, up to max_attempts LP orders.

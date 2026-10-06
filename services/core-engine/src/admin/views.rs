@@ -1033,3 +1033,66 @@ pub fn dashboard_series(e: &Engine, admin: &AdminState, now_ns: u64, range: &str
         },
     })
 }
+
+/// Routing rule table as stored in the engine (camelCase JSON, see `RoutingRule`).
+pub fn rules(e: &Engine) -> Value {
+    serde_json::to_value(e.rules()).unwrap_or(Value::Array(Vec::new()))
+}
+
+/// Replays the rule table over the orders of the last period: how many orders
+/// (and lots) each rule would have taken, what stays with the group default,
+/// and a few sample orders with the rule and book they would get.
+pub fn rules_dry_run(e: &Engine, admin: &AdminState, since_ns: u64) -> Value {
+    let mut hits: BTreeMap<String, (u32, f64)> = BTreeMap::new();
+    let mut unmatched = (0u32, 0f64);
+    let mut samples: Vec<Value> = Vec::new();
+    for o in e.orders().filter(|o| o.created_ts >= since_ns) {
+        let Some(acc) = e.account(o.req.account) else {
+            continue;
+        };
+        let Some(g) = e.group(&acc.group) else {
+            continue;
+        };
+        let pending = o.req.order_type != OrderType::Market;
+        let rule = e.match_rule(
+            &acc.group,
+            o.req.account,
+            &o.req.symbol,
+            o.req.volume,
+            pending,
+        );
+        let lots = qty_f(o.req.volume);
+        match rule {
+            Some(r) => {
+                let h = hits.entry(r.id.clone()).or_default();
+                h.0 += 1;
+                h.1 += lots;
+            }
+            None => {
+                unmatched.0 += 1;
+                unmatched.1 += lots;
+            }
+        }
+        if samples.len() < 8 {
+            let routing = rule.map_or(g.routing, |r| r.book_for(o.id, g.routing));
+            samples.push(json!({
+                "orderId": o.id.to_string(),
+                "login": o.req.account,
+                "name": admin.profiles.get(&o.req.account).map(|p| p.name.clone()),
+                "symbol": o.req.symbol,
+                "lots": lots,
+                "rule": rule.map(|r| r.name.clone()),
+                "routing": book(routing),
+            }));
+        }
+    }
+    json!({
+        "since": iso(since_ns),
+        "rules": e.rules().iter().map(|r| {
+            let (orders, lots) = hits.get(&r.id).copied().unwrap_or_default();
+            json!({ "id": r.id, "name": r.name, "enabled": r.enabled, "orders": orders, "lots": lots })
+        }).collect::<Vec<_>>(),
+        "unmatched": { "orders": unmatched.0, "lots": unmatched.1 },
+        "samples": samples,
+    })
+}
