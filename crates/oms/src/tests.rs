@@ -1460,3 +1460,23 @@ fn retry_keeps_the_slippage_cap() {
     assert_eq!(again[0].limit, Some(px("1.10020")));
     assert_eq!(h.e.order(id).unwrap().lp_attempts, 2);
 }
+
+#[test]
+fn market_order_without_cap_gets_the_circuit_breaker() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 0;
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "10000");
+    let mut o = h.pending(1, "m", Side::Sell, OrderType::Market, None, None);
+    o.requested_price = Some(px("1.10000"));
+    h.order(o);
+    // 50 bps of 1.10000 = 550 points: the LP may not fill a sell below 1.09450
+    assert_eq!(h.router.take()[0].limit, Some(px("1.09450")));
+    // no requested price: the client quote at execution is the reference
+    // (EURUSD bid 1.10000 -> 1.09450)
+    h.market(1, "n", Side::Sell, "0.1");
+    assert_eq!(h.router.take()[0].limit, Some(px("1.09450")));
+}
