@@ -232,6 +232,14 @@ pub struct Aggregator {
     rr: AtomicUsize,
 }
 
+impl std::fmt::Debug for Aggregator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Aggregator")
+            .field("cfg", &self.config())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for Aggregator {
     fn default() -> Aggregator {
         Aggregator::new(AggConfig::default())

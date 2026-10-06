@@ -327,6 +327,76 @@ impl Markups {
     }
 }
 
+/// Feeds one LP's fix-gateway events into the aggregator and the engine
+/// until the event channel closes or the engine stops: quotes update the
+/// aggregated book (journaled as `Command::Quote` when the best bid/ask
+/// changes) and the merged depth goes to clients; executions become
+/// `Command::LpFill` / `Command::LpReject`.
+pub async fn run_bridge(
+    engine: EngineHandle,
+    mut rx: broadcast::Receiver<GatewayEvent>,
+    symbols: Arc<SymbolMap>,
+    prefix: String,
+    events: broadcast::Sender<Arc<CoreEvent>>,
+    lp: String,
+    agg: Arc<Aggregator>,
+) {
+    let mut markups = Markups::default();
+    loop {
+        let ev = match rx.recv().await {
+            Ok(ev) => ev,
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!(lp, skipped = n, "core bridge lagged behind fix-gateway");
+                continue;
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        };
+        if let GatewayEvent::Quote(q) = &ev {
+            let Some((sym, cs)) = symbols.from_lp(&q.symbol) else {
+                continue;
+            };
+            let lots = |l: &domain::Level| (Price::from(l.price), units_to_lots(l.qty, cs));
+            let book = LpBook {
+                bids: q.bids.iter().map(lots).collect(),
+                asks: q.asks.iter().map(lots).collect(),
+                ts_ns: q.ts_recv_ns,
+            };
+            if let Some((bid, ask)) = agg.update(&lp, sym, book) {
+                let cmd = Command::Quote {
+                    symbol: sym.to_string(),
+                    bid,
+                    ask,
+                };
+                if engine.command(cmd).await.is_err() {
+                    break; // engine stopped
+                }
+            }
+            let levels = q.bids.len().max(q.asks.len());
+            if markups.logged.get(sym) != Some(&levels) {
+                markups.logged.insert(sym.to_string(), levels);
+                tracing::info!(
+                    lp,
+                    symbol = sym,
+                    bids = q.bids.len(),
+                    asks = q.asks.len(),
+                    top_bid_lots = ?units_to_lots(q.bids.first().map_or(Fixed::ZERO, |l| l.qty), cs),
+                    "lp book levels"
+                );
+            }
+            markups.refresh(&engine).await;
+            for d in markups.depths(sym, &agg.merged(sym), domain::now_ns()) {
+                let _ = events.send(Arc::new(CoreEvent::Depth(d)));
+            }
+        } else if let Some(cmd) = to_command(&ev, &symbols, &prefix) {
+            if engine.command(cmd).await.is_err() {
+                break; // engine stopped
+            }
+        } else if let GatewayEvent::SessionUp { .. } | GatewayEvent::SessionDown { .. } = ev {
+            tracing::info!(lp, event = ?ev, "fix-gateway session event");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
