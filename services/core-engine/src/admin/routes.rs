@@ -2542,7 +2542,7 @@ async fn tenant_logins(
     let set = ctx
         .q(move |e| {
             e.accounts()
-                .filter(|a| groups.iter().any(|g| *g == a.group))
+                .filter(|a| groups.contains(&a.group))
                 .map(|a| a.id)
                 .collect::<std::collections::BTreeSet<u64>>()
         })
