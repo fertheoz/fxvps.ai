@@ -363,6 +363,21 @@ export class WsTradingApi implements TradingApi {
     return out;
   }
 
+  async getPrefs(accountId: string): Promise<string | null> {
+    if (!this.v12) return null;
+    try {
+      const body = await this.request((requestId) => ({ case: 'prefsRequest', value: { requestId, accountId } }));
+      return body.case === 'prefs' && body.value.json ? body.value.json : null;
+    } catch (e) {
+      this.emitJournal('warn', `Preferences unavailable: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
+  async setPrefs(accountId: string, json: string): Promise<void> {
+    await this.request((requestId) => ({ case: 'prefsSet', value: { requestId, accountId, json } }));
+  }
+
   /** Finished orders from the server (protocol v1.3), newest first. */
   async getOrderHistory(accountId: string): Promise<OrderHistoryEntry[]> {
     if (!this.v12) return [];
@@ -774,6 +789,7 @@ export class WsTradingApi implements TradingApi {
     }
     switch (b.case) {
       case 'ack':
+      case 'prefs':
       case 'symbolList':
       case 'candleResponse':
       case 'orderList':

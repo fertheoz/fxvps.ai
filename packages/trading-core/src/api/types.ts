@@ -156,6 +156,34 @@ export interface Deal {
   reason: 'client' | 'sl' | 'tp' | 'stop_out' | 'order';
 }
 
+/** A horizontal line drawn by the user on a symbol's chart. */
+export interface ChartLine {
+  id: string;
+  symbol: string;
+  price: number;
+  note?: string;
+}
+
+/** A price alert: fires once when the bid reaches `price` from the given side. */
+export interface PriceAlert {
+  id: string;
+  symbol: string;
+  price: number;
+  /** `above`: fires when bid >= price; `below`: when bid <= price. */
+  direction: 'above' | 'below';
+  /** Set when the alert has fired (kept in the list, greyed out). */
+  firedAt?: number;
+  createdAt: number;
+}
+
+/** Per-account chart objects, stored on the server as the account's preferences. */
+export interface ChartObjects {
+  lines: ChartLine[];
+  alerts: PriceAlert[];
+}
+
+export const EMPTY_OBJECTS: ChartObjects = { lines: [], alerts: [] };
+
 /** A finished order (order history). */
 export interface OrderHistoryEntry {
   id: string;
@@ -229,6 +257,9 @@ export interface TradingApi {
   getHistory(accountId: string): Promise<Deal[]>;
   /** Finished orders, newest first (empty where the backend has none). */
   getOrderHistory(accountId: string): Promise<OrderHistoryEntry[]>;
+  /** Stored per-account preferences (opaque JSON; null = nothing stored). */
+  getPrefs(accountId: string): Promise<string | null>;
+  setPrefs(accountId: string, json: string): Promise<void>;
   subscribeQuotes(symbols: string[], onQuotes: (quotes: Quote[]) => void): Unsubscribe;
   subscribeDepth(symbol: string, onDepth: (depth: Depth) => void): Unsubscribe;
   onEvent(listener: (event: TradingEvent) => void): Unsubscribe;

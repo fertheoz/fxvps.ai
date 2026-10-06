@@ -65,6 +65,7 @@ export class MockTradingApi implements TradingApi {
   private positions = new Map<string, Position[]>();
   private orders = new Map<string, PendingOrder[]>();
   private deals = new Map<string, Deal[]>();
+  private prefs = new Map<string, string>();
   private listeners = new Set<(e: TradingEvent) => void>();
   private quoteSubs = new Set<{ symbols: Set<string>; cb: (q: Quote[]) => void }>();
   private depthSubs = new Set<{ symbol: string; cb: (d: Depth) => void }>();
@@ -139,6 +140,16 @@ export class MockTradingApi implements TradingApi {
   async getHistory(accountId: string): Promise<Deal[]> {
     await this.delay();
     return [...(this.deals.get(accountId) ?? [])];
+  }
+
+  async getPrefs(accountId: string): Promise<string | null> {
+    await this.delay();
+    return this.prefs.get(accountId) ?? null;
+  }
+
+  async setPrefs(accountId: string, json: string): Promise<void> {
+    await this.delay();
+    this.prefs.set(accountId, json);
   }
 
   /** The simulator keeps no order history: every deal stands for one filled market order. */

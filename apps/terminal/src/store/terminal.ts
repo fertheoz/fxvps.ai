@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   Account,
+  ChartObjects,
   ConnectionState,
   Deal,
   JournalEntry,
@@ -15,7 +16,7 @@ import type {
   Timeframe,
   TradingEvent,
 } from '@fxvps/trading-core';
-import type { Lang } from '../i18n';
+import { translate, type Lang } from '../i18n';
 
 export type Theme = 'dark' | 'light';
 export type ChartLayout = 1 | 2 | 4;
@@ -64,6 +65,10 @@ export interface TerminalState {
   history: Record<string, Deal[]>;
   /** Finished orders per account (loaded on demand, newest first). */
   orderHistory: Record<string, OrderHistoryEntry[]>;
+  /** Chart lines and price alerts per account (stored on the server). */
+  objects: Record<string, ChartObjects>;
+  /** Tool armed on the chart: the next placed line becomes a line or an alert. */
+  chartTool: 'hline' | 'alert' | null;
   journal: JournalEntry[];
   // UI (persisted)
   theme: Theme;
@@ -87,6 +92,9 @@ export interface TerminalState {
   setReference(symbols: SymbolSpec[], accounts: Account[]): void;
   setHistory(accountId: string, deals: Deal[]): void;
   setOrderHistory(accountId: string, orders: OrderHistoryEntry[]): void;
+  /** Replaces an account's objects (from the server or after an edit) and schedules the save. */
+  setObjects(accountId: string, objects: ChartObjects, persist?: boolean): void;
+  setChartTool(tool: 'hline' | 'alert' | null): void;
   setActiveAccount(id: string): void;
   setTheme(t: Theme): void;
   toggleTheme(): void;
@@ -109,6 +117,19 @@ export interface TerminalState {
 
 let toastSeq = 0;
 
+/** Objects are saved to the server a moment after the last change (one write per burst). */
+let objectsSaveTimer: ReturnType<typeof setTimeout> | undefined;
+let objectsSaver: ((accountId: string, json: string) => Promise<void>) | null = null;
+export function setObjectsSaver(fn: ((accountId: string, json: string) => Promise<void>) | null): void {
+  objectsSaver = fn;
+}
+function scheduleObjectsSave(accountId: string, objects: ChartObjects): void {
+  clearTimeout(objectsSaveTimer);
+  objectsSaveTimer = setTimeout(() => {
+    void objectsSaver?.(accountId, JSON.stringify(objects)).catch(() => undefined);
+  }, 600);
+}
+
 const defaultCharts: ChartSlot[] = [
   { symbol: 'EURUSD', timeframe: 'M5' },
   { symbol: 'XAUUSD', timeframe: 'M15' },
@@ -130,6 +151,8 @@ export const useTerminal = create<TerminalState>()(
       orders: {},
       history: {},
       orderHistory: {},
+      objects: {},
+      chartTool: null,
       journal: [],
       theme: 'dark',
       lang: 'en',
@@ -156,6 +179,26 @@ export const useTerminal = create<TerminalState>()(
           nq[q.symbol] = q;
         }
         set({ quotes: nq, tickDir: nd });
+        // Price alerts are checked while the terminal is open (no server push yet).
+        const acc = get().activeAccountId;
+        const objs = acc ? get().objects[acc] : undefined;
+        if (!acc || !objs || !objs.alerts.some((a) => !a.firedAt)) return;
+        let fired = false;
+        const alerts = objs.alerts.map((a) => {
+          const q = nq[a.symbol];
+          if (a.firedAt || !q) return a;
+          const hit = a.direction === 'above' ? q.bid >= a.price : q.bid <= a.price;
+          if (!hit) return a;
+          fired = true;
+          get().toast('ok', translate(get().lang, 'alert.fired', { symbol: a.symbol, price: a.price }));
+          try {
+            if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate([60, 40, 60]);
+          } catch {
+            /* no haptics */
+          }
+          return { ...a, firedAt: Date.now() };
+        });
+        if (fired) get().setObjects(acc, { ...objs, alerts });
       },
 
       applyEvent(e) {
@@ -205,6 +248,13 @@ export const useTerminal = create<TerminalState>()(
       },
       setOrderHistory(accountId, orders) {
         set({ orderHistory: { ...get().orderHistory, [accountId]: orders } });
+      },
+      setObjects(accountId, objects, persist = true) {
+        set({ objects: { ...get().objects, [accountId]: objects } });
+        if (persist) scheduleObjectsSave(accountId, objects);
+      },
+      setChartTool(chartTool) {
+        set({ chartTool });
       },
       setActiveAccount(id) {
         set({ activeAccountId: id });
