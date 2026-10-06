@@ -284,6 +284,12 @@ pub struct LpOrder {
     /// Limit sent to the LP (IOC); `None` = market order.
     #[serde(default)]
     pub limit: Option<Price>,
+    /// Raw LP quote at the moment the order went out: the reference for the
+    /// slippage the LP inflicted (fill vs. this), as opposed to the client's.
+    #[serde(default)]
+    pub sent_bid: Option<Price>,
+    #[serde(default)]
+    pub sent_ask: Option<Price>,
 }
 
 /// One LP execution report applied to an [`LpOrder`].

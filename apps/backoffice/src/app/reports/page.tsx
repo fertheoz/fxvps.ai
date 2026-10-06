@@ -39,6 +39,7 @@ export default function ReportsPage() {
   const execCols = [
     xc.accessor("at", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
     xc.accessor("login", { header: t("clients.login") }),
+    xc.accessor("name", { header: t("clients.name"), cell: (c) => c.getValue() ?? "—" }),
     xc.accessor("symbol", { header: t("positions.symbol") }),
     xc.accessor("side", { header: t("positions.side"), cell: (c) => <SideBadge side={c.getValue()} /> }),
     xc.accessor("type", { header: t("reports.kind") }),
@@ -48,6 +49,9 @@ export default function ReportsPage() {
     xc.accessor("fill", { header: t("reports.fillPrice"), cell: (c) => <span className="tabular-nums">{c.getValue() ?? "—"}</span> }),
     xc.accessor("clientSlipPts", { header: t("reports.clientSlip"), cell: (c) => <span className={`tabular-nums ${slipTone(c.getValue()) ?? ""}`}>{pts(c.getValue())}</span> }),
     xc.accessor("lpPrice", { header: t("reports.lpPrice"), cell: (c) => <span className="tabular-nums">{c.getValue() ?? "—"}</span> }),
+    xc.accessor("lpSentPrice", { header: t("reports.lpSent"), cell: (c) => <span className="tabular-nums">{c.getValue() ?? "—"}</span> }),
+    xc.accessor("lpSlipPts", { header: t("reports.lpSlip"), cell: (c) => <span className={`tabular-nums ${slipTone(c.getValue()) ?? ""}`}>{pts(c.getValue())}</span> }),
+    xc.accessor("attempts", { header: t("reports.attempts"), cell: (c) => <span className="tabular-nums">{c.row.original.book === "A" ? c.getValue() : "—"}</span> }),
     xc.accessor("capturePts", { header: t("reports.capture"), cell: (c) => <span className="tabular-nums">{pts(c.getValue())}</span> }),
     xc.accessor("lpLatencyMs", { header: t("reports.lpLatency"), cell: (c) => <span className="tabular-nums">{c.getValue() === null ? "—" : `${Math.round(c.getValue() ?? 0)} ms`}</span> }),
     xc.accessor("lpFills", { header: t("reports.lpFills"), cell: (c) => <span className="tabular-nums">{c.row.original.book === "A" ? c.getValue() : "—"}{c.row.original.rearmed ? " ↻" : ""}</span> }),
@@ -63,7 +67,10 @@ export default function ReportsPage() {
     xs.accessor("p95SlipPts", { header: t("reports.p95Slip"), cell: (c) => <span className={`tabular-nums ${slipTone(c.getValue()) ?? ""}`}>{pts(c.getValue(), 2)}</span> }),
     xs.accessor("improvedRate", { header: t("reports.improved"), cell: (c) => pct(c.getValue()) }),
     xs.accessor("avgCapturePts", { header: t("reports.capture"), cell: (c) => <span className="tabular-nums">{pts(c.getValue(), 2)}</span> }),
-    xs.accessor("avgLatencyMs", { header: t("reports.lpLatency"), cell: (c) => <span className="tabular-nums">{c.getValue() ? `${Math.round(c.getValue())} ms` : "—"}</span> }),
+    xs.accessor("avgLpSlipPts", { header: t("reports.lpSlip"), cell: (c) => <span className={`tabular-nums ${slipTone(c.getValue()) ?? ""}`}>{pts(c.getValue(), 2)}</span> }),
+    xs.accessor("avgAttempts", { header: t("reports.attempts"), cell: (c) => <span className="tabular-nums">{c.getValue() ? c.getValue().toFixed(2) : "—"}</span> }),
+    xs.accessor("p50LatencyMs", { header: t("reports.p50Latency"), cell: (c) => <span className="tabular-nums">{c.getValue() ? `${Math.round(c.getValue())} ms` : "—"}</span> }),
+    xs.accessor("p95LatencyMs", { header: t("reports.p95Latency"), cell: (c) => <span className="tabular-nums">{c.getValue() ? `${Math.round(c.getValue())} ms` : "—"}</span> }),
   ];
 
   const lpCols = [
@@ -128,8 +135,8 @@ export default function ReportsPage() {
       const rows = (lp.data ?? []).map((x) => [x.id, x.createdAt, x.symbol, x.side, x.lots, x.filledLots, x.avgPrice, x.status, x.fills.map((y) => y.execId).join(" "), x.clients.map((y) => `${y.login}@${y.price}`).join(" ")]);
       downloadCsv("lp-executions.csv", toCsv(["id", "created_at", "symbol", "side", "lots", "filled", "lp_price", "status", "exec_ids", "clients"], rows));
     } else if (tab === "execution") {
-      const rows = (execution.data?.rows ?? []).map((x) => [x.id, x.at, x.login, x.symbol, x.side, x.type, x.lots, x.filledLots, x.book, x.requested ?? "", x.fill ?? "", x.clientSlipPts ?? "", x.lpPrice ?? "", x.capturePts ?? "", x.lpLatencyMs ?? "", x.lpFills, x.rearmed ? 1 : 0, x.status, x.reason ?? ""]);
-      downloadCsv("execution.csv", toCsv(["id", "at", "login", "symbol", "side", "type", "lots", "filled", "book", "requested", "fill", "client_slip_pts", "lp_price", "capture_pts", "lp_latency_ms", "lp_fills", "rearmed", "status", "reason"], rows));
+      const rows = (execution.data?.rows ?? []).map((x) => [x.id, x.at, x.login, x.name ?? "", x.symbol, x.side, x.type, x.lots, x.filledLots, x.book, x.requested ?? "", x.fill ?? "", x.clientSlipPts ?? "", x.lpPrice ?? "", x.lpSentPrice ?? "", x.lpSlipPts ?? "", x.attempts, x.capturePts ?? "", x.lpLatencyMs ?? "", x.lpFills, x.rearmed ? 1 : 0, x.status, x.reason ?? ""]);
+      downloadCsv("execution.csv", toCsv(["id", "at", "login", "name", "symbol", "side", "type", "lots", "filled", "book", "requested", "fill", "client_slip_pts", "lp_price", "lp_sent_price", "lp_slip_pts", "attempts", "capture_pts", "lp_latency_ms", "lp_fills", "rearmed", "status", "reason"], rows));
     } else if (tab === "revenue") {
       const rows = (revenue.data?.rows ?? []).map((x) => [x.id, x.at, x.login, x.symbol, x.lots, x.price, x.lpPrice ?? "", x.kind, x.book, formatMinorPlain(x.client, "USD"), formatMinorPlain(x.broker, "USD"), formatMinorPlain(x.lp, "USD"), x.ref]);
       downloadCsv("revenue.csv", toCsv(["id", "at", "login", "symbol", "lots", "client_price", "lp_price", "kind", "book", "client", "broker", "lp", "ref"], rows));

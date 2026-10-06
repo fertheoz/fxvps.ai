@@ -1330,7 +1330,8 @@ async fn lp_executions(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
 
 async fn execution(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "reports.view")?;
-    Ok(Json(ctx.q(views::execution).await?))
+    let st = ctx.view_state().await;
+    Ok(Json(ctx.q(move |e| views::execution(e, &st)).await?))
 }
 
 async fn revenue(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

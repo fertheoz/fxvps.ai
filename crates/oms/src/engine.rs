@@ -865,6 +865,7 @@ impl Engine {
             volume,
             limit,
         };
+        let sent = self.st.quotes.get(&symbol);
         self.st.lp_orders.insert(
             id,
             LpOrder {
@@ -879,6 +880,8 @@ impl Engine {
                 created_ts: self.st.now,
                 reject_reason: None,
                 limit,
+                sent_bid: sent.map(|q| q.bid),
+                sent_ask: sent.map(|q| q.ask),
             },
         );
         self.router.send(&req);

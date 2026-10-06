@@ -112,6 +112,7 @@ export interface ExecutionRow {
   id: string;
   at: string;
   login: number;
+  name: string | null;
   symbol: string;
   side: "buy" | "sell";
   type: "market" | "limit" | "stop" | "stop_limit";
@@ -124,6 +125,11 @@ export interface ExecutionRow {
   fill: number | null;
   clientSlipPts: number | null;
   lpPrice: number | null;
+  /** LP quote (our side) when the LP order went out; `lpSlipPts` = fill vs this. */
+  lpSentPrice: number | null;
+  lpSlipPts: number | null;
+  /** LP orders this client order took part in (re-arms send again). */
+  attempts: number;
   capturePts: number | null;
   lpLatencyMs: number | null;
   lpFills: number;
@@ -141,7 +147,11 @@ export interface ExecutionSummary {
   p95SlipPts: number;
   improvedRate: number;
   avgCapturePts: number;
+  avgLpSlipPts: number;
   avgLatencyMs: number;
+  p50LatencyMs: number;
+  p95LatencyMs: number;
+  avgAttempts: number;
 }
 
 export interface ExecutionReport {
