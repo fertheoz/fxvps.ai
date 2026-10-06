@@ -6,7 +6,8 @@ use ledger::TxnKind;
 use money::{Price, Qty};
 use oms::{Engine, OrderStatus, OrderType, Position};
 use risk::{
-    AssetClass, EsmaPreset, GroupConfig, MarginMode, PartialFill, Routing, Side, SymbolSpec,
+    AssetClass, EsmaPreset, GroupCommission, GroupConfig, MarginMode, PartialFill, Routing, Side,
+    SymbolSpec,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
