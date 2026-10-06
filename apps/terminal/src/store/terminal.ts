@@ -342,6 +342,11 @@ export const useTerminal = create<TerminalState>()(
   ),
 );
 
+/** Positions a bulk close targets: all, only the profitable or only the losing ones. */
+export function bulkTargets(positions: Position[], profitOf: (p: Position) => number, which: 'all' | 'profit' | 'loss'): Position[] {
+  return positions.filter((p) => (which === 'all' ? true : which === 'profit' ? profitOf(p) > 0 : profitOf(p) < 0));
+}
+
 // ---- selectors -----------------------------------------------------------
 export const selectActiveAccount = (s: TerminalState): Account | undefined =>
   s.accounts.find((a) => a.id === s.activeAccountId);
