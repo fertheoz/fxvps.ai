@@ -159,7 +159,7 @@ const PositionRow = memo(function PositionRow({ p }: { p: Position }) {
 /** Detail card of one open position (row click): live P&L, protection, sizing, exits. */
 function PositionCard({ id, onClose }: { id: string; onClose: () => void }) {
   const t = useT();
-  const p = useTerminal((s) => s.positions.find((x) => x.id === id));
+  const p = useTerminal((s) => selectPositions(s).find((x) => x.id === id));
   const spec = useTerminal((s) => (p ? s.symbols[p.symbol] : undefined));
   const q = useTerminal((s) => (p ? s.quotes[p.symbol] : undefined));
   const account = useTerminal(selectActiveAccount);
