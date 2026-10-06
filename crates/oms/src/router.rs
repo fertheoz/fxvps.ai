@@ -14,6 +14,8 @@ pub struct LpOrderRequest {
     pub side: Side,
     pub volume: Qty,
     pub limit: Option<Price>,
+    /// Fill-or-kill instead of immediate-or-cancel.
+    pub all_or_none: bool,
 }
 
 /// Outbound side of A-book routing. Fills come back as

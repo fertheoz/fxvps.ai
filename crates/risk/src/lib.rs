@@ -55,6 +55,18 @@ pub enum MarginMode {
     Netting,
 }
 
+/// What happens to the part of an A-book order the LP did not fill.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+pub enum PartialFill {
+    /// Keep what filled, cancel the rest (IOC semantics).
+    #[default]
+    CancelRemainder,
+    /// Send the remainder to the LP again, up to `max_attempts` LP orders in total.
+    Retry { max_attempts: u32 },
+    /// Fill-or-kill at the LP: all of it or nothing.
+    AllOrNone,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum Routing {
     /// STP to liquidity provider through the omnibus account.
@@ -168,6 +180,8 @@ pub struct GroupConfig {
     pub esma: Option<EsmaPreset>,
     pub negative_balance_protection: bool,
     pub routing: Routing,
+    #[serde(default)]
+    pub partial_fill: PartialFill,
 }
 
 impl GroupConfig {
@@ -189,6 +203,7 @@ impl GroupConfig {
             esma: Some(EsmaPreset::Retail),
             negative_balance_protection: true,
             routing,
+            partial_fill: PartialFill::default(),
         }
     }
 

@@ -5,7 +5,7 @@ use crate::router::{LpOrderRequest, LpRouter, NullRouter};
 use crate::types::*;
 use ledger::{AccountId, AccountKind, Ledger, LedgerSnapshot, Posting, TxnKind, TxnRequest};
 use money::{Money, Price, Qty, Rounding, SCALE};
-use risk::{AccountRisk, OrderIntent, Quote, QuoteBook, RiskError};
+use risk::{AccountRisk, OrderIntent, PartialFill, Quote, QuoteBook, RiskError};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -651,6 +651,7 @@ impl Engine {
             created_ts: self.st.now,
             origin,
             rearm_px: None,
+            lp_attempts: 0,
         };
         self.st.orders.insert(id, order);
         if let Err(reason) = self.validate_order(id, &g) {
@@ -856,6 +857,13 @@ impl Engine {
                 .map(|c| self.st.orders[c].remaining().raw())
                 .sum(),
         );
+        // FOK only when every child's group wants all-or-none (a batch is one LP order).
+        let all_or_none = children
+            .iter()
+            .all(|c| self.policy(*c) == PartialFill::AllOrNone);
+        for c in &children {
+            self.st.orders.get_mut(c).expect("order").lp_attempts += 1;
+        }
         let id = self.st.next_id;
         self.st.next_id += 1;
         let req = LpOrderRequest {
@@ -864,6 +872,7 @@ impl Engine {
             side,
             volume,
             limit,
+            all_or_none,
         };
         let sent = self.st.quotes.get(&symbol);
         self.st.lp_orders.insert(
@@ -889,6 +898,13 @@ impl Engine {
             lp_order_id: id,
             volume,
         });
+    }
+
+    /// Partial-fill policy of the order's group.
+    fn policy(&self, id: OrderId) -> PartialFill {
+        let o = &self.st.orders[&id];
+        let acc = &self.st.accounts[&o.req.account];
+        self.st.groups[&acc.group].partial_fill
     }
 
     fn flush_lp(&mut self) {
@@ -983,6 +999,16 @@ impl Engine {
                 self.st.pending_ids.insert(c);
                 continue;
             }
+            match self.policy(c) {
+                PartialFill::Retry { max_attempts } if o.lp_attempts < max_attempts => {
+                    // Try again at the LP with what is left.
+                    let (sym, side) = (o.req.symbol.clone(), o.req.side);
+                    self.send_lp(sym, side, vec![c]);
+                    continue;
+                }
+                _ => {}
+            }
+            let o = &self.st.orders[&c];
             if o.filled.is_zero() {
                 self.reject(c, format!("LP: {reason}"));
             } else {

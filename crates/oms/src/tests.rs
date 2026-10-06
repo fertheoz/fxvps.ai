@@ -564,6 +564,50 @@ fn abook_partial_fills_markup_and_omnibus() {
 }
 
 #[test]
+fn partial_fill_policies() {
+    use risk::PartialFill;
+    // Retry: the remainder goes to the LP again, up to max_attempts LP orders.
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.partial_fill = PartialFill::Retry { max_attempts: 2 };
+    h.cmd(Command::SetGroup(g.clone()));
+    h.account(1, "a", "10000");
+    let id = h.market(1, "r", Side::Buy, "1");
+    let lp = h.router.take()[0].lp_order_id;
+    h.cmd(Command::LpFill {
+        lp_order_id: lp,
+        exec_id: "r1".into(),
+        volume: qty("0.3"),
+        price: px("1.1001"),
+    });
+    h.cmd(Command::LpReject {
+        lp_order_id: lp,
+        reason: "ioc remainder".into(),
+    });
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].volume, qty("0.7"));
+    assert!(!sent[0].all_or_none);
+    assert_eq!(h.e.order(id).unwrap().lp_attempts, 2);
+    h.cmd(Command::LpReject {
+        lp_order_id: sent[0].lp_order_id,
+        reason: "ioc remainder".into(),
+    });
+    // second attempt was the last: remainder cancelled
+    assert!(h.router.take().is_empty());
+    let o = h.e.order(id).unwrap();
+    assert_eq!((o.status, o.filled), (OrderStatus::Cancelled, qty("0.3")));
+
+    // AllOrNone: the LP order goes out fill-or-kill.
+    g.partial_fill = PartialFill::AllOrNone;
+    h.cmd(Command::SetGroup(g));
+    h.market(1, "k", Side::Buy, "1");
+    assert!(h.router.take()[0].all_or_none);
+}
+
+#[test]
 fn abook_reject_and_partial_cancel() {
     let mut h = H::new(EngineConfig::default());
     h.account(1, "a", "10000");
