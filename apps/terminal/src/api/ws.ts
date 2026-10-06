@@ -955,6 +955,7 @@ export class WsTradingApi implements TradingApi {
 
   private onSnapshot(s: AccountSnapshot): void {
     const balance = Number((decimalToBig(s.balance) ?? new Big(0)).times(100).round(0).toFixed(0));
+    const marginUsedB = decimalToBig(s.marginUsed);
     const info = this.infos.get(s.accountId);
     const account: Account = {
       id: s.accountId,
@@ -962,6 +963,7 @@ export class WsTradingApi implements TradingApi {
       currency: s.currency || info?.currency || 'USD',
       balance,
       leverage: s.leverage || info?.leverage || 100,
+      marginUsed: marginUsedB ? Number(marginUsedB.times(100).round(0).toFixed(0)) : undefined,
       isDemo: /demo/i.test(s.accountId),
       marginMode: marginModeFromWire(s.marginMode) ?? marginModeFromWire(info?.marginMode ?? WireMarginMode.MARGIN_MODE_UNSPECIFIED),
     };

@@ -841,6 +841,9 @@ struct GroupDto {
     book: String,
     #[serde(default)]
     symbols: Option<Vec<String>>,
+    /// "retail" | "professional" | null (no ESMA leverage cap).
+    #[serde(default)]
+    esma: Option<String>,
 }
 
 async fn group_json(ctx: &AdminCtx, name: String) -> ApiResult {
@@ -893,6 +896,12 @@ async fn save_group(
         "retail_hedged" | "exchange" => MarginMode::Hedging,
         _ => return Err(ApiError::bad("invalid marginMode")),
     };
+    let esma = match g.esma.as_deref() {
+        None | Some("") | Some("none") => None,
+        Some("retail") => Some(EsmaPreset::Retail),
+        Some("professional") => Some(EsmaPreset::Professional),
+        _ => return Err(ApiError::bad("esma must be retail, professional or none")),
+    };
     let name = id.clone();
     let (existing, all, in_use) = ctx
         .q(move |e| {
@@ -924,17 +933,23 @@ async fn save_group(
     cfg.margin_call_pct = g.margin_call_pct.round() as i64;
     cfg.stop_out_pct = g.stop_out_pct.round() as i64;
     cfg.markup_points = g.markup_points;
+    cfg.esma = esma;
     cfg.routing = routing;
     cfg.allowed_symbols = match g.symbols {
         Some(s) if s.len() != all.len() => Some(s.into_iter().collect()),
         Some(_) | None => None,
     };
     let details = format!(
-        "leverage 1:{}, MC {}%, SO {}%, book {}{}",
+        "leverage 1:{}, MC {}%, SO {}%, book {}, ESMA {}{}",
         cfg.leverage,
         cfg.margin_call_pct,
         cfg.stop_out_pct,
         g.book,
+        match cfg.esma {
+            Some(EsmaPreset::Retail) => "retail",
+            Some(EsmaPreset::Professional) => "professional",
+            None => "off",
+        },
         if existing.is_none() { " (new)" } else { "" }
     );
     let mut store = ctx.store.lock().await;
