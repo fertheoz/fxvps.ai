@@ -265,6 +265,37 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
     return () => document.removeEventListener('fullscreenchange', on);
   }, []);
   const standalone = typeof matchMedia === 'function' && (matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true);
+  // Android Chrome hands us an install prompt we can show from our own button;
+  // iPhone browsers only offer the system share sheet (which has "Add to Home Screen").
+  const [installPrompt, setInstallPrompt] = useState<{ prompt: () => Promise<unknown> } | null>(null);
+  useEffect(() => {
+    const on = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e as unknown as { prompt: () => Promise<unknown> });
+    };
+    window.addEventListener('beforeinstallprompt', on);
+    return () => window.removeEventListener('beforeinstallprompt', on);
+  }, []);
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+  const iosChrome = /CriOS/.test(ua);
+  const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+  const [shared, setShared] = useState(false);
+  const addToHome = async () => {
+    if (installPrompt) {
+      await installPrompt.prompt().catch(() => undefined);
+      setInstallPrompt(null);
+      setFsHelp(false);
+      return;
+    }
+    if (canShare) {
+      try {
+        await navigator.share({ title: 'fxvps.ai', url: location.origin + '/' });
+      } catch {
+        /* sheet dismissed */
+      }
+      setShared(true);
+    }
+  };
   const toggleFullscreen = () => {
     const el = document.documentElement;
     if (document.fullscreenElement) return void document.exitFullscreen?.();
@@ -422,14 +453,22 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
             <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-line" />
             <h2 className="text-[17px] font-semibold">{t('m.fsTitle')}</h2>
             <p className="mt-2 text-muted">{t('m.fsBody')}</p>
-            <ol className="mt-3 flex flex-col gap-2">
-              {(['m.fsStep1', 'm.fsStep2', 'm.fsStep3'] as const).map((k, i) => (
-                <li key={k} className="flex items-center gap-3">
-                  <span className="num w-7 h-7 rounded-full bg-accent text-white grid place-items-center text-[13px] font-semibold">{i + 1}</span>
-                  {t(k)}
-                </li>
-              ))}
-            </ol>
+            {(installPrompt || canShare) && (
+              <button className="mt-3 w-full h-12 rounded-2xl bg-accent text-white font-semibold" onClick={() => void addToHome()} data-testid="m-add-home">
+                {installPrompt ? t('m.fsInstall') : t('m.fsShare')}
+              </button>
+            )}
+            {shared && <p className="mt-2 text-[13px] text-muted">{t('m.fsAfterShare')}</p>}
+            {!installPrompt && (
+              <ol className="mt-3 flex flex-col gap-2">
+                {([iosChrome ? 'm.fsStep1Chrome' : 'm.fsStep1Safari', 'm.fsStep2', 'm.fsStep3'] as const).map((k, i) => (
+                  <li key={k} className="flex items-center gap-3">
+                    <span className="num w-7 h-7 rounded-full bg-panel-2 text-muted grid place-items-center text-[13px] font-semibold">{i + 1}</span>
+                    {t(k)}
+                  </li>
+                ))}
+              </ol>
+            )}
             <button className="mt-4 w-full h-12 rounded-2xl bg-panel-2 font-medium" onClick={() => setFsHelp(false)}>
               {t('sec.done')}
             </button>
