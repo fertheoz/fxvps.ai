@@ -136,6 +136,10 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const setObjects = useTerminal((s) => s.setObjects);
   const hideChart = useTerminal((s) => s.hideChart);
   const swapCharts = useTerminal((s) => s.swapCharts);
+  const maximized = useTerminal((s) => s.maximizedChart === index);
+  const toggleMaximize = useTerminal((s) => s.toggleMaximize);
+  const moveChart = useTerminal((s) => s.moveChart);
+  const [moveOpen, setMoveOpen] = useState(false);
   const oneClickVolume = useTerminal((s) => s.oneClickVolume);
   const setOneClickVolume = useTerminal((s) => s.setOneClickVolume);
   const setActive = useTerminal((s) => s.setActiveChart);
@@ -843,6 +847,11 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
           e.dataTransfer.setData('application/x-fxvps-chart', String(index));
           e.dataTransfer.effectAllowed = 'move';
         }}
+        onDoubleClick={(e) => {
+          // Windows-style: double-click the title bar to maximise / restore
+          if (detached || (e.target as HTMLElement).closest('button, select, input')) return;
+          toggleMaximize(index);
+        }}
       >
         <select
           aria-label={t('ticket.symbol')}
@@ -878,6 +887,48 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
           )}
           {!detached && (
             <>
+              <span className="relative">
+                <button
+                  className="w-4 h-4 grid place-items-center rounded text-[10px] leading-none text-muted hover:text-fg hover:bg-panel-2 cursor-move"
+                  title={t('chart.move')}
+                  aria-label={t('chart.move')}
+                  aria-expanded={moveOpen}
+                  data-testid={`chart-move-${index}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMoveOpen((o) => !o);
+                  }}
+                >
+                  ⇄
+                </button>
+                {moveOpen && (
+                  <span
+                    className="absolute right-0 top-5 z-40 grid grid-cols-3 gap-0.5 p-1 rounded border border-line bg-panel shadow-xl"
+                    onMouseLeave={() => setMoveOpen(false)}
+                    data-testid={`chart-move-menu-${index}`}
+                  >
+                    {([['', ''], ['up', '↑'], ['', ''], ['left', '←'], ['', ''], ['right', '→'], ['', ''], ['down', '↓'], ['', '']] as const).map(([dir, icon], k) =>
+                      dir ? (
+                        <button
+                          key={k}
+                          className="w-5 h-5 grid place-items-center rounded text-[11px] text-muted hover:text-fg hover:bg-panel-2"
+                          title={t(`chart.move.${dir}`)}
+                          aria-label={t(`chart.move.${dir}`)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            moveChart(index, dir);
+                            setMoveOpen(false);
+                          }}
+                        >
+                          {icon}
+                        </button>
+                      ) : (
+                        <span key={k} className="w-5 h-5" />
+                      ),
+                    )}
+                  </span>
+                )}
+              </span>
               <button
                 className="w-4 h-4 grid place-items-center rounded text-[10px] leading-none text-muted hover:text-fg hover:bg-panel-2"
                 title={t('chart.minimize')}
@@ -889,6 +940,19 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
                 }}
               >
                 –
+              </button>
+              <button
+                className="w-4 h-4 grid place-items-center rounded text-[10px] leading-none text-muted hover:text-fg hover:bg-panel-2"
+                title={maximized ? t('chart.unmaximize') : t('chart.maximize')}
+                aria-label={maximized ? t('chart.unmaximize') : t('chart.maximize')}
+                aria-pressed={maximized}
+                data-testid={`chart-max-${index}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleMaximize(index);
+                }}
+              >
+                {maximized ? '❐' : '□'}
               </button>
               <button
                 className="w-4 h-4 grid place-items-center rounded text-[10px] leading-none text-muted hover:text-down hover:bg-panel-2"
