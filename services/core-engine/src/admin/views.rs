@@ -976,7 +976,7 @@ pub fn dashboard_series(e: &Engine, admin: &AdminState, now_ns: u64, range: &str
     top_symbols.truncate(8);
     let mut clients: Vec<(u64, i128, f64)> =
         by_client.into_iter().map(|(a, (p, l))| (a, p, l)).collect();
-    clients.sort_by(|a, b| b.1.cmp(&a.1));
+    clients.sort_by_key(|c| std::cmp::Reverse(c.1));
     let winners: Vec<Value> = clients
         .iter()
         .take(5)
