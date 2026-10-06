@@ -50,6 +50,7 @@ impl Client {
         c.send(Body::Subscribe(Subscribe {
             request_id: "sub".into(),
             symbols: vec!["EURUSD".into()],
+            depth_symbols: vec![],
         }))
         .await;
         // wait for live (marked-up) quotes before trading
@@ -358,6 +359,7 @@ async fn order_types_protection_hedging_and_history() {
     h.send(Body::Subscribe(Subscribe {
         request_id: "sub".into(),
         symbols: vec!["EURUSD".into()],
+        depth_symbols: vec![],
     }))
     .await;
 

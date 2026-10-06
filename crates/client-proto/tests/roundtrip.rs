@@ -28,10 +28,12 @@ fn samples() -> Vec<Envelope> {
         Body::Subscribe(Subscribe {
             request_id: "s1".into(),
             symbols: vec!["EURUSD".into(), "GBPUSD".into()],
+            depth_symbols: vec![],
         }),
         Body::Unsubscribe(Unsubscribe {
             request_id: "s2".into(),
             symbols: vec!["EURUSD".into()],
+            depth_symbols: vec![],
         }),
         Body::QuoteBatch(QuoteBatch {
             quotes: vec![Quote {
@@ -268,6 +270,7 @@ fn json_is_readable() {
         Body::Subscribe(Subscribe {
             request_id: "r".into(),
             symbols: vec!["EURUSD".into()],
+            depth_symbols: vec![],
         }),
     );
     let v: serde_json::Value = serde_json::from_str(&env.to_json()).unwrap();

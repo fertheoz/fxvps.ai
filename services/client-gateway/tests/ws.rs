@@ -122,6 +122,7 @@ impl Client {
         self.send(Body::Subscribe(Subscribe {
             request_id: "sub".into(),
             symbols: syms.iter().map(|s| s.to_string()).collect(),
+            depth_symbols: vec![],
         }))
         .await;
         self.until(|b| matches!(b, Body::Ack(a) if a.request_id == "sub").then_some(()))

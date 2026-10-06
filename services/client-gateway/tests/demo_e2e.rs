@@ -75,6 +75,7 @@ async fn demo_quotes_and_market_order_fill() {
     ws.send(send(Body::Subscribe(Subscribe {
         request_id: "s1".into(),
         symbols: vec!["EURUSD".into()],
+        depth_symbols: vec![],
     })))
     .await
     .unwrap();
