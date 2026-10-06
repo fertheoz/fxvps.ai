@@ -1578,8 +1578,8 @@ async fn save_rules(
     }
     let n = rules.len();
     let mut store = ctx.store.lock().await;
-    ctx.cmd(Command::SetRules(rules)).await?;
     let rules_json = serde_json::to_string(&rules).unwrap_or_default();
+    ctx.cmd(Command::SetRules(rules)).await?;
     store.append(
         &actor,
         AdminCmd::RulesSaved {
