@@ -27,7 +27,9 @@ export function DepthOfMarket() {
 
   if (!spec) return null;
 
-  const fill = (side: Side) => (d && volume ? vwapFill(side, volume, d.bids, d.asks, spec.digits) : null);
+  // VWAP ladder: fixed size tiers plus the typed size, sorted.
+  const own = Number(lots);
+  const tiers = [...new Set([0.1, 0.5, 1, 2, 5, 10, 20, 50, ...(Number.isFinite(own) && own > 0 ? [own] : [])])].sort((a, b) => a - b);
 
   return (
     <section className="flex flex-col h-full bg-panel" aria-label={t('dom.title')} data-testid="dom">
@@ -44,62 +46,88 @@ export function DepthOfMarket() {
         </div>
       </div>
       {mode === 'vwap' && (
-        <div className="p-2 border-b border-line">
-          <label className="flex items-center gap-2">
-            <span className="text-muted">{t('dom.fillFor')}</span>
-            <input
-              value={lots}
-              onChange={(e) => setLots(e.target.value)}
-              className="num w-20 bg-panel-2 border border-line rounded px-2 py-0.5"
-              aria-label={t('dom.fillFor')}
-              inputMode="decimal"
-            />
-            <span className="text-muted">{t('chart.lots')}</span>
-          </label>
-          <div className="grid grid-cols-2 gap-2 mt-2">
-            {(['sell', 'buy'] as Side[]).map((side) => {
-              const f = fill(side);
-              const top = d ? (side === 'buy' ? d.asks[0]?.price : d.bids[0]?.price) : undefined;
+        <div className="px-2 py-1.5 border-b border-line flex items-center gap-2">
+          <span className="text-muted">{t('dom.fillFor')}</span>
+          <input
+            value={lots}
+            onChange={(e) => setLots(e.target.value)}
+            className="num w-20 bg-panel-2 border border-line rounded px-2 py-0.5"
+            aria-label={t('dom.fillFor')}
+            inputMode="decimal"
+          />
+          <span className="text-muted">{t('chart.lots')}</span>
+        </div>
+      )}
+      {mode === 'vwap' ? (
+        <>
+          <div className="grid grid-cols-[1fr_auto_1fr] px-2 h-6 items-center text-[10px] uppercase text-muted border-b border-line">
+            <span className="text-down">{t('ticket.sell')} VWAP</span>
+            <span className="px-2">{t('chart.lots')}</span>
+            <span className="text-right text-up">{t('ticket.buy')} VWAP</span>
+          </div>
+          <div className="flex-1 overflow-auto num" data-testid="vwap-ladder">
+            {tiers.map((tierLots) => {
+              const v = lotsToVolume(String(tierLots));
+              const sell = d && v ? vwapFill('sell', v, d.bids, d.asks, spec.digits) : null;
+              const buy = d && v ? vwapFill('buy', v, d.bids, d.asks, spec.digits) : null;
+              const cell = (f: ReturnType<typeof vwapFill> | null, side: Side) => {
+                if (!f || f.avgPrice === null) return <span className="text-muted">—</span>;
+                const top = side === 'buy' ? d?.asks[0]?.price : d?.bids[0]?.price;
+                const partial = v !== null && v !== undefined && f.filled < v;
+                return (
+                  <span className={partial ? 'text-muted' : side === 'buy' ? 'text-up' : 'text-down'} title={partial ? `${t('dom.partial')} (${volumeToLots(f.filled)})` : top !== undefined ? `${pipsBetween(f.avgPrice, top, spec)} pip` : undefined}>
+                    {formatPrice(f.avgPrice, spec.digits)}
+                    {partial ? '*' : ''}
+                  </span>
+                );
+              };
+              const own = v !== null && v !== undefined && v === volume;
               return (
-                <div key={side} className={`rounded border p-1.5 ${side === 'buy' ? 'border-up/40' : 'border-down/40'}`}>
-                  <div className={`text-[10px] uppercase ${side === 'buy' ? 'text-up' : 'text-down'}`}>{side === 'buy' ? t('ticket.buy') : t('ticket.sell')}</div>
-                  <div className="flex justify-between"><span className="text-muted">{t('dom.avg')}</span><span className="num" data-testid={`vwap-${side}`}>{f?.avgPrice != null ? formatPrice(f.avgPrice, spec.digits) : '—'}</span></div>
-                  <div className="flex justify-between"><span className="text-muted">{t('dom.worst')}</span><span className="num">{f?.worstPrice != null ? formatPrice(f.worstPrice, spec.digits) : '—'}</span></div>
-                  <div className="flex justify-between"><span className="text-muted">{t('dom.slippage')}</span><span className="num">{f?.avgPrice != null && top !== undefined ? `${pipsBetween(f.avgPrice, top, spec)} pip` : '—'}</span></div>
-                  {f && volume && f.filled < volume && <div className="text-down text-[10px]">{t('dom.partial')} ({volumeToLots(f.filled)})</div>}
+                <div key={tierLots} className={`grid grid-cols-[1fr_auto_1fr] px-2 h-5 items-center ${own ? 'bg-panel-2' : ''}`} data-testid={own ? 'vwap-own' : undefined}>
+                  <span data-testid={own ? 'vwap-sell' : undefined}>{cell(sell, 'sell')}</span>
+                  <span className="px-2 text-muted">{tierLots}</span>
+                  <span className="text-right" data-testid={own ? 'vwap-buy' : undefined}>{cell(buy, 'buy')}</span>
                 </div>
               );
             })}
+            {d && d.asks[0] && d.bids[0] && (
+              <div className="px-2 h-5 flex items-center justify-center text-[10px] text-muted border-t border-line">
+                spread {pipsBetween(d.asks[0].price, d.bids[0].price, spec)} pip · {t('dom.partial')} *
+              </div>
+            )}
           </div>
-        </div>
+        </>
+      ) : (
+        <>
+          <div className="grid grid-cols-[1fr_1fr] px-2 h-6 items-center text-[10px] uppercase text-muted border-b border-line">
+            <span>{t('dom.price')}</span>
+            <span className="text-right">{t('dom.size')}</span>
+          </div>
+          <div className="flex-1 overflow-auto num">
+            {d &&
+              [...d.asks].reverse().map((l) => (
+                <div key={`a${l.price}`} className="relative grid grid-cols-2 px-2 h-5 items-center">
+                  <div className="absolute inset-y-0.5 right-0 bg-down-bg" style={{ width: `${(l.volume / maxVol) * 100}%` }} />
+                  <span className="relative text-down">{formatPrice(l.price, spec.digits)}</span>
+                  <span className="relative text-right">{volumeToLots(l.volume)}</span>
+                </div>
+              ))}
+            {d && d.asks[0] && d.bids[0] && (
+              <div className="px-2 h-5 flex items-center justify-center text-[10px] text-muted border-y border-line">
+                spread {pipsBetween(d.asks[0].price, d.bids[0].price, spec)} pip
+              </div>
+            )}
+            {d &&
+              d.bids.map((l) => (
+                <div key={`b${l.price}`} className="relative grid grid-cols-2 px-2 h-5 items-center">
+                  <div className="absolute inset-y-0.5 right-0 bg-up-bg" style={{ width: `${(l.volume / maxVol) * 100}%` }} />
+                  <span className="relative text-up">{formatPrice(l.price, spec.digits)}</span>
+                  <span className="relative text-right">{volumeToLots(l.volume)}</span>
+                </div>
+              ))}
+          </div>
+        </>
       )}
-      <div className="grid grid-cols-[1fr_1fr] px-2 h-6 items-center text-[10px] uppercase text-muted border-b border-line">
-        <span>{t('dom.price')}</span>
-        <span className="text-right">{t('dom.size')}</span>
-      </div>
-      <div className="flex-1 overflow-auto num">
-        {d &&
-          [...d.asks].reverse().map((l) => (
-            <div key={`a${l.price}`} className="relative grid grid-cols-2 px-2 h-5 items-center">
-              <div className="absolute inset-y-0.5 right-0 bg-down-bg" style={{ width: `${(l.volume / maxVol) * 100}%` }} />
-              <span className="relative text-down">{formatPrice(l.price, spec.digits)}</span>
-              <span className="relative text-right">{volumeToLots(l.volume)}</span>
-            </div>
-          ))}
-        {d && d.asks[0] && d.bids[0] && (
-          <div className="px-2 h-5 flex items-center justify-center text-[10px] text-muted border-y border-line">
-            spread {pipsBetween(d.asks[0].price, d.bids[0].price, spec)} pip
-          </div>
-        )}
-        {d &&
-          d.bids.map((l) => (
-            <div key={`b${l.price}`} className="relative grid grid-cols-2 px-2 h-5 items-center">
-              <div className="absolute inset-y-0.5 right-0 bg-up-bg" style={{ width: `${(l.volume / maxVol) * 100}%` }} />
-              <span className="relative text-up">{formatPrice(l.price, spec.digits)}</span>
-              <span className="relative text-right">{volumeToLots(l.volume)}</span>
-            </div>
-          ))}
-      </div>
     </section>
   );
 }
