@@ -4,8 +4,12 @@ import { useT } from '../hooks';
 import { PinButton } from './SideDock';
 import { useTerminal } from '../store/terminal';
 import { big, formatPrice, spreadPoints } from '@fxvps/trading-core';
+import { ContextMenu, type MenuItem } from './ContextMenu';
+import { SymbolSpecDialog } from './SymbolSpecDialog';
 
-const Row = memo(function Row({ symbol }: { symbol: string }) {
+type Menu = { symbol: string; x: number; y: number };
+
+const Row = memo(function Row({ symbol, onMenu }: { symbol: string; onMenu: (m: Menu) => void }) {
   const q = useTerminal((s) => s.quotes[symbol]);
   const spec = useTerminal((s) => s.symbols[symbol]);
   const dir = useTerminal((s) => s.tickDir[symbol]);
@@ -25,6 +29,10 @@ const Row = memo(function Row({ symbol }: { symbol: string }) {
       className={`grid grid-cols-[18px_1fr_74px_74px_34px_48px] items-center h-7 px-2 cursor-pointer hover:bg-hover border-b border-line/50 ${active ? 'bg-hover' : ''}`}
       onClick={() => setChartSymbol(symbol)}
       onDoubleClick={() => openTicket({ symbol })}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu({ symbol, x: e.clientX, y: e.clientY });
+      }}
       title={spec.description}
     >
       <button
@@ -65,6 +73,23 @@ export function MarketWatch() {
   const favorites = useTerminal((s) => s.favorites);
   const [query, setQuery] = useState('');
   const [onlyFav, setOnlyFav] = useState(false);
+  const [menu, setMenu] = useState<Menu | null>(null);
+  const [specOf, setSpecOf] = useState<string | null>(null);
+  const toggleFavorite = useTerminal((s) => s.toggleFavorite);
+  const setChartSymbol = useTerminal((s) => s.setChartSymbol);
+  const openChart = useTerminal((s) => s.openChart);
+  const openTicket = useTerminal((s) => s.openTicket);
+  const isFav = (s: string) => favorites.includes(s);
+  const menuItems = (s: string): MenuItem[] => [
+    { label: t('mw.menu.chart'), onClick: () => setChartSymbol(s) },
+    { label: t('mw.menu.newChart'), onClick: () => openChart(s) },
+    { label: t('mw.menu.buy'), onClick: () => openTicket({ symbol: s, side: 'buy' }), separator: true },
+    { label: t('mw.menu.sell'), onClick: () => openTicket({ symbol: s, side: 'sell' }) },
+    { label: t('mw.menu.pending'), onClick: () => openTicket({ symbol: s, type: 'limit' }) },
+    { label: t('mw.menu.depth'), onClick: () => setChartSymbol(s), separator: true },
+    { label: t('mw.menu.spec'), onClick: () => setSpecOf(s) },
+    { label: isFav(s) ? t('mw.menu.unfavorite') : t('mw.menu.favorite'), onClick: () => toggleFavorite(s), separator: true },
+  ];
   const parentRef = useRef<HTMLDivElement>(null);
 
   const rows = useMemo(() => {
@@ -124,11 +149,13 @@ export function MarketWatch() {
         <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
           {virtualizer.getVirtualItems().map((v) => (
             <div key={rows[v.index]} style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${v.start}px)` }}>
-              <Row symbol={rows[v.index]!} />
+              <Row symbol={rows[v.index]!} onMenu={setMenu} />
             </div>
           ))}
         </div>
       </div>
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.symbol)} onClose={() => setMenu(null)} testId="mw-menu" />}
+      {specOf && <SymbolSpecDialog symbol={specOf} onClose={() => setSpecOf(null)} />}
     </section>
   );
 }
