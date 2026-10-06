@@ -450,6 +450,15 @@ pub fn best_execution(e: &Engine, from: u64, to: u64) -> Value {
     let rows: Vec<Value> = by
         .into_iter()
         .map(|((venue, class), mut a)| {
+            let p50_latency = {
+                let mut v = a.lat.clone();
+                v.sort_by(|x, y| x.total_cmp(y));
+                if v.is_empty() {
+                    0.0
+                } else {
+                    v[(v.len() - 1) / 2]
+                }
+            };
             json!({
                 "venue": venue,
                 "assetClass": class,
@@ -462,7 +471,7 @@ pub fn best_execution(e: &Engine, from: u64, to: u64) -> Value {
                 "avgClientSlipPts": mean(&a.slips),
                 "p95ClientSlipPts": p95(&mut a.slips),
                 "priceImprovementPct": if a.priced > 0 { f64::from(a.improved) / f64::from(a.priced) * 100.0 } else { 0.0 },
-                "p50LatencyMs": { let mut v = a.lat.clone(); v.sort_by(|x, y| x.total_cmp(y)); if v.is_empty() { 0.0 } else { v[(v.len() - 1) / 2] } },
+                "p50LatencyMs": p50_latency,
                 "p95LatencyMs": p95(&mut a.lat),
             })
         })
