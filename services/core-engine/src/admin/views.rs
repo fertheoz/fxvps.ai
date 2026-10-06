@@ -1030,11 +1030,12 @@ pub fn lp_sessions(rows: &[fix_gateway::SessionStatus]) -> Value {
                     "senderCompId": r.sender_comp_id,
                     "targetCompId": r.target_comp_id,
                     "status": status,
-                    "inSeq": 0,
+                    "inSeq": r.in_seq,
                     "outSeq": 0,
                     "latencyMs": 0,
                     "rejects24h": r.rejects,
-                    "lastHeartbeat": iso(r.since_ms.saturating_mul(1_000_000)),
+                    "lastHeartbeat": iso(r.last_msg_ms.max(r.since_ms).saturating_mul(1_000_000)),
+                    "lastMsgAgeMs": if r.last_msg_ms > 0 { domain::now_ns() / 1_000_000 - r.last_msg_ms.min(domain::now_ns() / 1_000_000) } else { 0 },
                     "lastError": r.last_down_reason,
                 })
             })
@@ -1048,9 +1049,28 @@ struct DashBucket {
     markup: i128,
     commission: i128,
     b_book: i128,
+    swap: i128,
     lots: f64,
     orders: u32,
     rejects: u32,
+    slips: Vec<f64>,
+    lat: Vec<f64>,
+}
+
+fn p95(v: &mut [f64]) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|a, b| a.total_cmp(b));
+    v[((v.len() - 1) as f64 * 0.95).round() as usize]
+}
+
+fn mean(v: &[f64]) -> f64 {
+    if v.is_empty() {
+        0.0
+    } else {
+        v.iter().sum::<f64>() / v.len() as f64
+    }
 }
 
 /// Dashboard series for `range` ("today" | "24h" | "7d" | "30d"): revenue legs,
@@ -1103,11 +1123,18 @@ pub fn dashboard_series(e: &Engine, admin: &AdminState, now_ns: u64, range: &str
             (0, 0)
         };
         let commission = -d.commission.minor;
+        // swap kept by us on B-book closes (A-book swap passes to the LP)
+        let swap = if d.entry == oms::DealEntry::Out && !a_book(d) {
+            -d.swap
+        } else {
+            0
+        };
         let lots = qty_f(d.volume);
         let target = if d.ts >= since { &mut total } else { &mut prev };
         target.markup += markup;
         target.commission += commission;
         target.b_book += b_book;
+        target.swap += swap;
         target.lots += lots;
         if d.ts >= since {
             let i = (((d.ts - since) / bucket) as usize).min(n_buckets - 1);
@@ -1115,6 +1142,7 @@ pub fn dashboard_series(e: &Engine, admin: &AdminState, now_ns: u64, range: &str
             b.markup += markup;
             b.commission += commission;
             b.b_book += b_book;
+            b.swap += swap;
             b.lots += lots;
             let s = by_symbol.entry(d.symbol.clone()).or_default();
             s.0 += lots;
@@ -1159,24 +1187,24 @@ pub fn dashboard_series(e: &Engine, admin: &AdminState, now_ns: u64, range: &str
                 {
                     if point > 0.0 {
                         let sign = if o.req.side == Side::Buy { 1.0 } else { -1.0 };
-                        slips.push(sign * (price_f(o.avg_price) - price_f(req)) / point);
+                        let slip = sign * (price_f(o.avg_price) - price_f(req)) / point;
+                        slips.push(slip);
+                        buckets[i].slips.push(slip);
                     }
                 }
             }
         }
     }
-    // LP latency p95 (send -> first fill)
-    let mut lat: Vec<f64> = e
-        .lp_orders()
-        .filter(|l| l.created_ts >= since)
-        .filter_map(|l| {
-            l.fills
-                .iter()
-                .map(|f| f.ts)
-                .min()
-                .map(|t| t.saturating_sub(l.created_ts) as f64 / 1e6)
-        })
-        .collect();
+    // LP latency p95 (send -> first fill), overall and per bucket
+    let mut lat: Vec<f64> = Vec::new();
+    for l in e.lp_orders().filter(|l| l.created_ts >= since) {
+        if let Some(t) = l.fills.iter().map(|f| f.ts).min() {
+            let ms = t.saturating_sub(l.created_ts) as f64 / 1e6;
+            lat.push(ms);
+            let i = (((l.created_ts - since) / bucket) as usize).min(n_buckets - 1);
+            buckets[i].lat.push(ms);
+        }
+    }
     lat.sort_by(|a, b| a.total_cmp(b));
     let pct = |v: &[f64], p: f64| {
         if v.is_empty() {
@@ -1245,17 +1273,22 @@ pub fn dashboard_series(e: &Engine, admin: &AdminState, now_ns: u64, range: &str
             "markup": minor(b.markup),
             "commission": minor(b.commission),
             "bBook": minor(b.b_book),
+            "swap": minor(b.swap),
             "lots": b.lots,
             "orders": b.orders,
             "rejects": b.rejects,
+            "avgSlipPts": mean(&b.slips),
+            "p95LatencyMs": p95(&mut b.lat.clone()),
+            "fills": b.lat.len(),
         })
     };
     let totals_json = |b: &DashBucket| {
         json!({
-            "revenue": minor(b.markup + b.commission + b.b_book),
+            "revenue": minor(b.markup + b.commission + b.b_book + b.swap),
             "markup": minor(b.markup),
             "commission": minor(b.commission),
             "bBook": minor(b.b_book),
+            "swap": minor(b.swap),
             "lots": b.lots,
             "orders": b.orders,
             "rejects": b.rejects,

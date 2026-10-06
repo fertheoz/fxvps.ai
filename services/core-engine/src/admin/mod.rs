@@ -7,6 +7,7 @@
 //! settings) lives in the admin journal (see [`store`]). Both replay
 //! deterministically.
 
+pub mod alerts;
 pub mod auth;
 pub mod lp_poll;
 mod routes;
@@ -107,6 +108,8 @@ pub struct AdminCtx {
     pub lp_status: Option<LpStatus>,
     pub lp_admin: Option<LpAdmin>,
     pub agg: Option<Arc<crate::lp_agg::Aggregator>>,
+    /// Operational alerts (stage 9).
+    pub alerts: Arc<alerts::AlertBook>,
     pub http: reqwest::Client,
 }
 
@@ -273,12 +276,14 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
         lp_status: cfg.lp_status.clone(),
         lp_admin: cfg.lp_admin.clone(),
         agg: cfg.agg.clone(),
+        alerts: Arc::default(),
         http: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .unwrap_or_default(),
     };
     stream::spawn_ticker(ctx.clone(), cfg.live_interval_ms);
+    alerts::spawn(ctx.clone());
     let legacy =
         crate::router(engine).layer(middleware::from_fn_with_state(ctx.clone(), legacy_guard));
     let mut app = routes::router().with_state(ctx).merge(legacy);

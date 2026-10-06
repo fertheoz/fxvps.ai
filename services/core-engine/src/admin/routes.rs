@@ -54,6 +54,8 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/risk/hedge", get(hedge_get).put(hedge_put))
         .route("/v1/settings/swap", get(swap_get).put(swap_put))
         .route("/v1/settings/swap/rollover", post(swap_rollover))
+        .route("/v1/alerts", get(list_alerts))
+        .route("/v1/alerts/{id}/ack", post(ack_alert))
         .route("/v1/reports/clients", get(client_flow))
         .route("/v1/lp/sessions", get(lp_sessions))
         .route("/v1/lp/config", get(lp_config_get).put(lp_config_put))
@@ -1500,6 +1502,20 @@ async fn swap_rollover(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     Ok(Json(
         json!({ "applied": applied, "positions": positions, "reason": reason }),
     ))
+}
+
+async fn list_alerts(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "dashboard.view")?;
+    Ok(Json(ctx.alerts.snapshot()))
+}
+
+async fn ack_alert(State(ctx): State<AdminCtx>, actor: Actor, Path(id): Path<String>) -> ApiResult {
+    need(&actor, "dashboard.view")?;
+    if !ctx.alerts.ack(&id) {
+        return Err(ApiError::not_found("unknown or resolved alert"));
+    }
+    ctx.notify(&["listAlerts"]);
+    Ok(Json(ctx.alerts.snapshot()))
 }
 
 async fn client_flow(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

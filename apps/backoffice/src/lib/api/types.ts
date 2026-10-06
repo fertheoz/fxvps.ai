@@ -84,9 +84,31 @@ export interface DashboardBucket {
   markup: number;
   commission: number;
   bBook: number;
+  swap?: number;
   lots: number;
   orders: number;
   rejects: number;
+  /** Execution quality per bucket (stage 9). */
+  avgSlipPts?: number;
+  p95LatencyMs?: number;
+  fills?: number;
+}
+
+export type AlertSeverity = "info" | "warning" | "critical";
+export interface Alert {
+  id: string;
+  kind: string;
+  target: string;
+  severity: AlertSeverity;
+  title: string;
+  detail: string;
+  raisedAt: number;
+  resolvedAt: number | null;
+  acked: boolean;
+}
+export interface AlertList {
+  active: Alert[];
+  recent: Alert[];
 }
 
 export interface DashboardTotals {
@@ -323,6 +345,8 @@ export interface AdminApi {
   dashboard(): Promise<DashboardStats>;
   dashboardSeries(range: DashboardRange): Promise<DashboardSeries>;
   exposure(): Promise<SymbolExposure[]>;
+  listAlerts(): Promise<AlertList>;
+  ackAlert(id: string, actor: Actor): Promise<AlertList>;
   hedgePolicy(): Promise<HedgePolicy>;
   saveHedgePolicy(p: HedgePolicy, actor: Actor): Promise<HedgePolicy>;
   /** Per-client flow profile with the toxicity score the rules use. */

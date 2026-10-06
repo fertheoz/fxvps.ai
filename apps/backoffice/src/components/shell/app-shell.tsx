@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Command, Languages, LogOut, Menu, Moon, Radio, ShieldOff, Sun } from "lucide-react";
 import { NAV } from "./nav";
 import { CommandPalette } from "./command-palette";
+import { AlertBell } from "@/components/alerts";
 import { Button, Select } from "@/components/ui/primitives";
 import { setPrefs, usePrefs } from "@/lib/prefs";
 import { useActor, useT } from "@/lib/hooks";
@@ -120,6 +121,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
               </Select>
             )}
+            {signedIn && <AlertBell />}
             <Button variant="ghost" size="icon" aria-label={t("common.language")} onClick={() => setPrefs({ locale: prefs.locale === "en" ? "tr" : "en" })} title={LOCALES[prefs.locale === "en" ? "tr" : "en"].label}>
               <Languages className="h-4 w-4" /><span className="sr-only">{prefs.locale}</span>
             </Button>
