@@ -43,6 +43,7 @@ function useIsMobile(): boolean {
 export function App({ api }: { api: TradingApi }) {
   const t = useT();
   const theme = useTerminal((s) => s.theme);
+  const toolboxMode = useTerminal((s) => s.toolboxMode);
   const lang = useTerminal((s) => s.lang);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,15 +87,26 @@ export function App({ api }: { api: TradingApi }) {
           </Panel>
           <Separator />
           <Panel id="center" minSize="35">
-            <Group orientation="vertical" id="center-v">
-              <Panel id="charts" defaultSize="68" minSize="25">
-                <ChartGrid />
-              </Panel>
-              <Separator />
-              <Panel id="toolbox" defaultSize="32" minSize="12">
+            {toolboxMode === 'max' ? (
+              <Toolbox />
+            ) : toolboxMode === 'min' ? (
+              <div className="flex flex-col h-full">
+                <div className="flex-1 min-h-0">
+                  <ChartGrid />
+                </div>
                 <Toolbox />
-              </Panel>
-            </Group>
+              </div>
+            ) : (
+              <Group orientation="vertical" id="center-v">
+                <Panel id="charts" defaultSize="68" minSize="25">
+                  <ChartGrid />
+                </Panel>
+                <Separator />
+                <Panel id="toolbox" defaultSize="32" minSize="12">
+                  <Toolbox />
+                </Panel>
+              </Group>
+            )}
           </Panel>
           <Separator />
           <Panel id="side" defaultSize="20" minSize="15">

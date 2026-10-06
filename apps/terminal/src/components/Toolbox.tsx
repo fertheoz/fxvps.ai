@@ -347,8 +347,11 @@ export function Toolbox() {
     const failed = results.filter((r) => !r.ok);
     if (failed.length) toast('error', t('toast.rejected', { error: failed[0]!.error ?? '' }));
   };
+  const mode = useTerminal((s) => s.toolboxMode);
+  const setMode = useTerminal((s) => s.setToolboxMode);
+  const collapsed = mode === 'min';
   return (
-    <section className="flex flex-col h-full bg-panel">
+    <section className={`flex flex-col ${collapsed ? '' : 'h-full'} bg-panel`} data-toolbox-mode={mode}>
       <div className="flex items-center h-8 border-b border-line shrink-0" role="tablist">
         {TABS.map((k) => (
           <button
@@ -363,7 +366,27 @@ export function Toolbox() {
             {counts[k] ? <span className="ml-1 num text-[10px] px-1 rounded bg-panel-2">{counts[k]}</span> : null}
           </button>
         ))}
-        {tab === 'positions' && positions.length > 0 && account && (
+        <span className="ml-auto mr-1 flex items-center gap-0.5 order-last">
+          <button
+            className="w-5 h-5 grid place-items-center rounded text-[11px] text-muted hover:text-fg hover:bg-panel-2"
+            title={mode === 'max' ? t('tb.restore') : t('tb.maximize')}
+            aria-label={mode === 'max' ? t('tb.restore') : t('tb.maximize')}
+            data-testid="tb-max"
+            onClick={() => setMode(mode === 'max' ? 'normal' : 'max')}
+          >
+            {mode === 'max' ? '⤓' : '⤢'}
+          </button>
+          <button
+            className="w-5 h-5 grid place-items-center rounded text-[11px] text-muted hover:text-fg hover:bg-panel-2"
+            title={collapsed ? t('tb.expand') : t('tb.collapse')}
+            aria-label={collapsed ? t('tb.expand') : t('tb.collapse')}
+            data-testid="tb-collapse"
+            onClick={() => setMode(collapsed ? 'normal' : 'min')}
+          >
+            {collapsed ? '▴' : '▾'}
+          </button>
+        </span>
+        {!collapsed && tab === 'positions' && positions.length > 0 && account && (
           <span className="ml-auto mr-2 flex gap-1">
             {(['profit', 'loss', 'all'] as const).map((w) => {
               const n = bulkTargets(positions, profitOf, w).length;
@@ -382,12 +405,16 @@ export function Toolbox() {
           </span>
         )}
       </div>
+      {!collapsed && (
+        <>
       <div className="flex-1 min-h-0 overflow-x-auto">
         {tab === 'positions' && <Positions />}
         {tab === 'orders' && <Orders />}
         {tab === 'history' && <History />}
         {tab === 'journal' && <Journal />}
       </div>
+        </>
+      )}
     </section>
   );
 }

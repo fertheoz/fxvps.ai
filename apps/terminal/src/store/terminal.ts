@@ -95,6 +95,10 @@ export interface TerminalState {
   layout: ChartLayout;
   charts: ChartSlot[];
   activeChart: number;
+  /** Chart slots taken out of the grid: minimised ones show as chips, closed ones do not. */
+  hiddenCharts: Record<number, 'min' | 'closed'>;
+  /** Bottom panel: normal split, maximised over the charts, or collapsed to its tab strip. */
+  toolboxMode: 'normal' | 'max' | 'min';
   indicators: Indicators;
   indicatorSettings: IndicatorSettings;
   /** Draw the ask price as a second line (candles follow the bid). */
@@ -122,6 +126,9 @@ export interface TerminalState {
   setLang(l: Lang): void;
   toggleFavorite(symbol: string): void;
   setLayout(l: ChartLayout): void;
+  hideChart(index: number, how: 'min' | 'closed'): void;
+  restoreChart(index: number): void;
+  setToolboxMode(mode: 'normal' | 'max' | 'min'): void;
   setChartSymbol(symbol: string, index?: number): void;
   setChartTimeframe(tf: Timeframe, index?: number): void;
   setActiveChart(i: number): void;
@@ -187,6 +194,8 @@ export const useTerminal = create<TerminalState>()(
       layout: 1,
       charts: defaultCharts,
       activeChart: 0,
+      hiddenCharts: {},
+      toolboxMode: 'normal',
       indicators: { sma: false, ema: true, bollinger: false, rsi: false, volume: true },
       indicatorSettings: DEFAULT_INDICATOR_SETTINGS,
       showAskLine: false,
@@ -302,7 +311,21 @@ export const useTerminal = create<TerminalState>()(
         set({ favorites: f.includes(symbol) ? f.filter((x) => x !== symbol) : [...f, symbol] });
       },
       setLayout(layout) {
-        set({ layout, activeChart: Math.min(get().activeChart, layout - 1) });
+        // Picking a layout brings every slot back.
+        set({ layout, activeChart: Math.min(get().activeChart, layout - 1), hiddenCharts: {} });
+      },
+      hideChart(index, how) {
+        const hidden = { ...get().hiddenCharts, [index]: how };
+        const visible = Array.from({ length: get().layout }, (_, i) => i).filter((i) => !hidden[i]);
+        set({ hiddenCharts: hidden, activeChart: visible.includes(get().activeChart) ? get().activeChart : (visible[0] ?? 0) });
+      },
+      restoreChart(index) {
+        const hidden = { ...get().hiddenCharts };
+        delete hidden[index];
+        set({ hiddenCharts: hidden, activeChart: index });
+      },
+      setToolboxMode(toolboxMode) {
+        set({ toolboxMode });
       },
       setChartSymbol(symbol, index) {
         const i = index ?? get().activeChart;
@@ -403,6 +426,8 @@ export const useTerminal = create<TerminalState>()(
         favorites: s.favorites,
         layout: s.layout,
         charts: s.charts,
+        hiddenCharts: s.hiddenCharts,
+        toolboxMode: s.toolboxMode,
         indicators: s.indicators,
         indicatorSettings: s.indicatorSettings,
         showAskLine: s.showAskLine,

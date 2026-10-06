@@ -101,6 +101,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const chartTool = useTerminal((s) => s.chartTool);
   const setChartTool = useTerminal((s) => s.setChartTool);
   const setObjects = useTerminal((s) => s.setObjects);
+  const hideChart = useTerminal((s) => s.hideChart);
   const oneClickVolume = useTerminal((s) => s.oneClickVolume);
   const setOneClickVolume = useTerminal((s) => s.setOneClickVolume);
   const setActive = useTerminal((s) => s.setActiveChart);
@@ -742,16 +743,46 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
             </button>
           ))}
         </div>
-        {isTauri() && !detached && (
-          <button
-            className="ml-auto px-1.5 py-0.5 rounded text-[11px] border border-line text-muted hover:text-fg"
-            title={t('chart.detach')}
-            data-testid={`chart-detach-${index}`}
-            onClick={() => void openChartWindow(slot.symbol, slot.timeframe)}
-          >
-            ⧉ {t('chart.detach')}
-          </button>
-        )}
+        <div className="ml-auto flex items-center gap-1">
+          {isTauri() && !detached && (
+            <button
+              className="px-1.5 py-0.5 rounded text-[11px] border border-line text-muted hover:text-fg"
+              title={t('chart.detach')}
+              data-testid={`chart-detach-${index}`}
+              onClick={() => void openChartWindow(slot.symbol, slot.timeframe)}
+            >
+              ⧉ {t('chart.detach')}
+            </button>
+          )}
+          {!detached && (
+            <>
+              <button
+                className="w-4 h-4 grid place-items-center rounded text-[10px] leading-none text-muted hover:text-fg hover:bg-panel-2"
+                title={t('chart.minimize')}
+                aria-label={t('chart.minimize')}
+                data-testid={`chart-min-${index}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  hideChart(index, 'min');
+                }}
+              >
+                –
+              </button>
+              <button
+                className="w-4 h-4 grid place-items-center rounded text-[10px] leading-none text-muted hover:text-down hover:bg-panel-2"
+                title={t('chart.close')}
+                aria-label={t('chart.close')}
+                data-testid={`chart-close-${index}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  hideChart(index, 'closed');
+                }}
+              >
+                ×
+              </button>
+            </>
+          )}
+        </div>
       </div>
       <div className="relative flex-1 min-h-0">
         <div
