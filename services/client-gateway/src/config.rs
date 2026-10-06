@@ -132,6 +132,10 @@ impl ClientGatewayConfig {
         self.orders_per_second =
             num("FXVPS_ORDERS_PER_SECOND", self.orders_per_second as usize)? as u32;
         self.order_burst = num("FXVPS_ORDER_BURST", self.order_burst as usize)? as u32;
+        // Seeded demo deposit (load tests: margin must not be what runs out).
+        if let Some(v) = var("FXVPS_DEMO_BALANCE") {
+            self.demo_balance = v.trim().to_string();
+        }
         Ok(())
     }
 
