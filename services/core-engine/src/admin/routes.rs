@@ -12,7 +12,7 @@ use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use money::{Currency, Money, Price, Qty};
 use oms::{Command, Engine, Event};
-use risk::{AssetClass, EsmaPreset, GroupConfig, MarginMode, Routing, SymbolSpec};
+use risk::{AssetClass, EsmaPreset, GroupConfig, MarginMode, PartialFill, Routing, SymbolSpec};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -844,6 +844,11 @@ struct GroupDto {
     /// "retail" | "professional" | null (no ESMA leverage cap).
     #[serde(default)]
     esma: Option<String>,
+    /// "cancel" | "retry" | "book" | "all_or_none" (what happens to an unfilled remainder).
+    #[serde(default)]
+    partial_fill: Option<String>,
+    #[serde(default)]
+    max_attempts: Option<u32>,
 }
 
 async fn group_json(ctx: &AdminCtx, name: String) -> ApiResult {
@@ -896,6 +901,19 @@ async fn save_group(
         "retail_hedged" | "exchange" => MarginMode::Hedging,
         _ => return Err(ApiError::bad("invalid marginMode")),
     };
+    let partial_fill = match g.partial_fill.as_deref() {
+        None | Some("cancel") => PartialFill::CancelRemainder,
+        Some("retry") => PartialFill::Retry {
+            max_attempts: g.max_attempts.unwrap_or(3).clamp(1, 10),
+        },
+        Some("book") => PartialFill::BookRemainder,
+        Some("all_or_none") => PartialFill::AllOrNone,
+        _ => {
+            return Err(ApiError::bad(
+                "partialFill must be cancel, retry, book or all_or_none",
+            ))
+        }
+    };
     let esma = match g.esma.as_deref() {
         None | Some("") | Some("none") => None,
         Some("retail") => Some(EsmaPreset::Retail),
@@ -934,6 +952,7 @@ async fn save_group(
     cfg.stop_out_pct = g.stop_out_pct.round() as i64;
     cfg.markup_points = g.markup_points;
     cfg.esma = esma;
+    cfg.partial_fill = partial_fill;
     cfg.routing = routing;
     cfg.allowed_symbols = match g.symbols {
         Some(s) if s.len() != all.len() => Some(s.into_iter().collect()),

@@ -5,7 +5,9 @@ use super::store::AdminState;
 use ledger::TxnKind;
 use money::{Price, Qty};
 use oms::{Engine, OrderStatus, OrderType, Position};
-use risk::{AssetClass, EsmaPreset, GroupConfig, MarginMode, Routing, Side, SymbolSpec};
+use risk::{
+    AssetClass, EsmaPreset, GroupConfig, MarginMode, PartialFill, Routing, Side, SymbolSpec,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -274,6 +276,13 @@ pub fn group(g: &GroupConfig, all_symbols: &[String]) -> Value {
         "book": book(g.routing),
         "symbols": symbols,
         "esma": g.esma.map(|p| match p { EsmaPreset::Retail => "retail", EsmaPreset::Professional => "professional" }),
+        "partialFill": match g.partial_fill {
+            PartialFill::CancelRemainder => "cancel",
+            PartialFill::Retry { .. } => "retry",
+            PartialFill::BookRemainder => "book",
+            PartialFill::AllOrNone => "all_or_none",
+        },
+        "maxAttempts": match g.partial_fill { PartialFill::Retry { max_attempts } => max_attempts, _ => 3 },
         "negativeBalanceProtection": g.negative_balance_protection,
     })
 }

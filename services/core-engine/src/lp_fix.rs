@@ -105,7 +105,11 @@ impl LpRouter for FixLpRouter {
                 OrderType::Market
             },
             limit_price: req.limit.map(Fixed::from),
-            tif: TimeInForce::ImmediateOrCancel,
+            tif: if req.all_or_none {
+                TimeInForce::FillOrKill
+            } else {
+                TimeInForce::ImmediateOrCancel
+            },
         };
         if let Err(e) = self.orders.try_send(OrderCommand::Submit(order)) {
             self.reject(req.lp_order_id, format!("LP gateway unavailable: {e}"));
@@ -320,6 +324,7 @@ mod tests {
             side: risk::Side::Sell,
             volume: qty("0.25"),
             limit: None,
+            all_or_none: false,
         });
         match rx.try_recv().unwrap() {
             OrderCommand::Submit(o) => {
@@ -336,6 +341,7 @@ mod tests {
             side: risk::Side::Buy,
             volume: qty("1"),
             limit: None,
+            all_or_none: false,
         });
         assert!(matches!(
             fb.lock().unwrap().pop_front(),

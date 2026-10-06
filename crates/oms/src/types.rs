@@ -134,6 +134,9 @@ pub struct Order {
     /// re-arms only when the market improves on it (no IOC storm on one tick).
     #[serde(default)]
     pub rearm_px: Option<Price>,
+    /// LP orders this order has been part of (retries and re-arms send again).
+    #[serde(default)]
+    pub lp_attempts: u32,
 }
 
 /// Origin of an order (deal reason in the history).
