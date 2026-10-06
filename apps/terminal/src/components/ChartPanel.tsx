@@ -12,7 +12,7 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import { TIMEFRAMES, TIMEFRAME_SECONDS, type Bar } from '@fxvps/trading-core';
+import { TIMEFRAMES, TIMEFRAME_SECONDS, type Bar, type Position } from '@fxvps/trading-core';
 import { getApi, trade } from '../store/api';
 import { selectOrders, selectPositions, useTerminal, type Indicators } from '../store/terminal';
 import { useT } from '../hooks';
@@ -120,7 +120,8 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const dragRef = useRef<{ line: IPriceLine; positionId: string; kind: 'sl' | 'tp'; price: number } | null>(null);
   const draftEl = useRef<HTMLDivElement>(null);
   /** Pending order being moved after a long press (price = where the line is now). */
-  const [edit, setEdit] = useState<{ kind: 'order' | 'line' | 'alert' | 'sl' | 'tp'; id: string; price: number } | null>(null);
+  // 'pos': the position's own line was picked up; where it is dropped decides SL or TP.
+  const [edit, setEdit] = useState<{ kind: 'order' | 'line' | 'alert' | 'sl' | 'tp' | 'pos'; id: string; price: number } | null>(null);
   /** Shapes layer (trend lines, rectangles) and the one being drawn / moved. */
   const shapesRef = useRef<ShapesPrimitive | null>(null);
   const [drawing, setDrawing] = useState<ChartShape | null>(null);
@@ -498,7 +499,11 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   // The movable line: an object picked up by a long press, a tool being placed, else the caller's draft.
   const editOrder = edit?.kind === 'order' ? orders.find((o) => o.id === edit.id) : undefined;
   const editObject = edit && (edit.kind === 'line' || edit.kind === 'alert') ? (edit.kind === 'line' ? objects?.lines : objects?.alerts)?.find((x) => x.id === edit.id) : undefined;
-  const editPosition = edit && (edit.kind === 'sl' || edit.kind === 'tp') ? positions.find((p) => p.id === edit.id) : undefined;
+  const editPosition = edit && (edit.kind === 'sl' || edit.kind === 'tp' || edit.kind === 'pos') ? positions.find((p) => p.id === edit.id) : undefined;
+  /** Dragging the position line: above the open price is TP for a buy and SL for a sell (and the reverse below). */
+  const posLeg = (p: Position, price: number): 'sl' | 'tp' | null =>
+    price === p.openPrice ? null : (price > p.openPrice) === (p.side === 'buy') ? 'tp' : 'sl';
+  const editLeg = edit?.kind === 'pos' && editPosition ? posLeg(editPosition, edit.price) : edit?.kind === 'sl' || edit?.kind === 'tp' ? edit.kind : null;
   // An armed tool starts its line at the market (toolPrice follows the drag).
   const toolArmed = (chartTool === 'hline' || chartTool === 'alert') && isActive && !!spec && !!quote;
   const toolLinePrice = toolArmed ? (toolPrice ?? roundPrice(quote!.bid, spec!.digits)) : null;
@@ -507,14 +512,14 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     const label = editOrder
       ? `${editOrder.side.toUpperCase()} ${editOrder.type.replace('_', ' ').toUpperCase()} ${volumeToLots(editOrder.volume)}`
       : editPosition
-        ? `${edit.kind.toUpperCase()} #${editPosition.id}`
+        ? `${(editLeg ?? 'sl/tp').toUpperCase()} #${editPosition.id}`
         : edit.kind === 'line'
           ? t('obj.hline')
           : t('obj.alert');
     line = {
       price: edit.price,
       label: `${label} ${formatPrice(edit.price, spec.digits)}`,
-      tone: editOrder ? (editOrder.side === 'buy' ? 'up' : 'down') : edit.kind === 'sl' ? 'down' : 'up',
+      tone: editOrder ? (editOrder.side === 'buy' ? 'up' : 'down') : editLeg === 'sl' ? 'down' : 'up',
       onMove: (price) => setEdit({ ...edit, price }),
     };
   } else if (toolLinePrice !== null && spec) {
@@ -588,11 +593,13 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       if (!r.ok) toast('error', t('toast.rejected', { error: r.error ?? '' }));
       return;
     }
-    if (e.kind === 'sl' || e.kind === 'tp') {
+    if (e.kind === 'sl' || e.kind === 'tp' || e.kind === 'pos') {
       // Same rules as the desktop mouse drag: the server keeps the other leg.
       if (!editPosition || !quote || !spec) return;
-      const prot = dragProtection(editPosition, e.kind, e.price, spec.digits, quote);
-      if (!prot) return toast('error', t('toast.rejected', { error: `invalid ${e.kind.toUpperCase()}` }));
+      const leg = e.kind === 'pos' ? posLeg(editPosition, e.price) : e.kind;
+      if (!leg) return; // dropped back on the position line
+      const prot = dragProtection(editPosition, leg, e.price, spec.digits, quote);
+      if (!prot) return toast('error', t('toast.rejected', { error: `invalid ${leg.toUpperCase()}` }));
       const r = await getApi().modifyPosition(activeAccountId, editPosition.id, prot.sl, prot.tp, prot.trailing);
       if (!r.ok) toast('error', t('toast.rejected', { error: r.error ?? '' }));
       return;
@@ -606,7 +613,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       });
   };
   /** The movable line (pending order, drawn line, alert) within reach of `clientY`. */
-  const lineObjectAt = (clientY: number): { kind: 'order' | 'line' | 'alert' | 'sl' | 'tp'; id: string; price: number } | undefined => {
+  const lineObjectAt = (clientY: number): { kind: 'order' | 'line' | 'alert' | 'sl' | 'tp' | 'pos'; id: string; price: number } | undefined => {
     const series = candleRef.current;
     const el = host.current;
     if (edit || draft || chartTool || !series || !el || !spec) return undefined;
@@ -620,6 +627,9 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       if (p.sl !== undefined && near(p.sl)) return { kind: 'sl', id: p.id, price: p.sl };
       if (p.tp !== undefined && near(p.tp)) return { kind: 'tp', id: p.id, price: p.tp };
     }
+    // The position line itself: drag it away to set the leg on that side.
+    const pos = positions.find((p) => p.symbol === spec.name && near(p.openPrice));
+    if (pos) return { kind: 'pos', id: pos.id, price: pos.openPrice };
     const o = orders.find((x) => x.symbol === spec.name && near(x.price));
     if (o) return { kind: 'order', id: o.id, price: o.price };
     const a = objects?.alerts.find((x) => x.symbol === spec.name && near(x.price));
