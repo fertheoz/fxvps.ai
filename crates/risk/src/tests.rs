@@ -309,3 +309,30 @@ fn swap_modes_weekday_and_multiplier() {
     .validate()
     .is_err());
 }
+
+#[test]
+fn sessions_and_holidays() {
+    let mut eu = SymbolSpec::fx("EURUSD", Currency::EUR, Currency::USD, 5);
+    assert!(eu.is_open_at(0));
+    // Thursday 1970-01-01: open 08:00-17:00 only
+    eu.sessions = vec![TradingSession {
+        day: 4,
+        open_min: 480,
+        close_min: 1020,
+    }];
+    assert!(!eu.is_open_at(7 * 3_600_000_000_000));
+    assert!(eu.is_open_at(9 * 3_600_000_000_000));
+    assert!(!eu.is_open_at(17 * 3_600_000_000_000));
+    let cal = TradingCalendar {
+        holidays: vec!["1970-01-02".into()],
+    };
+    assert!(cal.validate().is_ok());
+    assert!(!cal.is_holiday(0));
+    assert!(cal.is_holiday(86_400_000_000_000 + 5));
+    assert_eq!(day_from_iso("2026-10-06"), Some(20732));
+    assert!(TradingCalendar {
+        holidays: vec!["2026-13-01".into()]
+    }
+    .validate()
+    .is_err());
+}

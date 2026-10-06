@@ -17,8 +17,39 @@ use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::config::{EndpointConfig, SimConfig};
-use crate::engine::Engine;
+use crate::engine::{rej, Engine};
 use crate::market::Market;
+
+/// Fault-injection scenario for tests and console demos (process-wide).
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Scenario {
+    /// Percentage of new orders rejected (0..100).
+    #[serde(default)]
+    pub reject_pct: u8,
+    /// Added delay before each execution report (ms).
+    #[serde(default)]
+    pub latency_ms: u64,
+}
+
+static SCENARIO: std::sync::OnceLock<Mutex<Scenario>> = std::sync::OnceLock::new();
+
+pub fn scenario() -> Scenario {
+    SCENARIO
+        .get_or_init(|| Mutex::new(Scenario::default()))
+        .lock()
+        .map(|s| *s)
+        .unwrap_or_default()
+}
+
+pub fn set_scenario(s: Scenario) {
+    if let Ok(mut g) = SCENARIO
+        .get_or_init(|| Mutex::new(Scenario::default()))
+        .lock()
+    {
+        *g = s;
+    }
+}
 
 type SharedMarket = Arc<Mutex<Market>>;
 
@@ -118,7 +149,7 @@ pub async fn start(cfg: SimConfig) -> std::io::Result<SimHandle> {
     tasks.push(tokio::spawn(accept_loop(
         trade_listener,
         cfg.trade.clone(),
-        shutdown_rx,
+        shutdown_rx.clone(),
         {
             let market = market.clone();
             move |io, ep, sd| {
@@ -126,6 +157,27 @@ pub async fn start(cfg: SimConfig) -> std::io::Result<SimHandle> {
             }
         },
     )));
+    if let Some(addr) = cfg.control_listen.clone() {
+        let listener = TcpListener::bind(&addr).await?;
+        info!(control = %listener.local_addr()?, "lp-simulator control API");
+        let st = ControlState {
+            market: market.clone(),
+            ticks: ticks_tx.clone(),
+        };
+        let app = axum::Router::new()
+            .route("/state", axum::routing::get(control_state))
+            .route("/shock", axum::routing::post(control_shock))
+            .route("/scenario", axum::routing::post(control_scenario))
+            .with_state(st);
+        let mut sd = shutdown_rx.clone();
+        tasks.push(tokio::spawn(async move {
+            let _ = axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = sd.changed().await;
+                })
+                .await;
+        }));
+    }
     Ok(SimHandle {
         md_addr,
         trade_addr,
@@ -134,6 +186,73 @@ pub async fn start(cfg: SimConfig) -> std::io::Result<SimHandle> {
         market,
         ticks: ticks_tx,
     })
+}
+
+#[derive(Clone)]
+struct ControlState {
+    market: SharedMarket,
+    ticks: broadcast::Sender<()>,
+}
+
+async fn control_state(
+    axum::extract::State(st): axum::extract::State<ControlState>,
+) -> axum::Json<serde_json::Value> {
+    let mids: Vec<serde_json::Value> = st
+        .market
+        .lock()
+        .map(|m| {
+            m.security_ids()
+                .map(|id| serde_json::json!({ "securityId": id, "mid": m.mid(id).map(|p| p.to_string()) }))
+                .collect()
+        })
+        .unwrap_or_default();
+    axum::Json(serde_json::json!({ "scenario": scenario(), "instruments": mids }))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShockReq {
+    /// Symbol (`EUR/USD`) or security id.
+    symbol: String,
+    /// Relative move in percent (e.g. -1.5); clamped to ±20 %.
+    pct: f64,
+}
+
+async fn control_shock(
+    axum::extract::State(st): axum::extract::State<ControlState>,
+    axum::Json(req): axum::Json<ShockReq>,
+) -> Result<axum::Json<serde_json::Value>, axum::http::StatusCode> {
+    let pct = req.pct.clamp(-20.0, 20.0);
+    let (old, new) = {
+        let mut m = st
+            .market
+            .lock()
+            .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+        let old = m
+            .mid(&req.symbol)
+            .ok_or(axum::http::StatusCode::NOT_FOUND)?;
+        let new =
+            domain::Price::from_raw(((old.raw() as f64) * (1.0 + pct / 100.0)).round() as i64);
+        if !m.set_mid(&req.symbol, new) {
+            return Err(axum::http::StatusCode::NOT_FOUND);
+        }
+        (old, new)
+    };
+    let _ = st.ticks.send(());
+    info!(symbol = %req.symbol, pct, %old, %new, "scenario: price shock");
+    Ok(axum::Json(
+        serde_json::json!({ "symbol": req.symbol, "oldMid": old.to_string(), "newMid": new.to_string() }),
+    ))
+}
+
+async fn control_scenario(axum::Json(s): axum::Json<Scenario>) -> axum::Json<Scenario> {
+    let s = Scenario {
+        reject_pct: s.reject_pct.min(100),
+        latency_ms: s.latency_ms.min(30_000),
+    };
+    set_scenario(s);
+    info!(?s, "scenario updated");
+    axum::Json(s)
 }
 
 async fn accept_loop<F>(
@@ -295,8 +414,16 @@ async fn trade_connection(
                 Some(SessionEvent::App(m)) => {
                     let replies = match &m.body {
                         Body::NewOrderSingle(nos) => {
-                            let book = market.lock().ok().and_then(|m| m.book(&nos.instrument.security_id).cloned());
-                            engine.new_order(nos, book.as_ref())
+                            let sc = scenario();
+                            if sc.latency_ms > 0 {
+                                tokio::time::sleep(Duration::from_millis(sc.latency_ms.min(30_000))).await;
+                            }
+                            if sc.reject_pct > 0 && (rand::random::<u8>() % 100) < sc.reject_pct.min(100) {
+                                engine.reject(nos, rej::OTHER, "scenario: injected reject")
+                            } else {
+                                let book = market.lock().ok().and_then(|m| m.book(&nos.instrument.security_id).cloned());
+                                engine.new_order(nos, book.as_ref())
+                            }
                         }
                         Body::OrderCancelRequest(r) => vec![engine.cancel(r)],
                         Body::OrderCancelReplaceRequest(r) => vec![engine.replace(r)],

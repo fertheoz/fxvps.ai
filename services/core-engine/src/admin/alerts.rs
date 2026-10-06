@@ -135,19 +135,16 @@ impl AlertBook {
     }
 }
 
-/// Thresholds of the evaluator (fixed for now; a settings page can follow).
-const LP_DOWN_GRACE_MS: u64 = 60_000;
-const FILL_RATE_MIN_ORDERS: u32 = 10;
-const FILL_RATE_FLOOR: f64 = 0.90;
 const LATENCY_MIN_SAMPLES: usize = 5;
-const LATENCY_FLOOR_MS: f64 = 500.0;
 
-/// Conditions from the engine state (orders, LP orders, exposure, margin).
+/// Conditions from the engine state (orders, LP orders, exposure, margin);
+/// thresholds come from the admin store (Settings → Alerts).
 pub fn engine_conditions(
     e: &oms::Engine,
     admin: &super::store::AdminState,
     now_ns: u64,
 ) -> Vec<Condition> {
+    let cfg = &admin.alerts;
     let mut out = Vec::new();
     const MIN: u64 = 60_000_000_000;
     // fill rate over the last hour
@@ -162,9 +159,9 @@ pub fn engine_conditions(
             filled += 1;
         }
     }
-    if orders >= FILL_RATE_MIN_ORDERS {
+    if orders >= cfg.fill_rate_min_orders.max(1) {
         let rate = f64::from(filled) / f64::from(orders);
-        if rate < FILL_RATE_FLOOR {
+        if rate < f64::from(cfg.fill_rate_floor_pct) / 100.0 {
             out.push(Condition {
                 kind: "fill_rate",
                 target: "1h".into(),
@@ -207,7 +204,7 @@ pub fn engine_conditions(
     );
     if recent.len() >= LATENCY_MIN_SAMPLES {
         let (r, b) = (p95(&recent), p95(&base));
-        if r > LATENCY_FLOOR_MS.max(3.0 * b) {
+        if r > f64::from(cfg.latency_floor_ms).max(f64::from(cfg.latency_multiplier) * b) {
             out.push(Condition {
                 kind: "latency",
                 target: "lp".into(),
@@ -254,7 +251,7 @@ pub fn engine_conditions(
 }
 
 /// Conditions from the FIX session table and the LP aggregator.
-pub fn infra_conditions(ctx: &AdminCtx, now_ms: u64) -> Vec<Condition> {
+pub fn infra_conditions(ctx: &AdminCtx, now_ms: u64, grace_ms: u64) -> Vec<Condition> {
     let mut out = Vec::new();
     if let Some(rows) = ctx
         .lp_status
@@ -267,11 +264,11 @@ pub fn infra_conditions(ctx: &AdminCtx, now_ms: u64) -> Vec<Condition> {
             }
             // never connected yet (since_ms == 0) counts once the grace period has passed
             let down_for = if r.since_ms == 0 {
-                LP_DOWN_GRACE_MS
+                grace_ms
             } else {
                 now_ms.saturating_sub(r.since_ms)
             };
-            if down_for >= LP_DOWN_GRACE_MS {
+            if down_for >= grace_ms {
                 let lp = if r.lp.is_empty() {
                     r.target_comp_id.clone()
                 } else {
@@ -346,17 +343,92 @@ pub fn infra_conditions(ctx: &AdminCtx, now_ms: u64) -> Vec<Condition> {
     out
 }
 
-/// Background evaluator: every 15 s.
+/// Sends `text` to the configured channels (settings first, env as fallback).
+/// `critical` bypasses quiet hours.
+async fn notify_channels(
+    ctx: &AdminCtx,
+    settings: &super::store::AlertSettings,
+    critical: bool,
+    text: &str,
+    body: &Value,
+) {
+    if let Some((from, to)) = settings.quiet_hours_utc {
+        let hour = ((domain::now_ns() / 3_600_000_000_000) % 24) as u8;
+        let quiet = if from <= to {
+            hour >= from && hour < to
+        } else {
+            hour >= from || hour < to
+        };
+        if quiet && !critical {
+            return;
+        }
+    }
+    let webhook = if settings.webhook_url.is_empty() {
+        std::env::var("CORE_ALERT_WEBHOOK_URL")
+            .ok()
+            .filter(|v| !v.is_empty())
+    } else {
+        Some(settings.webhook_url.clone())
+    };
+    if let Some(url) = webhook {
+        if let Err(e) = ctx.http.post(&url).json(body).send().await {
+            tracing::warn!(error = %e, "alert webhook failed");
+        }
+    }
+    let token = if settings.telegram_token.is_empty() {
+        std::env::var("CORE_TELEGRAM_BOT_TOKEN").unwrap_or_default()
+    } else {
+        settings.telegram_token.clone()
+    };
+    if !token.is_empty() && !settings.telegram_chat_id.is_empty() {
+        let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+        let payload = json!({ "chat_id": settings.telegram_chat_id, "text": text, "disable_web_page_preview": true });
+        match ctx.http.post(&url).json(&payload).send().await {
+            Ok(r) if !r.status().is_success() => {
+                tracing::warn!(status = %r.status(), "telegram rejected the alert")
+            }
+            Err(e) => tracing::warn!(error = %e, "telegram send failed"),
+            _ => {}
+        }
+    }
+}
+
+/// One-paragraph operations summary (daily report): 24 h totals, alerts, LP sessions.
+fn daily_report_text(
+    series: &Value,
+    active_alerts: usize,
+    lp_up: usize,
+    lp_total: usize,
+) -> String {
+    let t = &series["totals"];
+    let x = &series["execution"];
+    format!(
+        "fxvps.ai günlük rapor (son 24 saat)\nGelir: {} · markup {} · komisyon {} · B-book {} · swap {}\nHacim: {} lot · {} emir · {} ret · dolum %{:.0}\nKayma ort {:.2} pt · LP p95 {:.0} ms\nLP oturumları: {lp_up}/{lp_total} açık · aktif uyarı: {active_alerts}",
+        t["revenue"],
+        t["markup"],
+        t["commission"],
+        t["bBook"],
+        t["swap"],
+        t["lots"],
+        t["orders"],
+        t["rejects"],
+        x["fillRate"].as_f64().unwrap_or(0.0) * 100.0,
+        x["avgClientSlipPts"].as_f64().unwrap_or(0.0),
+        x["p95LatencyMs"].as_f64().unwrap_or(0.0)
+    )
+}
+
+/// Background evaluator: every 15 s; thresholds and channels from the admin store.
 pub fn spawn(ctx: AdminCtx) {
-    let webhook = std::env::var("CORE_ALERT_WEBHOOK_URL")
-        .ok()
-        .filter(|v| !v.is_empty());
     tokio::spawn(async move {
         let mut iv = tokio::time::interval(Duration::from_secs(15));
+        let mut report_sent_day = 0u64;
         loop {
             iv.tick().await;
             let now_ns = domain::now_ns();
             let st = ctx.view_state().await;
+            let settings = st.alerts.clone();
+            let grace_ms = settings.lp_down_grace_s * 1000;
             let Ok(mut conditions) = ctx
                 .engine
                 .read(move |e| engine_conditions(e, &st, now_ns))
@@ -364,11 +436,8 @@ pub fn spawn(ctx: AdminCtx) {
             else {
                 break;
             };
-            conditions.extend(infra_conditions(&ctx, now_ns / 1_000_000));
+            conditions.extend(infra_conditions(&ctx, now_ns / 1_000_000, grace_ms));
             let raised = ctx.alerts.apply(now_ns, conditions);
-            if raised.is_empty() {
-                continue;
-            }
             for a in &raised {
                 tracing::warn!(kind = %a.kind, target = %a.target, detail = %a.detail, "alert raised");
                 let cmd = AdminCmd::AlertRaised {
@@ -384,17 +453,57 @@ pub fn spawn(ctx: AdminCtx) {
                 {
                     tracing::warn!(error = %e, "alert not audited");
                 }
-                if let Some(url) = &webhook {
-                    let body = json!({
-                        "kind": a.kind, "severity": a.severity, "title": a.title,
-                        "detail": a.detail, "target": a.target, "at": views::iso(a.raised_at),
-                    });
-                    if let Err(e) = ctx.http.post(url).json(&body).send().await {
-                        tracing::warn!(error = %e, "alert webhook failed");
+                let body = json!({
+                    "kind": a.kind, "severity": a.severity, "title": a.title,
+                    "detail": a.detail, "target": a.target, "at": views::iso(a.raised_at),
+                });
+                let text = format!(
+                    "⚠ {} [{:?}]\n{}\n{}",
+                    a.title, a.severity, a.target, a.detail
+                );
+                notify_channels(
+                    &ctx,
+                    &settings,
+                    a.severity == Severity::Critical,
+                    &text,
+                    &body,
+                )
+                .await;
+            }
+            if !raised.is_empty() {
+                ctx.notify(&["listAlerts", "listAudit"]);
+            }
+            // daily operations report
+            if let Some(h) = settings.daily_report_hour_utc {
+                let day = now_ns / 86_400_000_000_000;
+                let hour = ((now_ns / 3_600_000_000_000) % 24) as u8;
+                if hour == h && day != report_sent_day {
+                    report_sent_day = day;
+                    let st2 = ctx.view_state().await;
+                    if let Ok(series) = ctx
+                        .engine
+                        .read(move |e| views::dashboard_series(e, &st2, now_ns, "24h"))
+                        .await
+                    {
+                        let active = ctx.alerts.snapshot()["active"]
+                            .as_array()
+                            .map_or(0, |a| a.len());
+                        let (up, total) = ctx
+                            .lp_status
+                            .as_ref()
+                            .and_then(|s| {
+                                s.read()
+                                    .ok()
+                                    .map(|t| (t.iter().filter(|r| r.logged_on).count(), t.len()))
+                            })
+                            .unwrap_or((0, 0));
+                        let text = daily_report_text(&series, active, up, total);
+                        let body = json!({ "kind": "daily_report", "text": text, "series": series["totals"], "execution": series["execution"] });
+                        notify_channels(&ctx, &settings, true, &text, &body).await;
+                        tracing::info!("daily operations report sent");
                     }
                 }
             }
-            ctx.notify(&["listAlerts", "listAudit"]);
         }
     });
 }

@@ -265,6 +265,12 @@ pub struct SymbolSpec {
     /// Weekday (0 = Sunday .. 6 = Saturday) whose rollover charges three days.
     #[serde(default = "default_triple_day")]
     pub triple_swap_day: u8,
+    /// Weekly trading sessions (UTC); empty = tradable at any time.
+    #[serde(default)]
+    pub sessions: Vec<TradingSession>,
+    /// false = orders rejected (symbol switched off), positions still priced.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     /// Commission per lot per side (in its own currency).
     pub commission_per_lot: Money,
     pub asset_class: AssetClass,
@@ -287,6 +293,8 @@ impl SymbolSpec {
             swap_short: Price::ZERO,
             swap_mode: SwapMode::Money,
             triple_swap_day: 3,
+            sessions: Vec::new(),
+            enabled: true,
             commission_per_lot: Money::zero(Currency::USD),
             asset_class: AssetClass::MajorFx,
         }
@@ -1058,6 +1066,81 @@ pub fn swap_scaled(spec: &SymbolSpec, side: Side, volume: Qty, multiplier_pct: u
         }
     };
     per_lot * volume.raw() as i128 / SCALE as i128 * multiplier_pct as i128 / 100
+}
+
+// ---------------------------------------------------------------------------
+// Stage 13: market hours and holiday calendar
+// ---------------------------------------------------------------------------
+
+/// One weekly trading window in UTC minutes; `day` 0 = Sunday .. 6 = Saturday.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TradingSession {
+    pub day: u8,
+    pub open_min: u16,
+    pub close_min: u16,
+}
+
+impl SymbolSpec {
+    /// Is the symbol tradable at `ts_ns` (UTC)? Empty sessions = always.
+    pub fn is_open_at(&self, ts_ns: u64) -> bool {
+        if self.sessions.is_empty() {
+            return true;
+        }
+        let day = weekday_utc(ts_ns);
+        let minute = ((ts_ns / 60_000_000_000) % 1_440) as u16;
+        self.sessions
+            .iter()
+            .any(|s| s.day == day && minute >= s.open_min && minute < s.close_min)
+    }
+}
+
+/// Global holiday calendar: no trading and no rollover on these UTC dates.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TradingCalendar {
+    /// `YYYY-MM-DD`
+    #[serde(default)]
+    pub holidays: Vec<String>,
+}
+
+impl TradingCalendar {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.holidays.len() > 365 {
+            return Err("too many holidays".into());
+        }
+        for d in &self.holidays {
+            if day_from_iso(d).is_none() {
+                return Err(format!("invalid date {d} (YYYY-MM-DD)"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Is the UTC day of `ts_ns` a holiday?
+    pub fn is_holiday(&self, ts_ns: u64) -> bool {
+        let day = ts_ns / 86_400_000_000_000;
+        self.holidays.iter().any(|d| day_from_iso(d) == Some(day))
+    }
+}
+
+/// Days since the UNIX epoch of a `YYYY-MM-DD` string.
+pub fn day_from_iso(s: &str) -> Option<u64> {
+    let mut it = s.get(0..10)?.split('-');
+    let (y, m, d): (i64, i64, i64) = (
+        it.next()?.parse().ok()?,
+        it.next()?.parse().ok()?,
+        it.next()?.parse().ok()?,
+    );
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let y2 = if m <= 2 { y - 1 } else { y };
+    let era = if y2 >= 0 { y2 } else { y2 - 399 } / 400;
+    let yoe = y2 - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    u64::try_from(era * 146_097 + doe - 719_468).ok()
 }
 
 #[cfg(test)]

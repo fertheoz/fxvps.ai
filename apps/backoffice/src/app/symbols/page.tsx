@@ -80,15 +80,25 @@ function SymbolDialog({ sym, onClose }: { sym: SymbolSpec; onClose: () => void }
         <SelectField label={t("symbols.tripleSwap")} value={draft.tripleSwapDay} options={Weekday.options} onChange={(v) => set("tripleSwapDay", v)} />
         <SelectField label={t("symbols.enabled")} value={draft.enabled ? "yes" : "no"} options={["yes", "no"] as const} onChange={(v) => set("enabled", v === "yes")} />
       </div>
-      <h3 className="mt-4 mb-2 text-sm font-semibold">{t("symbols.sessions")}</h3>
+      <h3 className="mt-4 mb-1 text-sm font-semibold">{t("symbols.sessions")}</h3>
+      <p className="mb-2 text-xs text-muted-foreground">{t("symbols.sessionsHint")}</p>
       <table className="w-full text-sm">
         <tbody>
           {Weekday.options.map((d) => {
             const s = draft.tradeSessions.filter((x) => x.day === d);
+            const text = s.map((x) => `${x.open}-${x.close}`).join(", ");
+            const apply = (v: string) => {
+              const parsed = v.split(",").map((p) => p.trim()).filter(Boolean).map((p) => {
+                const m = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec(p);
+                return m ? { day: d, open: (m[1] ?? "").padStart(5, "0"), close: (m[2] ?? "").padStart(5, "0") } : null;
+              });
+              if (parsed.some((p) => p === null)) return;
+              set("tradeSessions", [...draft.tradeSessions.filter((x) => x.day !== d), ...(parsed as { day: typeof d; open: string; close: string }[])]);
+            };
             return (
               <tr key={d} className="border-t border-border">
                 <td className="py-1 pr-4 uppercase text-muted-foreground">{d}</td>
-                <td className="py-1 tabular-nums">{s.length ? s.map((x) => `${x.open}–${x.close}`).join(", ") : "—"}</td>
+                <td className="py-1"><input className="w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-xs text-foreground" defaultValue={text} placeholder="—" onBlur={(e) => apply(e.target.value)} data-testid={`session-${d}`} /></td>
               </tr>
             );
           })}

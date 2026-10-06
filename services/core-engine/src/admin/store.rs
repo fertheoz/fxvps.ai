@@ -95,6 +95,83 @@ pub struct SettingsRec {
     pub funding: FundingInstructions,
 }
 
+/// Alert thresholds, channels and the daily operations report (stage 13).
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlertSettings {
+    #[serde(default = "d_lp_down")]
+    pub lp_down_grace_s: u64,
+    #[serde(default = "d_fr_orders")]
+    pub fill_rate_min_orders: u32,
+    /// Percent, e.g. 90.
+    #[serde(default = "d_fr_floor")]
+    pub fill_rate_floor_pct: u8,
+    #[serde(default = "d_lat_floor")]
+    pub latency_floor_ms: u32,
+    /// p95 of the last 15 min vs the previous hour (× this).
+    #[serde(default = "d_lat_mult")]
+    pub latency_multiplier: u8,
+    /// Outgoing webhook (JSON POST); overrides `CORE_ALERT_WEBHOOK_URL` when set.
+    #[serde(default)]
+    pub webhook_url: String,
+    /// Telegram bot token (write-only in the API) and chat id.
+    #[serde(default)]
+    pub telegram_token: String,
+    #[serde(default)]
+    pub telegram_chat_id: String,
+    /// UTC hours `[from, to)` in which only critical alerts are sent; None = always.
+    #[serde(default)]
+    pub quiet_hours_utc: Option<(u8, u8)>,
+    /// UTC hour of the daily operations report (Telegram/webhook); None = off.
+    #[serde(default)]
+    pub daily_report_hour_utc: Option<u8>,
+}
+
+fn d_lp_down() -> u64 {
+    60
+}
+fn d_fr_orders() -> u32 {
+    10
+}
+fn d_fr_floor() -> u8 {
+    90
+}
+fn d_lat_floor() -> u32 {
+    500
+}
+fn d_lat_mult() -> u8 {
+    3
+}
+
+impl Default for AlertSettings {
+    fn default() -> AlertSettings {
+        AlertSettings {
+            lp_down_grace_s: 60,
+            fill_rate_min_orders: 10,
+            fill_rate_floor_pct: 90,
+            latency_floor_ms: 500,
+            latency_multiplier: 3,
+            webhook_url: String::new(),
+            telegram_token: String::new(),
+            telegram_chat_id: String::new(),
+            quiet_hours_utc: None,
+            daily_report_hour_utc: None,
+        }
+    }
+}
+
+/// A saved routing-rule table (stage 13: versioning / restore).
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleVersion {
+    pub id: String,
+    pub at: u64,
+    pub actor: String,
+    pub count: usize,
+    /// JSON array of `RoutingRule`.
+    pub rules_json: String,
+}
+
 #[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FundingInstructions {
@@ -287,6 +364,10 @@ pub enum AdminCmd {
     KycDocAdded {
         doc: KycDoc,
     },
+    /// Alert thresholds / channels (stage 13).
+    AlertSettingsSaved {
+        settings: AlertSettings,
+    },
     /// Introducing-broker share of a parent account's children commission (percent).
     IbShareSet {
         account: u64,
@@ -303,6 +384,9 @@ pub enum AdminCmd {
     },
     RulesSaved {
         count: usize,
+        /// Full table as JSON (stage 13 versioning); empty in older records.
+        #[serde(default)]
+        rules_json: String,
     },
     SymbolSaved {
         symbol: String,
@@ -398,6 +482,12 @@ pub struct AdminState {
     /// client account -> IB account
     #[serde(default)]
     pub ib_of: BTreeMap<u64, u64>,
+    /// Alert thresholds / channels (stage 13).
+    #[serde(default)]
+    pub alerts: AlertSettings,
+    /// Routing-rule table history, oldest first (last 50).
+    #[serde(default)]
+    pub rule_versions: Vec<RuleVersion>,
     /// Oldest first.
     pub audit: Vec<AuditRec>,
 }
@@ -735,12 +825,47 @@ impl AdminState {
             AdminCmd::GroupSaved { group, details } => {
                 self.audit(r, "group.update".into(), group.clone(), details.clone())
             }
-            AdminCmd::RulesSaved { count } => self.audit(
-                r,
-                "rules.update".into(),
-                "routing".into(),
-                format!("{count} rules"),
-            ),
+            AdminCmd::RulesSaved { count, rules_json } => {
+                if !rules_json.is_empty() {
+                    self.rule_versions.push(RuleVersion {
+                        id: format!("rv{}", r.seq),
+                        at: r.ts,
+                        actor: r.actor.name.clone(),
+                        count: *count,
+                        rules_json: rules_json.clone(),
+                    });
+                    if self.rule_versions.len() > 50 {
+                        let cut = self.rule_versions.len() - 50;
+                        self.rule_versions.drain(..cut);
+                    }
+                }
+                self.audit(
+                    r,
+                    "rules.update".into(),
+                    "routing".into(),
+                    format!("{count} rules"),
+                )
+            }
+            AdminCmd::AlertSettingsSaved { settings } => {
+                self.alerts = settings.clone();
+                self.audit(
+                    r,
+                    "settings.alerts".into(),
+                    "alerts".into(),
+                    format!(
+                        "lp down {}s, fill ≥{}% (≥{} orders), latency >{}ms ×{}, webhook {}, telegram {}, quiet {:?}, daily report {:?}",
+                        settings.lp_down_grace_s,
+                        settings.fill_rate_floor_pct,
+                        settings.fill_rate_min_orders,
+                        settings.latency_floor_ms,
+                        settings.latency_multiplier,
+                        if settings.webhook_url.is_empty() { "off" } else { "on" },
+                        if settings.telegram_chat_id.is_empty() { "off" } else { "on" },
+                        settings.quiet_hours_utc,
+                        settings.daily_report_hour_utc
+                    ),
+                )
+            }
             AdminCmd::SymbolSaved { symbol, details } => {
                 self.audit(r, "symbol.update".into(), symbol.clone(), details.clone())
             }

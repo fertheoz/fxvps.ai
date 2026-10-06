@@ -314,6 +314,24 @@ export interface RolloverResult {
   reason: string;
 }
 
+export interface AlertSettings {
+  lpDownGraceS: number;
+  fillRateMinOrders: number;
+  fillRateFloorPct: number;
+  latencyFloorMs: number;
+  latencyMultiplier: number;
+  webhookUrl: string;
+  /** Write-only: empty keeps the stored token. */
+  telegramToken: string;
+  telegramTokenSet?: boolean;
+  telegramChatId: string;
+  quietHoursUtc: [number, number] | null;
+  dailyReportHourUtc: number | null;
+}
+export interface TradingCalendar { holidays: string[] }
+export interface RuleVersionMeta { id: string; at: string; actor: string; count: number }
+export interface SimState { scenario: { rejectPct: number; latencyMs: number }; instruments: { securityId: string; mid: string | null }[] }
+
 export interface KycDocMeta {
   id: string;
   account: number;
@@ -461,6 +479,16 @@ export interface AdminApi {
   transactions(from?: string, to?: string): Promise<TransactionReport>;
   bestExecution(from?: string, to?: string): Promise<BestExecutionReport>;
   auditChain(): Promise<AuditChain>;
+  /** Stage 13: operations settings & automation. */
+  getAlertSettings(): Promise<AlertSettings>;
+  saveAlertSettings(s: AlertSettings, actor: Actor): Promise<AlertSettings>;
+  getCalendar(): Promise<TradingCalendar>;
+  saveCalendar(c: TradingCalendar, actor: Actor): Promise<TradingCalendar>;
+  ruleVersions(): Promise<RuleVersionMeta[]>;
+  restoreRuleVersion(id: string, actor: Actor): Promise<RoutingRule[]>;
+  simState(): Promise<SimState>;
+  simShock(symbol: string, pct: number, actor: Actor): Promise<unknown>;
+  simScenario(s: { rejectPct: number; latencyMs: number }, actor: Actor): Promise<{ rejectPct: number; latencyMs: number }>;
 
   listGroups(): Promise<Group[]>;
   listRules(): Promise<RoutingRule[]>;

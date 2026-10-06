@@ -77,6 +77,9 @@ struct State {
     /// Rollover schedule (stage 8) and the UTC day it last ran (0 = never).
     #[serde(default)]
     swap: SwapConfig,
+    /// Holiday calendar (stage 13).
+    #[serde(default)]
+    calendar: TradingCalendar,
     #[serde(default)]
     last_rollover_day: u64,
     /// Swap share handed from `reduce_position` to the closing deal (transient).
@@ -226,6 +229,9 @@ impl Engine {
     }
     pub fn swap_config(&self) -> &SwapConfig {
         &self.st.swap
+    }
+    pub fn calendar(&self) -> &TradingCalendar {
+        &self.st.calendar
     }
     /// UTC day (days since epoch) of the last rollover, `None` = never.
     pub fn last_rollover_day(&self) -> Option<u64> {
@@ -469,6 +475,9 @@ impl Engine {
             }
             Command::SetSwapConfig(c) => {
                 self.st.swap = c.clone();
+            }
+            Command::SetCalendar(c) => {
+                self.st.calendar = c.clone();
             }
             Command::SetHedge(policy) => {
                 self.st.hedge = policy.clone();
@@ -833,6 +842,18 @@ impl Engine {
         let o = &self.st.orders[&id];
         let r = &o.req;
         let spec = self.st.symbols.get(&r.symbol).ok_or("unknown symbol")?;
+        // market hours: closing orders are always allowed (risk reduction)
+        if o.close_position.is_none() && o.origin == OrderOrigin::Client {
+            if !spec.enabled {
+                return Err("symbol disabled".into());
+            }
+            if self.st.calendar.is_holiday(self.st.now) {
+                return Err("market closed (holiday)".into());
+            }
+            if !spec.is_open_at(self.st.now) {
+                return Err("market closed".into());
+            }
+        }
         let need_limit = matches!(r.order_type, OrderType::Limit | OrderType::StopLimit);
         let need_stop = matches!(r.order_type, OrderType::Stop | OrderType::StopLimit);
         if need_limit != r.limit_price.is_some() || need_stop != r.stop_price.is_some() {
@@ -1924,6 +1945,9 @@ impl Engine {
         let weekday = risk::weekday_utc(self.st.now);
         if self.st.swap.skip_weekend && (weekday == 0 || weekday == 6) {
             return skip(self, "weekend");
+        }
+        if self.st.calendar.is_holiday(self.st.now) {
+            return skip(self, "holiday");
         }
         self.st.last_rollover_day = day + 1;
         let ps: Vec<Position> = self.st.positions.values().cloned().collect();

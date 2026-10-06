@@ -3,8 +3,8 @@
 
 use super::auth::{self, Actor, Claims, Role};
 use super::store::{
-    AdminCmd, AdminState, AdminUserRec, BalanceKind, BalanceOp, FundingKind, FundingMethod,
-    FundingRequest, FundingStatus, KycDoc, OpStatus, SettingsRec,
+    AdminCmd, AdminState, AdminUserRec, AlertSettings, BalanceKind, BalanceOp, FundingKind,
+    FundingMethod, FundingRequest, FundingStatus, KycDoc, OpStatus, SettingsRec,
 };
 use super::{need, views, AdminCtx, ApiError, ApiResult, ClientActor};
 use axum::extract::{Path, Query, State};
@@ -56,6 +56,19 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/groups", get(list_groups))
         .route("/v1/rules", get(list_rules).put(save_rules))
         .route("/v1/rules/dry-run", get(rules_dry_run))
+        .route("/v1/rules/versions", get(rule_versions))
+        .route(
+            "/v1/rules/versions/{id}/restore",
+            post(rule_version_restore),
+        )
+        .route(
+            "/v1/settings/alerts",
+            get(alert_settings_get).put(alert_settings_put),
+        )
+        .route("/v1/settings/calendar", get(calendar_get).put(calendar_put))
+        .route("/v1/lp/sim/state", get(sim_state))
+        .route("/v1/lp/sim/shock", post(sim_shock))
+        .route("/v1/lp/sim/scenario", post(sim_scenario))
         .route("/v1/groups/{id}", put(save_group))
         .route("/v1/groups/{id}/apply-preset", post(apply_preset))
         .route("/v1/symbols", get(list_symbols))
@@ -1565,11 +1578,207 @@ async fn save_rules(
     }
     let n = rules.len();
     let mut store = ctx.store.lock().await;
+    let rules_json = serde_json::to_string(&rules).unwrap_or_default();
     ctx.cmd(Command::SetRules(rules)).await?;
-    store.append(&actor, AdminCmd::RulesSaved { count: n })?;
+    store.append(
+        &actor,
+        AdminCmd::RulesSaved {
+            count: n,
+            rules_json,
+        },
+    )?;
     drop(store);
     ctx.notify(&["listRules", "rulesDryRun", "listAudit"]);
     Ok(Json(ctx.q(views::rules).await?))
+}
+
+async fn rule_versions(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "groups.view")?;
+    let st = &ctx.store.lock().await.state;
+    Ok(Json(Value::Array(
+        st.rule_versions
+            .iter()
+            .rev()
+            .map(|v| json!({ "id": v.id, "at": views::iso(v.at), "actor": v.actor, "count": v.count }))
+            .collect(),
+    )))
+}
+
+/// Re-applies a saved rule table (becomes the newest version).
+async fn rule_version_restore(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Path(id): Path<String>,
+) -> ApiResult {
+    need(&actor, "groups.edit")?;
+    let json_rules = ctx
+        .store
+        .lock()
+        .await
+        .state
+        .rule_versions
+        .iter()
+        .find(|v| v.id == id)
+        .map(|v| v.rules_json.clone())
+        .ok_or_else(|| ApiError::not_found("unknown rule version"))?;
+    let rules: Vec<RoutingRule> = serde_json::from_str(&json_rules)
+        .map_err(|e| ApiError::bad(format!("stored rules unreadable: {e}")))?;
+    let n = rules.len();
+    let mut store = ctx.store.lock().await;
+    ctx.cmd(Command::SetRules(rules)).await?;
+    store.append(
+        &actor,
+        AdminCmd::RulesSaved {
+            count: n,
+            rules_json: json_rules,
+        },
+    )?;
+    drop(store);
+    ctx.notify(&["listRules", "rulesDryRun", "ruleVersions", "listAudit"]);
+    Ok(Json(ctx.q(views::rules).await?))
+}
+
+async fn alert_settings_get(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "settings.view")?;
+    let a = ctx.store.lock().await.state.alerts.clone();
+    let mut v = json!(a);
+    // write-only secret
+    v["telegramToken"] = json!("");
+    v["telegramTokenSet"] = json!(
+        !a.telegram_token.is_empty()
+            || std::env::var("CORE_TELEGRAM_BOT_TOKEN").is_ok_and(|t| !t.is_empty())
+    );
+    Ok(Json(v))
+}
+
+async fn alert_settings_put(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(mut a): Json<AlertSettings>,
+) -> ApiResult {
+    need(&actor, "settings.edit")?;
+    if a.fill_rate_floor_pct > 100 || a.latency_multiplier == 0 || a.lp_down_grace_s > 86_400 {
+        return Err(ApiError::bad("invalid thresholds"));
+    }
+    if a.quiet_hours_utc.is_some_and(|(f, t)| f > 23 || t > 24)
+        || a.daily_report_hour_utc.is_some_and(|h| h > 23)
+    {
+        return Err(ApiError::bad("hours must be within 0..24"));
+    }
+    if !a.webhook_url.is_empty()
+        && !a.webhook_url.starts_with("https://")
+        && !a.webhook_url.starts_with("http://127.0.0.1")
+    {
+        return Err(ApiError::bad("webhookUrl must be https"));
+    }
+    let mut store = ctx.store.lock().await;
+    if a.telegram_token.is_empty() {
+        a.telegram_token = store.state.alerts.telegram_token.clone(); // keep the stored one
+    }
+    store.append(&actor, AdminCmd::AlertSettingsSaved { settings: a })?;
+    let out = store.state.alerts.clone();
+    drop(store);
+    ctx.notify(&["getAlertSettings", "listAudit"]);
+    let mut v = json!(out);
+    v["telegramToken"] = json!("");
+    v["telegramTokenSet"] = json!(!out.telegram_token.is_empty());
+    Ok(Json(v))
+}
+
+async fn calendar_get(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "settings.view")?;
+    Ok(Json(ctx.q(|e| json!(e.calendar())).await?))
+}
+
+async fn calendar_put(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(c): Json<risk::TradingCalendar>,
+) -> ApiResult {
+    need(&actor, "settings.edit")?;
+    c.validate().map_err(ApiError::bad)?;
+    let n = c.holidays.len();
+    let mut store = ctx.store.lock().await;
+    ctx.cmd(Command::SetCalendar(c)).await?;
+    store.append(
+        &actor,
+        AdminCmd::LpConfigSaved {
+            details: format!("trading calendar: {n} holidays"),
+        },
+    )?;
+    drop(store);
+    ctx.notify(&["getCalendar", "listAudit"]);
+    Ok(Json(ctx.q(|e| json!(e.calendar())).await?))
+}
+
+fn sim_url() -> Result<String, ApiError> {
+    std::env::var("CORE_LP_SIM_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map(|v| v.trim_end_matches('/').to_string())
+        .ok_or_else(|| ApiError::not_found("no LP simulator control here (CORE_LP_SIM_URL unset)"))
+}
+
+async fn sim_forward(
+    ctx: &AdminCtx,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Value>,
+) -> ApiResult {
+    let url = format!("{}{path}", sim_url()?);
+    let mut r = ctx.http.request(method, &url);
+    if let Some(b) = body {
+        r = r.json(&b);
+    }
+    let resp = r
+        .send()
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, "sim_unreachable", e.to_string()))?;
+    let status = resp.status();
+    let v: Value = resp.json().await.unwrap_or(Value::Null);
+    if !status.is_success() {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "sim_error",
+            format!("simulator answered {status}"),
+        ));
+    }
+    Ok(Json(v))
+}
+
+async fn sim_state(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "lp.view")?;
+    sim_forward(&ctx, reqwest::Method::GET, "/state", None).await
+}
+
+async fn sim_shock(State(ctx): State<AdminCtx>, actor: Actor, Json(b): Json<Value>) -> ApiResult {
+    need(&actor, "lp.manage")?;
+    let out = sim_forward(&ctx, reqwest::Method::POST, "/shock", Some(b.clone())).await?;
+    ctx.store.lock().await.append(
+        &actor,
+        AdminCmd::LpConfigSaved {
+            details: format!("simulator shock {b}"),
+        },
+    )?;
+    ctx.notify(&["listAudit"]);
+    Ok(out)
+}
+
+async fn sim_scenario(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(b): Json<Value>,
+) -> ApiResult {
+    need(&actor, "lp.manage")?;
+    let out = sim_forward(&ctx, reqwest::Method::POST, "/scenario", Some(b.clone())).await?;
+    ctx.store.lock().await.append(
+        &actor,
+        AdminCmd::LpConfigSaved {
+            details: format!("simulator scenario {b}"),
+        },
+    )?;
+    ctx.notify(&["listAudit"]);
+    Ok(out)
 }
 
 async fn rules_dry_run(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
@@ -1885,6 +2094,24 @@ struct SymbolDto {
     /// "sun".. "sat"
     #[serde(default)]
     triple_swap_day: Option<String>,
+    /// Weekly trading sessions `{day, open, close}` (HH:MM UTC); empty = always open.
+    #[serde(default)]
+    trade_sessions: Option<Vec<SessionDto>>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct SessionDto {
+    day: String,
+    open: String,
+    close: String,
+}
+
+fn hhmm(s: &str) -> Option<u16> {
+    let (h, m) = s.split_once(':')?;
+    let (h, m): (u16, u16) = (h.parse().ok()?, m.parse().ok()?);
+    (h <= 24 && m < 60).then_some(h * 60 + m)
 }
 
 async fn save_symbol(
@@ -1964,6 +2191,32 @@ async fn save_symbol(
     if let Some(d) = s.triple_swap_day.as_deref() {
         spec.triple_swap_day =
             views::weekday_index(d).ok_or_else(|| ApiError::bad("invalid tripleSwapDay"))?;
+    }
+    if let Some(sessions) = s.trade_sessions {
+        let mut out = Vec::new();
+        for x in sessions {
+            let day =
+                views::weekday_index(&x.day).ok_or_else(|| ApiError::bad("invalid session day"))?;
+            let (open, close) = (hhmm(&x.open), hhmm(&x.close));
+            let (Some(open), Some(close)) = (open, close) else {
+                return Err(ApiError::bad("session times must be HH:MM"));
+            };
+            if close <= open {
+                return Err(ApiError::bad("session close must be after open"));
+            }
+            out.push(risk::TradingSession {
+                day,
+                open_min: open,
+                close_min: close,
+            });
+        }
+        if out.len() > 50 {
+            return Err(ApiError::bad("too many sessions"));
+        }
+        spec.sessions = out;
+    }
+    if let Some(en) = s.enabled {
+        spec.enabled = en;
     }
     let details = match before {
         Some((l, sh)) => format!(
