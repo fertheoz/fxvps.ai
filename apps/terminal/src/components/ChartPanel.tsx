@@ -102,6 +102,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const setChartTool = useTerminal((s) => s.setChartTool);
   const setObjects = useTerminal((s) => s.setObjects);
   const hideChart = useTerminal((s) => s.hideChart);
+  const swapCharts = useTerminal((s) => s.swapCharts);
   const oneClickVolume = useTerminal((s) => s.oneClickVolume);
   const setOneClickVolume = useTerminal((s) => s.setOneClickVolume);
   const setActive = useTerminal((s) => s.setActiveChart);
@@ -719,9 +720,27 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     <div
       className={`relative flex flex-col h-full bg-panel ${isActive ? 'outline outline-1 outline-accent/60 -outline-offset-1' : ''}`}
       onMouseDown={() => setActive(index)}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('application/x-fxvps-chart')) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        const from = Number(e.dataTransfer.getData('application/x-fxvps-chart'));
+        if (Number.isInteger(from)) {
+          e.preventDefault();
+          swapCharts(from, index);
+        }
+      }}
       data-testid={`chart-${index}`}
     >
-      <div className={`${bare ? 'hidden' : 'flex'} items-center gap-1 h-8 px-2 border-b border-line shrink-0`}>
+      <div
+        className={`${bare ? 'hidden' : 'flex'} items-center gap-1 h-8 px-2 border-b border-line shrink-0 ${detached ? '' : 'cursor-grab active:cursor-grabbing'}`}
+        draggable={!detached}
+        title={detached ? undefined : t('chart.dragHint')}
+        onDragStart={(e) => {
+          e.dataTransfer.setData('application/x-fxvps-chart', String(index));
+          e.dataTransfer.effectAllowed = 'move';
+        }}
+      >
         <select
           aria-label={t('ticket.symbol')}
           className="bg-transparent font-semibold text-[13px] pr-1"

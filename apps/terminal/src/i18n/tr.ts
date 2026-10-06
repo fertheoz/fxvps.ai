@@ -109,6 +109,8 @@ export const tr: Record<MessageKey, string> = {
   'chart.buy': 'AL',
   'chart.lots': 'Lot',
   'chart.detach': 'Ayır',
+  'chart.dragHint': 'Yer değiştirmek için başka bir grafiğin üzerine sürükleyin',
+  'chart.max': 'En fazla {n} grafik açık olabilir; sembol seçili grafikte açıldı',
   'chart.loading': 'Grafik yükleniyor…',
   'chart.askLine': 'Satış (ask) çizgisi',
   'ticket.title': 'Yeni Emir',

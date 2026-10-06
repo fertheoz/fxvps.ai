@@ -20,7 +20,9 @@ import type {
 import { translate, type Lang } from '../i18n';
 
 export type Theme = 'dark' | 'light';
-export type ChartLayout = 1 | 2 | 4;
+/** Charts on screen at once; 6 is the ceiling (every chart costs the client CPU and memory). */
+export type ChartLayout = 1 | 2 | 4 | 6;
+export const MAX_CHARTS = 6;
 /** Drawing tool armed on the chart. */
 export type ChartTool = 'hline' | 'alert' | 'trend' | 'rect' | 'fib' | null;
 export type ToolboxTab = 'positions' | 'orders' | 'history' | 'journal';
@@ -130,6 +132,14 @@ export interface TerminalState {
   setLayout(l: ChartLayout): void;
   hideChart(index: number, how: 'min' | 'closed'): void;
   restoreChart(index: number): void;
+  /** Swaps two chart slots (a chart header dragged onto another chart). */
+  swapCharts(a: number, b: number): void;
+  /**
+   * Opens `symbol` in a free slot: a closed/minimised one, else by growing the
+   * layout up to 6. At the ceiling the active chart switches symbol instead and
+   * a toast says why.
+   */
+  openChart(symbol: string): void;
   setToolboxMode(mode: 'normal' | 'max' | 'min'): void;
   setSidePinned(side: 'left' | 'right', pinned: boolean): void;
   setChartSymbol(symbol: string, index?: number): void;
@@ -172,6 +182,8 @@ const defaultCharts: ChartSlot[] = [
   { symbol: 'XAUUSD', timeframe: 'M15' },
   { symbol: 'GBPUSD', timeframe: 'H1' },
   { symbol: 'BTCUSD', timeframe: 'M5' },
+  { symbol: 'USDJPY', timeframe: 'M15' },
+  { symbol: 'XAGUSD', timeframe: 'H1' },
 ];
 
 export const useTerminal = create<TerminalState>()(
@@ -330,6 +342,39 @@ export const useTerminal = create<TerminalState>()(
       },
       setSidePinned(side, pinned) {
         set({ sidePinned: { ...get().sidePinned, [side]: pinned } });
+      },
+      swapCharts(a, b) {
+        if (a === b) return;
+        const charts = [...get().charts];
+        const [ca, cb] = [charts[a], charts[b]];
+        if (!ca || !cb) return;
+        charts[a] = cb;
+        charts[b] = ca;
+        const hidden = { ...get().hiddenCharts };
+        const [ha, hb] = [hidden[a], hidden[b]];
+        delete hidden[a];
+        delete hidden[b];
+        if (hb) hidden[a] = hb;
+        if (ha) hidden[b] = ha;
+        const active = get().activeChart === a ? b : get().activeChart === b ? a : get().activeChart;
+        set({ charts, hiddenCharts: hidden, activeChart: active });
+      },
+      openChart(symbol) {
+        const { layout, hiddenCharts, charts, activeChart } = get();
+        const free = Object.keys(hiddenCharts).map(Number).find((i) => i < layout);
+        if (free !== undefined) {
+          const hidden = { ...hiddenCharts };
+          delete hidden[free];
+          set({ charts: charts.map((c, k) => (k === free ? { ...c, symbol } : c)), hiddenCharts: hidden, activeChart: free });
+          return;
+        }
+        const next = ([2, 4, 6] as ChartLayout[]).find((l) => l > layout);
+        if (next !== undefined) {
+          set({ layout: next, charts: charts.map((c, k) => (k === layout ? { ...c, symbol } : c)), activeChart: layout });
+          return;
+        }
+        get().toast('error', translate(get().lang, 'chart.max', { n: MAX_CHARTS }));
+        set({ charts: charts.map((c, k) => (k === activeChart ? { ...c, symbol } : c)) });
       },
       setToolboxMode(toolboxMode) {
         set({ toolboxMode });

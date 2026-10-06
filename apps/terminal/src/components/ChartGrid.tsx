@@ -3,6 +3,7 @@ import { Group, Panel, Separator } from 'react-resizable-panels';
 import { ObjectList } from './ObjectList';
 import { IndicatorSettings } from './IndicatorSettings';
 import { useT } from '../hooks';
+import { Fragment } from 'react';
 import { useTerminal, type ChartLayout, type Indicators } from '../store/terminal';
 import { ChartPanel } from './ChartPanel';
 
@@ -19,23 +20,31 @@ export function ChartGrid() {
   const minimized = Object.entries(hidden)
     .filter(([i, how]) => how === 'min' && Number(i) < layout)
     .map(([i]) => Number(i));
-  const pair = (a: number, b: number) => (
-    <Group orientation="horizontal">
-      <Panel minSize="20"><ChartPanel index={a} /></Panel>
-      <Separator />
-      <Panel minSize="20"><ChartPanel index={b} /></Panel>
-    </Group>
-  );
+  // A row of up to three charts side by side.
+  const row = (ids: number[]) =>
+    ids.length === 1 ? (
+      <ChartPanel index={ids[0]!} />
+    ) : (
+      <Group orientation="horizontal">
+        {ids.map((i, k) => (
+          <Fragment key={i}>
+            {k > 0 && <Separator />}
+            <Panel minSize="15"><ChartPanel index={i} /></Panel>
+          </Fragment>
+        ))}
+      </Group>
+    );
   const grid = () => {
-    const [a, b, c, d] = visible;
-    if (a === undefined) return <div className="h-full grid place-items-center text-muted text-[12px]">{t('chart.allHidden')}</div>;
-    if (b === undefined) return <ChartPanel index={a} />;
-    if (c === undefined) return pair(a, b);
+    if (!visible.length) return <div className="h-full grid place-items-center text-muted text-[12px]">{t('chart.allHidden')}</div>;
+    if (visible.length <= 2) return row(visible);
+    // 3–4 charts: two rows of two; 5–6: two rows of three.
+    const perRow = visible.length > 4 ? 3 : 2;
+    const rows = [visible.slice(0, perRow), visible.slice(perRow)];
     return (
       <Group orientation="vertical">
-        <Panel minSize="20">{pair(a, b)}</Panel>
+        <Panel minSize="20">{row(rows[0]!)}</Panel>
         <Separator />
-        <Panel minSize="20">{d === undefined ? <ChartPanel index={c} /> : pair(c, d)}</Panel>
+        <Panel minSize="20">{row(rows[1]!)}</Panel>
       </Group>
     );
   };
@@ -71,7 +80,7 @@ export function ChartGrid() {
       <div className="flex items-center gap-3 h-8 px-2 bg-panel border-b border-line shrink-0 overflow-hidden whitespace-nowrap">
         <div className="flex items-center gap-1">
           <span className="text-muted">{t('chart.layout')}</span>
-          {([1, 2, 4] as ChartLayout[]).map((l) => (
+          {([1, 2, 4, 6] as ChartLayout[]).map((l) => (
             <button
               key={l}
               aria-label={`${t('chart.layout')} ${l}`}
