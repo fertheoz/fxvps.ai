@@ -46,7 +46,7 @@ anındaki LP fiyatına göre verir. Deneme sayacı (`attempts`) gerçek sayaca d
 (LP'ye FOK)*. "Kalanı B-book'a al" bilinçli dışarıda: A-book pozisyonu omnibus
 hedge'siz kalır, dolum başına defter izi gerekir → Etap 7'de.
 
-### Etap 4 — Kazanç kapıları: markup/slippage/komisyon kuralları
+### Etap 4 — Kazanç kapıları: markup/slippage/komisyon kuralları ✅ (#93; hacim kademeli komisyon ve önizleme sonraya)
 Bugün tek `markup_points`. Eklenecek: alış/satış ayrı markup, sembol ve
 sembol-grubu bazlı ek markup, **asimetrik slippage** (müşteri lehine kayma
 yansıtılmaz / kısmen yansıtılır), maksimum müşteri kayması (üstü red / fiyat

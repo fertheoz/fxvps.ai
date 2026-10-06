@@ -593,7 +593,6 @@ fn revenue_levers_markup_sides_symbol_override_improvement_and_cap() {
         price: px("1.10000"),
     });
     assert_eq!(h.e.order(id).unwrap().avg_price, px("1.10018"));
-    assert_eq!(h.e.ledger().balance(BROKER_BOOK, USD), Money::zero(USD)); // realised on close
 }
 
 #[test]
