@@ -1209,10 +1209,10 @@ fn hedge_excess_opens_and_unwinds_lp_hedge() {
     });
     assert_eq!(h.e.hedge_net("EURUSD"), -qty("0.5").raw());
     assert_eq!(h.e.omnibus_net("EURUSD"), h.e.hedge_net("EURUSD"));
-    // no second hedge while nothing changed
-    h.market(1, "x2", Side::Buy, "0.01");
-    assert!(h.router.take().is_empty() || h.e.hedge_pending("EURUSD") != 0);
-    // client closes: exposure falls under the release level, hedge unwinds
+    // a tiny add stays under one hedge step: nothing new goes out
+    h.market(1, "x2", Side::Buy, "0.001");
+    assert!(h.router.take().is_empty());
+    // client closes the big one: exposure falls under the release level, hedge unwinds
     let pid = h.pos(1)[0].id;
     h.cmd(Command::ClosePosition {
         account: 1,
