@@ -4,7 +4,7 @@ type RenderTarget = Parameters<IPrimitivePaneRenderer['draw']>[0];
 import type { ChartShape } from '@fxvps/trading-core';
 
 /**
- * Trend lines and rectangles drawn over the candles (a series primitive).
+ * Trend lines, rectangles and Fibonacci retracements drawn over the candles (a series primitive).
  * Times are UTC seconds; points outside the loaded bars are projected with the
  * timeframe length, so a line keeps its slope when it runs into the future.
  */
@@ -53,6 +53,37 @@ function segmentDistance(px: number, py: number, x1: number, y1: number, x2: num
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 
+/** Retracement levels, as a share of the a→b move. */
+export const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1] as const;
+
+/** Level lines across the drawn span (price at the right edge), plus the faint a→b diagonal. */
+function drawFib(ctx: CanvasRenderingContext2D, p: Px, width: number, color: string, digits: number): void {
+  const left = Math.min(p.x1, p.x2);
+  const right = Math.max(p.x1, p.x2);
+  ctx.save();
+  ctx.setLineDash([3, 3]);
+  ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(p.x1, p.y1);
+  ctx.lineTo(p.x2, p.y2);
+  ctx.stroke();
+  ctx.restore();
+  ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
+  ctx.textBaseline = 'bottom';
+  ctx.textAlign = 'left';
+  for (const l of FIB_LEVELS) {
+    const y = p.y1 + (p.y2 - p.y1) * l;
+    const price = p.shape.a.price + (p.shape.b.price - p.shape.a.price) * l;
+    ctx.lineWidth = l === 0 || l === 1 ? 1.5 : 1;
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(right, y);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.fillText(`${(l * 100).toFixed(1)}%  ${price.toFixed(digits)}`, Math.min(right + 4, width - 90), y - 1);
+  }
+}
+
 export class ShapesPrimitive implements ISeriesPrimitive<Time> {
   private shapes: ChartShape[] = [];
   private selected: string | null = null;
@@ -61,7 +92,8 @@ export class ShapesPrimitive implements ISeriesPrimitive<Time> {
   private series: ISeriesApi<SeriesType> | null = null;
   private requestUpdate: (() => void) | null = null;
   private placed: Px[] = [];
-  private colors = { trend: '#4c8dff', rect: '#4c8dff', selected: '#f59e0b' };
+  private colors = { trend: '#4c8dff', rect: '#4c8dff', fib: '#4c8dff', selected: '#f59e0b' };
+  private digits = 5;
   private readonly view: IPrimitivePaneView = {
     zOrder: () => 'normal',
     renderer: (): IPrimitivePaneRenderer => ({
@@ -75,7 +107,9 @@ export class ShapesPrimitive implements ISeriesPrimitive<Time> {
             const sel = p.shape.id === selected;
             ctx.lineWidth = sel ? 2 : 1.5;
             ctx.strokeStyle = sel ? colors.selected : colors[p.shape.kind];
-            if (p.shape.kind === 'rect') {
+            if (p.shape.kind === 'fib') {
+              drawFib(ctx, p, scope.mediaSize.width, sel ? colors.selected : colors.fib, this.digits);
+            } else if (p.shape.kind === 'rect') {
               const x = Math.min(p.x1, p.x2);
               const y = Math.min(p.y1, p.y2);
               const w = Math.abs(p.x2 - p.x1);
@@ -120,15 +154,16 @@ export class ShapesPrimitive implements ISeriesPrimitive<Time> {
 
   setTheme(accent: string): void {
     if (this.colors.trend === accent) return;
-    this.colors = { ...this.colors, trend: accent, rect: accent };
+    this.colors = { ...this.colors, trend: accent, rect: accent, fib: accent };
     this.requestUpdate?.();
   }
 
   /** New shape list / selection / bar geometry; redraws. */
-  update(shapes: ChartShape[], selected: string | null, geometry: ShapeGeometry): void {
+  update(shapes: ChartShape[], selected: string | null, geometry: ShapeGeometry, digits = 5): void {
     this.shapes = shapes;
     this.selected = selected;
     this.geometry = geometry;
+    this.digits = digits;
     this.requestUpdate?.();
   }
 
@@ -161,6 +196,11 @@ export class ShapesPrimitive implements ISeriesPrimitive<Time> {
     for (const p of [...this.placed].reverse()) {
       if (p.shape.kind === 'trend') {
         if (segmentDistance(x, y, p.x1, p.y1, p.x2, p.y2) <= tolerance) return p.shape;
+      } else if (p.shape.kind === 'fib') {
+        // the diagonal, or any level line within the drawn time span
+        if (segmentDistance(x, y, p.x1, p.y1, p.x2, p.y2) <= tolerance) return p.shape;
+        const inX = x >= Math.min(p.x1, p.x2) - tolerance && x <= Math.max(p.x1, p.x2) + tolerance;
+        if (inX && FIB_LEVELS.some((l) => Math.abs(y - (p.y1 + (p.y2 - p.y1) * l)) <= tolerance)) return p.shape;
       } else {
         const inX = x >= Math.min(p.x1, p.x2) - tolerance && x <= Math.max(p.x1, p.x2) + tolerance;
         const inY = y >= Math.min(p.y1, p.y2) - tolerance && y <= Math.max(p.y1, p.y2) + tolerance;

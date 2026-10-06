@@ -257,6 +257,7 @@ export const tr: Record<MessageKey, string> = {
   'obj.alert': 'Fiyat uyarısı',
   'obj.trend': 'Trend çizgisi',
   'obj.rect': 'Dikdörtgen',
+  'obj.fib': 'Fibonacci',
   'obj.drawHint': 'Çizmek için grafikte sürükleyin',
   'obj.place': 'Yerleştir',
   'obj.objects': 'Çizgiler ve uyarılar',

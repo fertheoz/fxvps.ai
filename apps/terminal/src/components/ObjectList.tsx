@@ -33,7 +33,7 @@ export function ObjectList({ symbol }: { symbol: string }) {
   );
   return (
     <div data-testid="object-list">
-      {shapes.map((x) => row(x.id, `${x.kind === 'trend' ? '╱' : '▭'} ${t(x.kind === 'trend' ? 'obj.trend' : 'obj.rect')} ${formatPrice(x.a.price, digits)} → ${formatPrice(x.b.price, digits)}`, false, () => remove('shape', x.id)))}
+      {shapes.map((x) => row(x.id, `${x.kind === 'trend' ? '╱' : x.kind === 'rect' ? '▭' : '𝔽'} ${t(`obj.${x.kind}`)} ${formatPrice(x.a.price, digits)} → ${formatPrice(x.b.price, digits)}`, false, () => remove('shape', x.id)))}
       {lines.map((l) => row(l.id, `— ${t('obj.hline')} ${formatPrice(l.price, digits)}`, false, () => remove('line', l.id)))}
       {alerts.map((a) =>
         row(a.id, `🔔 ${t(a.direction === 'above' ? 'obj.above' : 'obj.below')} ${formatPrice(a.price, digits)}${a.firedAt ? ` · ${t('obj.fired')}` : ''}`, !!a.firedAt, () => remove('alert', a.id)),

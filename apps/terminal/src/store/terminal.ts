@@ -22,7 +22,7 @@ import { translate, type Lang } from '../i18n';
 export type Theme = 'dark' | 'light';
 export type ChartLayout = 1 | 2 | 4;
 /** Drawing tool armed on the chart. */
-export type ChartTool = 'hline' | 'alert' | 'trend' | 'rect' | null;
+export type ChartTool = 'hline' | 'alert' | 'trend' | 'rect' | 'fib' | null;
 export type ToolboxTab = 'positions' | 'orders' | 'history' | 'journal';
 
 export interface ChartSlot {

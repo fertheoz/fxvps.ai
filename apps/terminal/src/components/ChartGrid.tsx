@@ -24,7 +24,7 @@ export function ChartGrid() {
   const setTool = useTerminal((s) => s.setChartTool);
   const activeSymbol = useTerminal((s) => s.charts[s.activeChart]?.symbol ?? '');
   const [listOpen, setListOpen] = useState(false);
-  const toolBtn = (kind: 'hline' | 'alert' | 'trend' | 'rect', label: string, icon: string) => (
+  const toolBtn = (kind: 'hline' | 'alert' | 'trend' | 'rect' | 'fib', label: string, icon: string) => (
     <button
       aria-pressed={tool === kind}
       title={label}
@@ -58,6 +58,7 @@ export function ChartGrid() {
           {toolBtn('alert', t('obj.alert'), '🔔')}
           {toolBtn('trend', t('obj.trend'), '╱')}
           {toolBtn('rect', t('obj.rect'), '▭')}
+          {toolBtn('fib', t('obj.fib'), '𝔽')}
           <button
             className="px-1.5 h-5 rounded text-[11px] border border-line text-muted hover:text-fg"
             onClick={() => setListOpen((o) => !o)}
