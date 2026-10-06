@@ -97,6 +97,7 @@ export const en = {
   'chart.lots': 'Lots',
   'chart.detach': 'Detach',
   'chart.loading': 'Loading chart…',
+  'chart.askLine': 'Ask line',
   'ticket.title': 'New Order',
   'ticket.symbol': 'Symbol',
   'ticket.type': 'Type',

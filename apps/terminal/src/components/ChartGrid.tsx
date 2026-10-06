@@ -19,6 +19,8 @@ export function ChartGrid() {
   const setLayout = useTerminal((s) => s.setLayout);
   const indicators = useTerminal((s) => s.indicators);
   const toggle = useTerminal((s) => s.toggleIndicator);
+  const askLine = useTerminal((s) => s.showAskLine);
+  const toggleAsk = useTerminal((s) => s.toggleAskLine);
   const tool = useTerminal((s) => s.chartTool);
   const setTool = useTerminal((s) => s.setChartTool);
   const activeSymbol = useTerminal((s) => s.charts[s.activeChart]?.symbol ?? '');
@@ -74,6 +76,14 @@ export function ChartGrid() {
         </div>
         <div className="flex items-center gap-1">
           <span className="text-muted">{t('chart.indicators')}</span>
+          <button
+            aria-pressed={askLine}
+            className={`px-1.5 h-5 rounded text-[11px] ${askLine ? 'bg-accent/20 text-accent border border-accent/40' : 'border border-line text-muted hover:text-fg'}`}
+            onClick={toggleAsk}
+            data-testid="toggle-ask-line"
+          >
+            {t('chart.askLine')}
+          </button>
           {IND.map((i) => (
             <button
               key={i.key}

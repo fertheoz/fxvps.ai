@@ -117,7 +117,9 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const dragRef = useRef<{ line: IPriceLine; positionId: string; kind: 'sl' | 'tp'; price: number } | null>(null);
   const draftEl = useRef<HTMLDivElement>(null);
   /** Pending order being moved after a long press (price = where the line is now). */
-  const [edit, setEdit] = useState<{ kind: 'order' | 'line' | 'alert'; id: string; price: number } | null>(null);
+  const [edit, setEdit] = useState<{ kind: 'order' | 'line' | 'alert' | 'sl' | 'tp'; id: string; price: number } | null>(null);
+  const showAskLine = useTerminal((s) => s.showAskLine);
+  const askLineRef = useRef<IPriceLine | null>(null);
   /** Price of the line being placed with the armed chart tool. */
   const [toolPrice, setToolPrice] = useState<number | null>(null);
   const pressRef = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
@@ -375,23 +377,39 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     e.currentTarget.style.cursor = lineAt(e.clientY) ? 'ns-resize' : '';
   };
 
+  // Ask line (the candles and the last-price marker follow the bid).
+  useEffect(() => {
+    const series = candleRef.current;
+    if (!series) return;
+    if (!showAskLine || !quote || !spec) {
+      if (askLineRef.current) series.removePriceLine(askLineRef.current);
+      askLineRef.current = null;
+      return;
+    }
+    if (askLineRef.current) askLineRef.current.applyOptions({ price: quote.ask });
+    else askLineRef.current = series.createPriceLine({ price: quote.ask, color: cssVar('--muted'), lineWidth: 1, lineStyle: LineStyle.SparseDotted, axisLabelVisible: true, title: 'ask' });
+  }, [showAskLine, quote, spec, loading]);
+
   // The movable line: an object picked up by a long press, a tool being placed, else the caller's draft.
   const editOrder = edit?.kind === 'order' ? orders.find((o) => o.id === edit.id) : undefined;
-  const editObject = edit && edit.kind !== 'order' ? (edit.kind === 'line' ? objects?.lines : objects?.alerts)?.find((x) => x.id === edit.id) : undefined;
+  const editObject = edit && (edit.kind === 'line' || edit.kind === 'alert') ? (edit.kind === 'line' ? objects?.lines : objects?.alerts)?.find((x) => x.id === edit.id) : undefined;
+  const editPosition = edit && (edit.kind === 'sl' || edit.kind === 'tp') ? positions.find((p) => p.id === edit.id) : undefined;
   // An armed tool starts its line at the market (toolPrice follows the drag).
   const toolArmed = !!chartTool && isActive && !!spec && !!quote;
   const toolLinePrice = toolArmed ? (toolPrice ?? roundPrice(quote!.bid, spec!.digits)) : null;
   let line: DraftLine | undefined = draft;
-  if (edit && spec && (editOrder || editObject)) {
+  if (edit && spec && (editOrder || editObject || editPosition)) {
     const label = editOrder
       ? `${editOrder.side.toUpperCase()} ${editOrder.type.replace('_', ' ').toUpperCase()} ${volumeToLots(editOrder.volume)}`
-      : edit.kind === 'line'
-        ? t('obj.hline')
-        : t('obj.alert');
+      : editPosition
+        ? `${edit.kind.toUpperCase()} #${editPosition.id}`
+        : edit.kind === 'line'
+          ? t('obj.hline')
+          : t('obj.alert');
     line = {
       price: edit.price,
       label: `${label} ${formatPrice(edit.price, spec.digits)}`,
-      tone: editOrder ? (editOrder.side === 'buy' ? 'up' : 'down') : 'up',
+      tone: editOrder ? (editOrder.side === 'buy' ? 'up' : 'down') : edit.kind === 'sl' ? 'down' : 'up',
       onMove: (price) => setEdit({ ...edit, price }),
     };
   } else if (toolLinePrice !== null && spec) {
@@ -465,6 +483,15 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       if (!r.ok) toast('error', t('toast.rejected', { error: r.error ?? '' }));
       return;
     }
+    if (e.kind === 'sl' || e.kind === 'tp') {
+      // Same rules as the desktop mouse drag: the server keeps the other leg.
+      if (!editPosition || !quote || !spec) return;
+      const prot = dragProtection(editPosition, e.kind, e.price, spec.digits, quote);
+      if (!prot) return toast('error', t('toast.rejected', { error: `invalid ${e.kind.toUpperCase()}` }));
+      const r = await getApi().modifyPosition(activeAccountId, editPosition.id, prot.sl, prot.tp, prot.trailing);
+      if (!r.ok) toast('error', t('toast.rejected', { error: r.error ?? '' }));
+      return;
+    }
     if (!objects || !quote) return;
     if (e.kind === 'line') setObjects(activeAccountId, { ...objects, lines: objects.lines.map((l) => (l.id === e.id ? { ...l, price: e.price } : l)) });
     else
@@ -474,7 +501,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       });
   };
   /** The movable line (pending order, drawn line, alert) within reach of `clientY`. */
-  const lineObjectAt = (clientY: number): { kind: 'order' | 'line' | 'alert'; id: string; price: number } | undefined => {
+  const lineObjectAt = (clientY: number): { kind: 'order' | 'line' | 'alert' | 'sl' | 'tp'; id: string; price: number } | undefined => {
     const series = candleRef.current;
     const el = host.current;
     if (edit || draft || chartTool || !series || !el || !spec) return undefined;
@@ -483,6 +510,11 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       const c = series.priceToCoordinate(price);
       return c !== null && Math.abs(c - y) <= PRESS_HIT_PX;
     };
+    for (const p of positions) {
+      if (p.symbol !== spec.name) continue;
+      if (p.sl !== undefined && near(p.sl)) return { kind: 'sl', id: p.id, price: p.sl };
+      if (p.tp !== undefined && near(p.tp)) return { kind: 'tp', id: p.id, price: p.tp };
+    }
     const o = orders.find((x) => x.symbol === spec.name && near(x.price));
     if (o) return { kind: 'order', id: o.id, price: o.price };
     const a = objects?.alerts.find((x) => x.symbol === spec.name && near(x.price));

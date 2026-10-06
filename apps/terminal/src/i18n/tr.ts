@@ -99,6 +99,7 @@ export const tr: Record<MessageKey, string> = {
   'chart.lots': 'Lot',
   'chart.detach': 'Ayır',
   'chart.loading': 'Grafik yükleniyor…',
+  'chart.askLine': 'Satış (ask) çizgisi',
   'ticket.title': 'Yeni Emir',
   'ticket.symbol': 'Sembol',
   'ticket.type': 'Tür',
