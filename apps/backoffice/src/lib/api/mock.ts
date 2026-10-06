@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, LpConfig, BalanceOpResult, DashboardStats, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, LpConfig, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 export class ForbiddenError extends Error {
@@ -104,6 +104,41 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
   const api: AdminApi & { _state: SeedData } = {
     _state: s,
 
+    async dashboardSeries(range: DashboardRange): Promise<DashboardSeries> {
+      const n = range === "7d" ? 7 : range === "30d" ? 30 : 24;
+      const rnd = mulberry32(range.length * 97);
+      const buckets: DashboardBucket[] = Array.from({ length: n }, (_, i) => {
+        const tms = SEED_NOW - (n - 1 - i) * (n > 24 || n === 7 ? 864e5 : 36e5);
+        const d = new Date(tms);
+        return {
+          t: d.toISOString(),
+          label: n === 24 ? `${String(d.getUTCHours()).padStart(2, "0")}:00` : d.toISOString().slice(5, 10),
+          markup: Math.round(rnd() * 40_000),
+          commission: Math.round(rnd() * 15_000),
+          bBook: Math.round((rnd() - 0.4) * 90_000),
+          lots: Math.round(rnd() * 400) / 10,
+          orders: Math.round(rnd() * 40),
+          rejects: Math.round(rnd() * 2),
+        };
+      });
+      const sum = (k: keyof DashboardBucket) => buckets.reduce((a, b) => a + Number(b[k]), 0);
+      const totals: DashboardTotals = { revenue: sum("markup") + sum("commission") + sum("bBook"), markup: sum("markup"), commission: sum("commission"), bBook: sum("bBook"), lots: Math.round(sum("lots") * 100) / 100, orders: sum("orders"), rejects: sum("rejects") };
+      const previous: DashboardTotals = { ...totals, revenue: Math.round(totals.revenue * 0.9), lots: Math.round(totals.lots * 0.8 * 100) / 100, orders: Math.round(totals.orders * 0.85) };
+      const clients = s.clients.slice(0, 10).map((c, i) => ({ login: c.login, name: c.name, pnl: Math.round((rnd() - 0.5) * 400_000), lots: Math.round(rnd() * 50 * 100) / 100 + i }));
+      clients.sort((a, b) => b.pnl - a.pnl);
+      return delay({
+        range,
+        since: new Date(SEED_NOW - n * 36e5).toISOString(),
+        buckets,
+        totals,
+        previous,
+        topSymbols: ["EURUSD", "XAUUSD", "GBPUSD", "USDJPY", "BTCUSD"].map((symbol, i) => ({ symbol, lots: Math.round((500 - i * 90) * rnd() * 10) / 10, revenue: Math.round(rnd() * 60_000) })),
+        winners: clients.slice(0, 5),
+        losers: clients.slice(-5).reverse().filter((c) => c.pnl < 0),
+        risk: s.clients.filter((c) => c.margin > 0 && c.equity / c.margin < 2).slice(0, 5).map((c) => ({ login: c.login, name: c.name, marginLevelPct: (c.equity / c.margin) * 100, equity: c.equity, margin: c.margin, marginCall: c.equity / c.margin < 1 })),
+        execution: { orders: totals.orders, fillRate: 0.97, avgClientSlipPts: 0.4, p95LatencyMs: 85, p50LatencyMs: 32 },
+      });
+    },
     async dashboard(): Promise<DashboardStats> {
       tick();
       const day = 864e5;

@@ -65,6 +65,7 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
 
   return {
     dashboard: () => call("GET", "/v1/dashboard"),
+    dashboardSeries: (range) => call("GET", `/v1/dashboard/series?range=${encodeURIComponent(range)}`),
     exposure: () => call("GET", "/v1/exposure"),
     listClients: (q) => call("GET", `/v1/accounts${q?.search ? `?search=${enc(q.search)}` : ""}`),
     openAccount: (req, actor) => call("POST", "/v1/accounts", req, actor),
