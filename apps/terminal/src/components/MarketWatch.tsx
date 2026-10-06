@@ -1,6 +1,7 @@
 import { memo, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useT } from '../hooks';
+import { PinButton } from './SideDock';
 import { useTerminal } from '../store/terminal';
 import { big, formatPrice, spreadPoints } from '@fxvps/trading-core';
 
@@ -89,6 +90,7 @@ export function MarketWatch() {
     <section className="flex flex-col h-full bg-panel" aria-label={t('mw.title')}>
       <div className="flex items-center justify-between px-2 h-8 border-b border-line">
         <h2 className="font-semibold">{t('mw.title')}</h2>
+        <PinButton side="left" />
         <div className="flex text-[11px] rounded border border-line overflow-hidden">
           <button className={`px-2 ${!onlyFav ? 'bg-accent text-white' : ''}`} onClick={() => setOnlyFav(false)}>
             {t('mw.all')}

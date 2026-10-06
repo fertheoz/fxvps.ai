@@ -11,6 +11,7 @@ import { ChartGrid } from './components/ChartGrid';
 import { OrderTicket } from './components/OrderTicket';
 import { DepthOfMarket } from './components/DepthOfMarket';
 import { Toolbox } from './components/Toolbox';
+import { PinButton, SideDock } from './components/SideDock';
 import { ConnectDialog } from './components/ConnectDialog';
 import { CommandPalette, ShortcutsDialog, TicketDialog, Toasts } from './components/Dialogs';
 import { MobileApp } from './mobile/MobileApp';
@@ -44,6 +45,7 @@ export function App({ api }: { api: TradingApi }) {
   const t = useT();
   const theme = useTerminal((s) => s.theme);
   const toolboxMode = useTerminal((s) => s.toolboxMode);
+  const pinned = useTerminal((s) => s.sidePinned);
   const lang = useTerminal((s) => s.lang);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,15 +79,43 @@ export function App({ api }: { api: TradingApi }) {
   if (!ready) return <div className="h-full grid place-items-center text-muted">{t('conn.connecting')}…</div>;
   if (mobile) return <MobileApp />;
 
+  const sideColumn = (
+    <Group orientation="vertical" id="side-v">
+      <Panel id="ticket" defaultSize="58" minSize="25">
+        <div className="h-full overflow-auto bg-panel">
+          <h2 className="px-2 h-8 flex items-center font-semibold border-b border-line">
+            {t('ticket.title')}
+            <PinButton side="right" />
+          </h2>
+          <OrderTicket followChart />
+        </div>
+      </Panel>
+      <Separator />
+      <Panel id="dom" defaultSize="42" minSize="15">
+        <DepthOfMarket />
+      </Panel>
+    </Group>
+  );
+
   return (
     <div className="flex flex-col h-full">
       <TopBar />
-      <div className="flex-1 min-h-0">
-        <Group orientation="horizontal" id="main-h">
-          <Panel id="mw" defaultSize="21" minSize="14">
+      <div className="flex-1 min-h-0 flex">
+        {!pinned.left && (
+          <SideDock side="left" title={t('mw.title')}>
             <MarketWatch />
-          </Panel>
-          <Separator />
+          </SideDock>
+        )}
+        <div className="flex-1 min-w-0">
+        <Group orientation="horizontal" id="main-h">
+          {pinned.left && (
+            <>
+              <Panel id="mw" defaultSize="21" minSize="14">
+                <MarketWatch />
+              </Panel>
+              <Separator />
+            </>
+          )}
           <Panel id="center" minSize="35">
             {toolboxMode === 'max' ? (
               <Toolbox />
@@ -108,22 +138,21 @@ export function App({ api }: { api: TradingApi }) {
               </Group>
             )}
           </Panel>
-          <Separator />
-          <Panel id="side" defaultSize="20" minSize="15">
-            <Group orientation="vertical" id="side-v">
-              <Panel id="ticket" defaultSize="58" minSize="25">
-                <div className="h-full overflow-auto bg-panel">
-                  <h2 className="px-2 h-8 flex items-center font-semibold border-b border-line">{t('ticket.title')}</h2>
-                  <OrderTicket followChart />
-                </div>
-              </Panel>
+          {pinned.right && (
+            <>
               <Separator />
-              <Panel id="dom" defaultSize="42" minSize="15">
-                <DepthOfMarket />
+              <Panel id="side" defaultSize="20" minSize="15">
+                {sideColumn}
               </Panel>
-            </Group>
-          </Panel>
+            </>
+          )}
         </Group>
+        </div>
+        {!pinned.right && (
+          <SideDock side="right" title={t('ticket.title')}>
+            {sideColumn}
+          </SideDock>
+        )}
       </div>
       <TicketDialog />
       <CommandPalette />
