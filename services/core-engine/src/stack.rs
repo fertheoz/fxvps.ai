@@ -280,6 +280,7 @@ impl CoreStack {
             gw_events,
             symbols,
             cfg.lp_prefix.clone(),
+            events.clone(),
         ));
         let core = Arc::new(InProcessCore::new(engine.clone(), events, names).await?);
         Ok(CoreStack {

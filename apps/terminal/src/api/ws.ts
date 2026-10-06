@@ -19,6 +19,7 @@ import {
   type OrderUpdate,
   type Position as WirePosition,
   type Quote as WireQuote,
+  type Depth as WireDepth,
 } from './gen/fxvps_client_v1_pb';
 import { decimalToBig, decimalToString, toDecimal } from './decimal';
 import { MOCK_SYMBOLS, toSpec } from '@fxvps/trading-core';
@@ -186,6 +187,8 @@ export class WsTradingApi implements TradingApi {
   private listeners = new Set<(e: TradingEvent) => void>();
   private quoteSubs = new Set<{ symbols: Set<string>; cb: (q: Quote[]) => void }>();
   private depthSubs = new Set<{ symbol: string; cb: (d: Depth) => void }>();
+  /** Symbols the gateway has sent real (multi-level) depth for; quotes no longer stand in. */
+  private depthSeen = new Set<string>();
   private closedByUser = false;
   private attempt = 0;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
@@ -438,15 +441,22 @@ export class WsTradingApi implements TradingApi {
     };
   }
 
-  /** The gateway serves top of book only: depth is one level per side, built from quotes. */
+  /** LP depth (v1.3 gateway); until the first `Depth` frame the quote stands in as one level per side. */
   subscribeDepth(symbol: string, onDepth: (depth: Depth) => void): Unsubscribe {
     const sub = { symbol, cb: onDepth };
     this.depthSubs.add(sub);
     this.sendSubscribe([symbol]);
     return () => {
       this.depthSubs.delete(sub);
+      if (!this.depthWanted().has(symbol)) this.depthSeen.delete(symbol);
       this.dropUnused([symbol]);
     };
+  }
+
+  private depthWanted(): Set<string> {
+    const s = new Set<string>();
+    for (const d of this.depthSubs) s.add(d.symbol);
+    return s;
   }
 
   onEvent(listener: (event: TradingEvent) => void): Unsubscribe {
@@ -707,8 +717,10 @@ export class WsTradingApi implements TradingApi {
     if (this.state !== 'connected') return; // resubscribe() covers it on (re)connect
     const known = this.symbols.size ? symbols.filter((s) => this.symbols.has(s)) : symbols;
     if (!known.length) return;
+    const wanted = this.depthWanted();
+    const depthSymbols = known.filter((s) => wanted.has(s));
     // The Ack/Error is correlated; failures are only journaled.
-    this.request((requestId) => ({ case: 'subscribe', value: { requestId, symbols: known } })).catch((e: Error) =>
+    this.request((requestId) => ({ case: 'subscribe', value: { requestId, symbols: known, depthSymbols } })).catch((e: Error) =>
       this.emitJournal('warn', `Subscribe failed: ${e.message}`),
     );
   }
@@ -716,9 +728,13 @@ export class WsTradingApi implements TradingApi {
   private dropUnused(symbols: string[]): void {
     const still = new Set<string>();
     for (const s of this.quoteSubs) s.symbols.forEach((x) => still.add(x));
-    for (const s of this.depthSubs) still.add(s.symbol);
+    const wanted = this.depthWanted();
+    for (const s of wanted) still.add(s);
     const drop = symbols.filter((s) => !still.has(s));
-    if (drop.length) this.sendBody({ case: 'unsubscribe', value: { requestId: this.reqId(), symbols: drop } });
+    const depthDrop = symbols.filter((s) => !drop.includes(s) && !wanted.has(s));
+    if (drop.length || depthDrop.length) {
+      this.sendBody({ case: 'unsubscribe', value: { requestId: this.reqId(), symbols: drop, depthSymbols: depthDrop } });
+    }
   }
 
   private resubscribe(): void {
@@ -808,6 +824,9 @@ export class WsTradingApi implements TradingApi {
       }
       case 'quoteBatch':
         this.onQuotes(b.value.quotes);
+        return;
+      case 'depth':
+        this.onDepth(b.value);
         return;
       case 'accountSnapshot':
         this.onSnapshot(b.value);
@@ -905,7 +924,7 @@ export class WsTradingApi implements TradingApi {
       const time = q.tsNs ? Number(q.tsNs / 1_000_000n) : Date.now();
       out.push({ symbol: q.symbol, bid, ask, time, dayOpen: d.open, dayHigh: d.high, dayLow: d.low });
       for (const s of this.depthSubs) {
-        if (s.symbol !== q.symbol) continue;
+        if (s.symbol !== q.symbol || this.depthSeen.has(q.symbol)) continue;
         const size = (x: WireQuote['bidSize']) => {
           const v = decimalToBig(x);
           return v ? this.qtyToVolume(q.symbol, v) : 0;
@@ -918,6 +937,20 @@ export class WsTradingApi implements TradingApi {
       const qs = out.filter((q) => s.symbols.has(q.symbol));
       if (qs.length) s.cb(qs);
     }
+  }
+
+  private onDepth(d: WireDepth): void {
+    const digits = this.digits(d.symbol);
+    const levels = (ls: WireDepth['bids']) =>
+      ls.flatMap((l) => {
+        const p = decimalToBig(l.price);
+        if (!p) return [];
+        const q = decimalToBig(l.qty);
+        return [{ price: Number(p.toFixed(digits)), volume: q ? this.qtyToVolume(d.symbol, q) : 0 }];
+      });
+    const depth: Depth = { symbol: d.symbol, bids: levels(d.bids), asks: levels(d.asks), time: d.tsNs ? nsToMs(d.tsNs) : Date.now() };
+    this.depthSeen.add(d.symbol);
+    for (const s of this.depthSubs) if (s.symbol === d.symbol) s.cb(depth);
   }
 
   private onSnapshot(s: AccountSnapshot): void {

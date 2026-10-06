@@ -24,6 +24,8 @@ message Envelope {
     Subscribe subscribe = 20;
     Unsubscribe unsubscribe = 21;
     QuoteBatch quote_batch = 22;
+    // Added in v1.3: LP depth of a symbol the connection asked depth for.
+    Depth depth = 23;
     CandleRequest candle_request = 30;
     CandleResponse candle_response = 31;
     SymbolListRequest symbol_list_request = 32;
@@ -100,11 +102,15 @@ message AccountInfo {
 message Subscribe {
   string request_id = 1;
   repeated string symbols = 2;
+  // v1.3: symbols to also stream `Depth` for (they are subscribed to quotes as well).
+  repeated string depth_symbols = 3;
 }
 
 message Unsubscribe {
   string request_id = 1;
   repeated string symbols = 2;
+  // v1.3: stop depth only; quotes of these symbols keep flowing.
+  repeated string depth_symbols = 3;
 }
 
 message Quote {
@@ -119,6 +125,22 @@ message Quote {
 // Coalesced quotes: at most one (latest) quote per symbol.
 message QuoteBatch {
   repeated Quote quotes = 1;
+}
+
+// v1.3: one price level of the LP book; qty in instrument units (contract_size
+// units per lot), like order quantities.
+message DepthLevel {
+  Decimal price = 1;
+  Decimal qty = 2;
+}
+
+// v1.3: the LP book of a symbol as the connection's group sees it (markup applied
+// to every level). Best level first. Sent at the quote flush rate, latest wins.
+message Depth {
+  string symbol = 1;
+  repeated DepthLevel bids = 2;
+  repeated DepthLevel asks = 3;
+  uint64 ts_ns = 4;
 }
 
 enum Timeframe {

@@ -56,6 +56,13 @@ pub struct QuoteMsg {
     pub quote: ClientQuote,
 }
 
+/// LP depth on the internal fan-out channel; `group` as for [`QuoteMsg`].
+#[derive(Clone, Debug)]
+pub struct DepthMsg {
+    pub group: Option<Arc<str>>,
+    pub depth: Arc<client_proto::Depth>,
+}
+
 /// Per-account event fanned out to every connection authorized for `account_id`.
 #[derive(Clone, Debug)]
 pub enum AccountEvent {
@@ -85,6 +92,7 @@ pub struct Hub {
     pub metrics: Metrics,
     pub conns: crate::limits::ConnLimits,
     quotes: broadcast::Sender<Arc<QuoteMsg>>,
+    depths: broadcast::Sender<Arc<DepthMsg>>,
     accounts: broadcast::Sender<Arc<AccountEvent>>,
     candles: Mutex<CandleStore>,
     /// Per-account client preferences (opaque JSON) and the file they persist to.
@@ -337,6 +345,7 @@ impl Hub {
         core: Option<Arc<dyn CoreApi>>,
     ) -> Arc<Self> {
         let (quotes, _) = broadcast::channel(4096);
+        let (depths, _) = broadcast::channel(4096);
         let (accounts, _) = broadcast::channel(4096);
         let rate = NonZeroU32::new(cfg.orders_per_second).unwrap_or(NonZeroU32::MIN);
         let burst = NonZeroU32::new(cfg.order_burst).unwrap_or(NonZeroU32::MIN);
@@ -359,6 +368,7 @@ impl Hub {
             candle_group: core.as_ref().and_then(|c| c.groups().into_iter().next()),
             core,
             quotes,
+            depths,
             accounts,
             metrics: Metrics::default(),
             conns: crate::limits::ConnLimits::new(
@@ -407,6 +417,10 @@ impl Hub {
 
     pub fn subscribe_quotes(&self) -> broadcast::Receiver<Arc<QuoteMsg>> {
         self.quotes.subscribe()
+    }
+
+    pub fn subscribe_depths(&self) -> broadcast::Receiver<Arc<DepthMsg>> {
+        self.depths.subscribe()
     }
 
     pub fn subscribe_accounts(&self) -> broadcast::Receiver<Arc<AccountEvent>> {
@@ -721,6 +735,26 @@ impl Hub {
                     },
                     candles,
                 );
+            }
+            CoreEvent::Depth(d) => {
+                let levels = |ls: &[(Fixed, Fixed)]| {
+                    ls.iter()
+                        .map(|(p, q)| client_proto::DepthLevel {
+                            price: Some(Decimal::from(*p)),
+                            qty: Some(Decimal::from(*q)),
+                        })
+                        .collect()
+                };
+                let _ = self.depths.send(Arc::new(DepthMsg {
+                    group: Some(d.group.as_str().into()),
+                    depth: Arc::new(client_proto::Depth {
+                        symbol: d.symbol.clone(),
+                        bids: levels(&d.bids),
+                        asks: levels(&d.asks),
+                        ts_ns: d.ts_ns,
+                    }),
+                }));
+                return;
             }
             CoreEvent::Order(o) => AccountEvent::Order(Box::new(order_update(o))),
             CoreEvent::Position(p) => AccountEvent::Position(PositionUpdate {

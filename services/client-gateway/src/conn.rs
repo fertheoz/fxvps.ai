@@ -5,13 +5,13 @@
 //! A full queue means the client is not keeping up: the connection is closed with
 //! [`close_code::SLOW_CONSUMER`] instead of buffering without bound.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use client_proto::{
-    Ack, AuthOk, Body, CandleResponse, DealHistory, Decimal, Encoding, Envelope, ErrorCode,
+    Ack, AuthOk, Body, CandleResponse, DealHistory, Decimal, Depth, Encoding, Envelope, ErrorCode,
     Heartbeat, Hello, OrderList, OrderType, Pong, Prefs, QuoteBatch, Timeframe, PROTOCOL_VERSION,
 };
 use core_engine::api::{DealQuery, OrderKind, OrderModify, Protection};
@@ -285,10 +285,13 @@ async fn session(
     let mut state = ConnState {
         claims,
         subs: HashSet::new(),
+        depth_subs: HashSet::new(),
+        latest_depth: HashMap::new(),
         groups,
         conflator: Conflator::default(),
     };
     let mut quotes = hub.subscribe_quotes();
+    let mut depths = hub.subscribe_depths();
     let mut accounts = hub.subscribe_accounts();
     let mut flush = interval(Duration::from_micros(1_000_000 / u64::from(max_hz.max(1))));
     flush.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -332,6 +335,19 @@ async fn session(
                     return Some((close_code::NORMAL, "shutting down".into()));
                 }
             },
+            d = depths.recv() => match d {
+                Ok(m) => {
+                    let visible = m.group.as_deref().is_none_or(|g| state.groups.contains(g));
+                    if visible && state.depth_subs.contains(&m.depth.symbol) {
+                        state.latest_depth.insert(m.depth.symbol.clone(), m.depth.clone());
+                    }
+                }
+                // Latest-wins, like quotes.
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => {
+                    return Some((close_code::NORMAL, "shutting down".into()));
+                }
+            },
             ev = accounts.recv() => match ev {
                 Ok(ev) => if state.claims.may_access(ev.account_id()) {
                     let body = match &*ev {
@@ -359,6 +375,13 @@ async fn session(
                     hub.metrics.quote_batches_sent.inc();
                     hub.metrics.quotes_sent.inc_by(n);
                 }
+                if !state.latest_depth.is_empty() {
+                    for (_, d) in state.latest_depth.drain() {
+                        if out.send(Body::Depth(Depth::clone(&d))).is_err() {
+                            return slow();
+                        }
+                    }
+                }
             },
             _ = hb.tick() => {
                 if out.send(Body::Heartbeat(Heartbeat { ts_ns: domain::now_ns() })).is_err() {
@@ -372,6 +395,10 @@ async fn session(
 struct ConnState {
     claims: Claims,
     subs: HashSet<String>,
+    /// Symbols the client wants `Depth` for (a subset of `subs`).
+    depth_subs: HashSet<String>,
+    /// Newest depth per symbol since the last flush (latest wins).
+    latest_depth: HashMap<String, Arc<Depth>>,
     /// Groups of the authorized accounts (marked-up quote streams).
     groups: HashSet<String>,
     conflator: Conflator,
@@ -422,6 +449,7 @@ async fn handle(
             let unknown: Vec<_> = s
                 .symbols
                 .iter()
+                .chain(s.depth_symbols.iter())
                 .filter(|x| !hub.is_known_symbol(x))
                 .cloned()
                 .collect();
@@ -429,10 +457,13 @@ async fn handle(
                 return out.error(&s.request_id, ErrorCode::UnknownSymbol, &unknown.join(","));
             }
             // Current prices first: the flush tick sends them with the next batch.
-            for q in hub.last_quotes(&s.symbols, &st.groups) {
+            let mut symbols = s.symbols;
+            symbols.extend(s.depth_symbols.iter().cloned());
+            for q in hub.last_quotes(&symbols, &st.groups) {
                 st.conflator.push(q);
             }
-            st.subs.extend(s.symbols);
+            st.subs.extend(symbols);
+            st.depth_subs.extend(s.depth_symbols);
             out.send(Body::Ack(Ack {
                 request_id: s.request_id,
             }))
@@ -441,6 +472,10 @@ async fn handle(
             for sym in &u.symbols {
                 st.subs.remove(sym);
                 st.conflator.remove(sym);
+            }
+            for sym in u.symbols.iter().chain(u.depth_symbols.iter()) {
+                st.depth_subs.remove(sym);
+                st.latest_depth.remove(sym);
             }
             out.send(Body::Ack(Ack {
                 request_id: u.request_id,
