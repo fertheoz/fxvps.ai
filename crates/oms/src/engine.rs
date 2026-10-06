@@ -1083,7 +1083,7 @@ impl Engine {
         let mut commission = Money::zero(g.currency);
         // commission per side: the group's model, else the symbol's per-lot amount
         let c = match g.commission {
-            Some(GroupCommission::PerLot { minor }) => Money::new(minor, g.currency)
+            Some(GroupCommission::PerLot { minor }) => Money::new(minor as i128, g.currency)
                 .mul_ratio(v.raw() as i128, SCALE as i128, Rounding::HalfUp)
                 .ok(),
             Some(GroupCommission::PerMillion { minor }) => {
@@ -1095,8 +1095,8 @@ impl Engine {
                     .and_then(|n| self.st.quotes.convert(n, g.currency, Rounding::HalfUp).ok())
                     .and_then(|n| {
                         n.mul_ratio(
-                            minor,
-                            1_000_000 * 10i128.pow(n.minor_exponent()),
+                            minor as i128,
+                            1_000_000 * 10i128.pow(n.currency.minor_exponent()),
                             Rounding::HalfUp,
                         )
                         .ok()
