@@ -800,12 +800,16 @@ export class WsTradingApi implements TradingApi {
       return;
     }
     const b = env.body;
-    if (b.case === 'authOk') {
+    if (b.case === 'authOk' && this.handshakeWaiter) {
+      // Handshake AuthOk: account infos and capabilities. (A renewal AuthOk after a
+      // refreshed token carries no infos and must not touch them.)
       this.accountIds = b.value.accountIds;
       this.v12 = b.value.accounts.length > 0;
       this.infos = new Map(b.value.accounts.map((i) => [i.accountId, i]));
       this.snapshotsPending = new Set(this.accountIds);
       if (!this.snapshotsPending.size) this.resolveSnapshots();
+    } else if (b.case === 'authOk') {
+      this.emitJournal('info', 'Session token renewed');
     } else if (b.case === 'error' && !b.value.requestId) {
       this.lastError = errorText(b.value.code, b.value.message);
     }
