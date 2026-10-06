@@ -117,6 +117,8 @@ pub struct AdminCtx {
     pub names: Option<crate::api::AccountNames>,
     /// Engine data directory (KYC documents live under `kyc/`).
     pub data_dir: PathBuf,
+    /// Read replica for heavy reports (stage 14); `None` = reports run on the writer thread.
+    pub replica: Option<Arc<tokio::sync::Mutex<crate::replica::Replica>>>,
     pub http: reqwest::Client,
 }
 
@@ -338,6 +340,13 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
         alerts: Arc::default(),
         names: cfg.names.clone(),
         data_dir: cfg.data_dir.clone(),
+        replica: match crate::replica::Replica::open(&cfg.data_dir) {
+            Ok(r) => Some(Arc::new(tokio::sync::Mutex::new(r))),
+            Err(e) => {
+                tracing::warn!(error = %e, "report replica unavailable; reports run on the writer thread");
+                None
+            }
+        },
         http: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()

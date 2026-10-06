@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
@@ -28,6 +28,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     latency > 0 ? new Promise((res) => setTimeout(() => res(clone(v)), latency * (0.5 + rnd()))) : Promise.resolve(clone(v));
 
   let lpConfig: LpConfig | null = null;
+  let tenants: Tenant[] = [{ id: "fxvps", name: "fxvps.ai", groups: ["demo-retail", "demo-hedge"], hostnames: ["trade.fxvps.ai", "console.fxvps.ai"] }];
   let alertSettings: AlertSettings = { lpDownGraceS: 60, fillRateMinOrders: 10, fillRateFloorPct: 90, latencyFloorMs: 500, latencyMultiplier: 3, webhookUrl: "", telegramToken: "", telegramTokenSet: false, telegramChatId: "", quietHoursUtc: null, dailyReportHourUtc: 7 };
   let calendar: TradingCalendar = { holidays: ["2026-12-25", "2027-01-01"] };
   const ruleVersions: RuleVersionMeta[] = [{ id: "rv12", at: new Date(Date.now() - 864e5).toISOString(), actor: "admin", count: 2 }];
@@ -382,6 +383,9 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     async simState() { return delay({ scenario: sim, instruments: [{ securityId: "4001", mid: "1.12485" }, { securityId: "4002", mid: "1.32640" }] }); },
     async simShock(symbol, pct, actor) { guard(actor, "lp.manage"); audit(actor, "lp.sim", symbol, `shock ${pct}%`); return delay({ symbol, pct }); },
     async simScenario(s2, actor) { guard(actor, "lp.manage"); sim = s2; audit(actor, "lp.sim", "scenario", JSON.stringify(s2)); return delay(sim); },
+    async perf() { return delay({ engine: { samples: 5000, totalCommands: 2_400_000, p50Us: 38, p95Us: 120, p99Us: 410, maxUs: 2900, uptimeS: 86400 }, writerSeq: 2_400_000, replica: { seq: 2_399_998, lagCommands: 2, reloads: 1, applied: 120_000 }, budget: { p99Us: 5000, ok: true } }); },
+    async listTenants() { return delay(tenants); },
+    async saveTenants(ts, actor) { guard(actor, "users.edit"); tenants = ts; audit(actor, "tenants.update", "tenants", ts.map((t) => t.id).join(", ")); return delay(tenants); },
     async auditChain() { return delay({ count: s.audit.length, chained: s.audit.length, verified: true, headHash: "9f2a…demo", brokenAt: null, lastAt: s.audit[0]?.at ?? null }); },
     async setKyc(id, kyc, actor) {
       guard(actor, "clients.edit");

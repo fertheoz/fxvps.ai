@@ -212,7 +212,7 @@ sayfasında kart. **Kural sürümleme**: her kayıt tam tabloyu saklar
 sayfasında "Kayıtlı sürümler". Haber takvimi kaynağı bağlanınca toksisite
 "haber anı" ölçütü eklenecek.
 
-### Etap 14 — Performans, ölçek ve çoklu kiracı
+### Etap 14 — Performans, ölçek ve çoklu kiracı ✅ (NATS süreç ayrımı ve müşteri FIX API tasarım notu olarak)
 Birden fazla marka/broker aynı çekirdekte: (a) **kiracı (tenant) ayrımı**:
 gruplar ve hesaplar kiracıya bağlı, konsol rolü kiracı kapsamlı, ayrı
 Cloudflare hostname'leri, (b) **yük ve gecikme bütçesi**: 1k eşzamanlı WS,
@@ -222,6 +222,30 @@ core-engine, client-gateway ayrı konteyner, biri düşünce diğerleri yaşar,
 (d) **okuma kopyası**: raporlar/dashboard sorguları motoru kilitlemesin
 (snapshot'tan servis), (e) **FIX API müşterilere** (kurumsal müşteri kendi
 FIX oturumuyla bağlanır; fix-session crate'i zaten acceptor rolünü biliyor).
+
+Yapılan: **kiracı ayrımı** — `TenantRec {id, name, groups, hostnames}`
+(`GET/PUT /v1/tenants`, Ayarlar kartı), personel kullanıcısında `tenant`
+kapsamı; kapsamlı kullanıcı için hesap/pozisyon/emir/işlem/ekstre/işlem raporu/
+müşteri akışı/para talepleri **sunucu tarafında** süzülür. **Gecikme bütçesi** —
+yazıcı iş parçacığı her komutun journal+apply süresini ölçer (`/v1/perf`: p50/
+p95/p99/max µs, bütçe p99 ≤ 5 ms), dashboard LP kartında. **Okuma kopyası** —
+`core_engine::replica::Replica`: snapshot'tan kurulur, journal'ı kuyruktan
+izler (rotasyon/boşlukta yeniden yükler); ağır raporlar (işlemler, ekstre,
+gelir, yürütme, dashboard serileri, akış, LP, IB, MiFIR, best-exec, kuru koşum)
+artık yazıcı iş parçacığını değil kopyayı okur; kopya gecikmesi `/v1/perf`'te.
+
+Tasarım notu (sonraki iş): **NATS ile süreç ayrımı** — fix-gateway ayrı
+konteyner olur, `GatewayEvent`/`OrderCommand` NATS JetStream konularına
+(`fx.lp.<name>.events`, `fx.lp.<name>.orders`) taşınır; core-engine
+`run_bridge` NATS tüketicisi olur, trading sürecinin yeniden başlaması FIX
+oturumlarını düşürmez → **mavi/yeşil** devir (iki core süreci aynı akışı
+okur, yeni süreç journal replay + sağlık sonrası WS/admin portlarını devralır).
+**Müşteri FIX API** — fix-session acceptor rolüyle `fix-client-gateway`
+servisi: Logon kimlik servisine (hesap bazlı CompID/parola), NewOrderSingle →
+`Command::PlaceOrder`, ExecutionReport ← engine olayları, MarketDataRequest ←
+grup fiyatı; önce LMAX demo karşı tezgâhı olarak `lp-simulator` ile uçtan uca
+test. **Yük sınavı** — `loadgen` ile 1k WS / 10k emir·dk hedefi CI'da gece
+koşusu (p99 bütçesi `/v1/perf` ile denetlenir).
 
 ## Her etabın teslim kapısı
 tsc/lint/test yeşil → PR → CI → merge → CT 970 → canlıda ölçüm (gerçek LMAX

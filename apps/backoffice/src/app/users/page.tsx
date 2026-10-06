@@ -79,6 +79,7 @@ function UserDialog({ user, onClose }: { user: AdminUser; onClose: () => void })
         <SelectField label={t("common.role")} value={draft.role} options={ROLES} onChange={(v) => set("role", v)} />
         <SelectField label={t("users.mfa")} value={draft.mfa ? "on" : "off"} options={["on", "off"] as const} onChange={(v) => set("mfa", v === "on")} />
         <SelectField label={t("users.active")} value={draft.active ? "yes" : "no"} options={["yes", "no"] as const} onChange={(v) => set("active", v === "yes")} />
+        <TextField label={t("users.tenant")} value={draft.tenant ?? ""} onChange={(v) => set("tenant", v.trim() || null)} />
       </div>
     </Dialog>
   );

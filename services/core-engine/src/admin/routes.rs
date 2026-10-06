@@ -82,6 +82,8 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/settings/swap", get(swap_get).put(swap_put))
         .route("/v1/settings/swap/rollover", post(swap_rollover))
         .route("/v1/alerts", get(list_alerts))
+        .route("/v1/perf", get(perf))
+        .route("/v1/tenants", get(list_tenants).put(save_tenants))
         .route("/v1/alerts/{id}/ack", post(ack_alert))
         .route("/v1/reports/clients", get(client_flow))
         .route("/v1/lp/sessions", get(lp_sessions))
@@ -129,6 +131,27 @@ impl AdminCtx {
             .await
             .map_err(ApiError::internal)?;
         rx.recv().map_err(|e| ApiError::internal(e.to_string()))
+    }
+
+    /// Heavy, read-only report query: runs on the read replica after a
+    /// refresh (never blocks trading); falls back to the writer thread.
+    async fn qr<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Engine) -> T + Send + 'static,
+    ) -> Result<T, ApiError> {
+        let Some(rep) = self.replica.clone() else {
+            return self.q(f).await;
+        };
+        let out = tokio::task::spawn_blocking(move || {
+            let mut r = rep.blocking_lock();
+            if let Err(e) = r.refresh() {
+                tracing::warn!(error = %e, "replica refresh failed");
+            }
+            f(r.engine())
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+        Ok(out)
     }
 
     async fn cmd(&self, c: Command) -> Result<Vec<Event>, ApiError> {
@@ -383,7 +406,7 @@ async fn dashboard_series(
     let st = ctx.view_state().await;
     let now = now_ns();
     Ok(Json(
-        ctx.q(move |e| views::dashboard_series(e, &st, now, &range))
+        ctx.qr(move |e| views::dashboard_series(e, &st, now, &range))
             .await?,
     ))
 }
@@ -404,11 +427,13 @@ async fn list_accounts(
     Query(q): Query<Search>,
 ) -> ApiResult {
     need(&actor, "clients.view")?;
+    let __allowed = tenant_logins(&ctx, &actor).await?;
     let st = ctx.view_state().await;
-    Ok(Json(
+    Ok(Json(tenant_filter(
         ctx.q(move |e| views::clients(e, &st, q.search.as_deref()))
             .await?,
-    ))
+        &__allowed,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -894,6 +919,7 @@ async fn transactions(
     Query(q): Query<ReportRange>,
 ) -> ApiResult {
     need(&actor, "reports.view")?;
+    let __allowed = tenant_logins(&ctx, &actor).await?;
     let now = now_ns();
     let from = q
         .from
@@ -906,10 +932,11 @@ async fn transactions(
             .map(|t| t + DAY_NS)
             .unwrap_or(u64::MAX);
     let st = ctx.view_state().await;
-    Ok(Json(
-        ctx.q(move |e| views::transactions(e, &st, from, to))
+    Ok(Json(tenant_filter(
+        ctx.qr(move |e| views::transactions(e, &st, from, to))
             .await?,
-    ))
+        &__allowed,
+    )))
 }
 
 /// Best-execution summary per venue and asset class (`?from=&to=`, default last 30 days).
@@ -931,7 +958,7 @@ async fn best_execution(
             .map(|t| t + DAY_NS)
             .unwrap_or(u64::MAX);
     Ok(Json(
-        ctx.q(move |e| views::best_execution(e, from, to)).await?,
+        ctx.qr(move |e| views::best_execution(e, from, to)).await?,
     ))
 }
 
@@ -1318,8 +1345,12 @@ async fn funding_list(
     Query(q): Query<FundingQuery>,
 ) -> ApiResult {
     need(&actor, "clients.view")?;
+    let __allowed = tenant_logins(&ctx, &actor).await?;
     let st = ctx.view_state().await;
-    Ok(Json(views::funding(&st, q.status.as_deref())))
+    Ok(Json(tenant_filter(
+        views::funding(&st, q.status.as_deref()),
+        &__allowed,
+    )))
 }
 
 #[derive(Deserialize)]
@@ -1456,7 +1487,7 @@ async fn ib_report(
             .unwrap_or(u64::MAX);
     let st = ctx.view_state().await;
     Ok(Json(
-        ctx.q(move |e| views::ib_report(e, &st, from, to)).await?,
+        ctx.qr(move |e| views::ib_report(e, &st, from, to)).await?,
     ))
 }
 
@@ -1786,7 +1817,7 @@ async fn rules_dry_run(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     let since = now_ns().saturating_sub(DAY_NS);
     let st = ctx.view_state().await;
     Ok(Json(
-        ctx.q(move |e| views::rules_dry_run(e, &st, since)).await?,
+        ctx.qr(move |e| views::rules_dry_run(e, &st, since)).await?,
     ))
 }
 
@@ -2248,12 +2279,17 @@ async fn save_symbol(
 
 async fn list_positions(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "positions.view")?;
-    Ok(Json(ctx.q(views::positions).await?))
+    let __allowed = tenant_logins(&ctx, &actor).await?;
+    Ok(Json(tenant_filter(
+        ctx.q(views::positions).await?,
+        &__allowed,
+    )))
 }
 
 async fn list_orders(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "positions.view")?;
-    Ok(Json(ctx.q(views::orders).await?))
+    let __allowed = tenant_logins(&ctx, &actor).await?;
+    Ok(Json(tenant_filter(ctx.q(views::orders).await?, &__allowed)))
 }
 
 #[derive(Deserialize)]
@@ -2420,6 +2456,128 @@ async fn swap_rollover(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     ))
 }
 
+/// Engine latency budget and replica lag (`/v1/perf`).
+async fn perf(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "dashboard.view")?;
+    let lat = ctx.engine.latency();
+    let writer_seq = ctx.q(|e| e.seq()).await?;
+    let (replica_seq, reloads, applied) = match &ctx.replica {
+        Some(r) => {
+            let g = r.lock().await;
+            (Some(g.seq()), g.reloads, g.applied)
+        }
+        None => (None, 0, 0),
+    };
+    Ok(Json(json!({
+        "engine": lat,
+        "writerSeq": writer_seq,
+        "replica": replica_seq.map(|s| json!({ "seq": s, "lagCommands": writer_seq.saturating_sub(s), "reloads": reloads, "applied": applied })),
+        "budget": { "p99Us": 5_000, "ok": lat.p99_us <= 5_000 },
+    })))
+}
+
+async fn list_tenants(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "users.view")?;
+    let st = &ctx.store.lock().await.state;
+    Ok(Json(json!(st.tenants.values().collect::<Vec<_>>())))
+}
+
+async fn save_tenants(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(ts): Json<Vec<super::store::TenantRec>>,
+) -> ApiResult {
+    need(&actor, "users.edit")?;
+    if ts.len() > 50 {
+        return Err(ApiError::bad("at most 50 tenants"));
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for t in &ts {
+        if t.id.is_empty()
+            || t.id.len() > 32
+            || !t
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            || !ids.insert(t.id.clone())
+        {
+            return Err(ApiError::bad(
+                "tenant ids must be unique, 1-32 chars [a-z0-9-_]",
+            ));
+        }
+        if t.name.trim().is_empty() || t.name.len() > 64 {
+            return Err(ApiError::bad("tenant name 1-64 chars"));
+        }
+    }
+    let mut store = ctx.store.lock().await;
+    store.append(&actor, AdminCmd::TenantsSaved { tenants: ts })?;
+    let out = store.state.tenants.values().cloned().collect::<Vec<_>>();
+    drop(store);
+    ctx.notify(&["listTenants", "listAudit"]);
+    Ok(Json(json!(out)))
+}
+
+/// Logins the actor may see: `None` = everything (no tenant), else the
+/// accounts of the tenant's groups.
+async fn tenant_logins(
+    ctx: &AdminCtx,
+    actor: &Actor,
+) -> Result<Option<std::collections::BTreeSet<u64>>, ApiError> {
+    let groups: Vec<String> = {
+        let st = &ctx.store.lock().await.state;
+        let user = st.users.values().find(|u| {
+            u.id == actor.sub || u.email.eq_ignore_ascii_case(&actor.name) || u.name == actor.name
+        });
+        let Some(tid) = user
+            .and_then(|u| u.tenant.clone())
+            .filter(|t| !t.is_empty())
+        else {
+            return Ok(None);
+        };
+        st.tenants
+            .get(&tid)
+            .map(|t| t.groups.clone())
+            .unwrap_or_default()
+    };
+    let set = ctx
+        .q(move |e| {
+            e.accounts()
+                .filter(|a| groups.contains(&a.group))
+                .map(|a| a.id)
+                .collect::<std::collections::BTreeSet<u64>>()
+        })
+        .await?;
+    Ok(Some(set))
+}
+
+/// Keeps only rows whose `login` / `clientLogin` / `account` is in `allowed`
+/// (arrays, or objects with a `rows` array).
+fn tenant_filter(v: Value, allowed: &Option<std::collections::BTreeSet<u64>>) -> Value {
+    let Some(set) = allowed else {
+        return v;
+    };
+    let keep = |row: &Value| {
+        ["login", "clientLogin", "account"]
+            .iter()
+            .filter_map(|k| row[*k].as_u64())
+            .next()
+            .is_none_or(|l| set.contains(&l))
+    };
+    match v {
+        Value::Array(rows) => Value::Array(rows.into_iter().filter(keep).collect()),
+        Value::Object(mut o) => {
+            if let Some(Value::Array(rows)) = o.remove("rows") {
+                o.insert(
+                    "rows".into(),
+                    Value::Array(rows.into_iter().filter(keep).collect()),
+                );
+            }
+            Value::Object(o)
+        }
+        other => other,
+    }
+}
+
 async fn list_alerts(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "dashboard.view")?;
     Ok(Json(ctx.alerts.snapshot()))
@@ -2436,8 +2594,12 @@ async fn ack_alert(State(ctx): State<AdminCtx>, actor: Actor, Path(id): Path<Str
 
 async fn client_flow(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "reports.view")?;
+    let __allowed = tenant_logins(&ctx, &actor).await?;
     let st = ctx.view_state().await;
-    Ok(Json(ctx.q(move |e| views::client_flow(e, &st)).await?))
+    Ok(Json(tenant_filter(
+        ctx.qr(move |e| views::client_flow(e, &st)).await?,
+        &__allowed,
+    )))
 }
 
 async fn margin_calls(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
@@ -2590,7 +2752,7 @@ async fn lp_agg_put(
 
 async fn lp_report(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "reports.view")?;
-    Ok(Json(ctx.q(views::lp_report).await?))
+    Ok(Json(ctx.qr(views::lp_report).await?))
 }
 
 // ---------------------------------------------------------------------------
@@ -2599,28 +2761,33 @@ async fn lp_report(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
 
 async fn trades(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "reports.view")?;
-    Ok(Json(ctx.q(views::trades).await?))
+    let __allowed = tenant_logins(&ctx, &actor).await?;
+    Ok(Json(tenant_filter(
+        ctx.qr(views::trades).await?,
+        &__allowed,
+    )))
 }
 
 async fn lp_executions(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "reports.view")?;
-    Ok(Json(ctx.q(views::lp_executions).await?))
+    Ok(Json(ctx.qr(views::lp_executions).await?))
 }
 
 async fn execution(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "reports.view")?;
     let st = ctx.view_state().await;
-    Ok(Json(ctx.q(move |e| views::execution(e, &st)).await?))
+    Ok(Json(ctx.qr(move |e| views::execution(e, &st)).await?))
 }
 
 async fn revenue(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "reports.view")?;
     let since = now_ns().saturating_sub(DAY_NS);
-    Ok(Json(ctx.q(move |e| views::revenue(e, since)).await?))
+    Ok(Json(ctx.qr(move |e| views::revenue(e, since)).await?))
 }
 
 async fn statements(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "reports.view")?;
+    let __allowed = tenant_logins(&ctx, &actor).await?;
     let mut flows: BTreeMap<u64, (i64, i64)> = BTreeMap::new();
     for o in ctx.store.lock().await.state.ops.values() {
         if o.status != OpStatus::Applied {
@@ -2633,8 +2800,8 @@ async fn statements(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
             BalanceKind::Credit => {}
         }
     }
-    Ok(Json(
-        ctx.q(move |e| {
+    Ok(Json(tenant_filter(
+        ctx.qr(move |e| {
             Value::Array(
                 e.accounts()
                     .filter_map(|a| {
@@ -2668,7 +2835,8 @@ async fn statements(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
             )
         })
         .await?,
-    ))
+        &__allowed,
+    )))
 }
 
 async fn audit(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
