@@ -10,10 +10,12 @@ interface Props<T> {
   empty: ReactNode;
   rowHeight?: number;
   testId?: string;
+  /** Click on a row outside its buttons / inputs. */
+  onRowClick?: (row: T) => void;
 }
 
 /** Virtualized grid-based table: only visible rows are mounted. */
-export function VirtualTable<T>({ columns, header, rows, rowKey, renderRow, empty, rowHeight = 26, testId }: Props<T>) {
+export function VirtualTable<T>({ columns, header, rows, rowKey, renderRow, empty, rowHeight = 26, testId, onRowClick }: Props<T>) {
   const ref = useRef<HTMLDivElement>(null);
   const v = useVirtualizer({
     count: rows.length,
@@ -38,8 +40,13 @@ export function VirtualTable<T>({ columns, header, rows, rowKey, renderRow, empt
                 <div
                   key={rowKey(row)}
                   role="row"
-                  className="grid items-center px-2 whitespace-nowrap border-b border-line/50 hover:bg-hover"
+                  className={`grid items-center px-2 whitespace-nowrap border-b border-line/50 hover:bg-hover ${onRowClick ? 'cursor-pointer' : ''}`}
                   style={{ gridTemplateColumns: columns, position: 'absolute', top: 0, left: 0, right: 0, height: rowHeight, transform: `translateY(${it.start}px)` }}
+                  onClick={(e) => {
+                    if (!onRowClick) return;
+                    if ((e.target as HTMLElement).closest('button, input, select, a, [data-no-row-click]')) return;
+                    onRowClick(row);
+                  }}
                 >
                   {renderRow(row)}
                 </div>
