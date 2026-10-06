@@ -1010,14 +1010,12 @@ impl Engine {
                     // The broker book takes the remainder at the client price.
                     let acc = &self.st.accounts[&o.req.account];
                     let g = self.st.groups[&acc.group].clone();
-                    match self.client_quote(&g, &o.req.symbol) {
-                        Ok(q) => {
-                            let price = q.for_side(o.req.side);
-                            let v = o.remaining();
-                            self.fill_child(c, v, price, price);
-                            continue;
-                        }
-                        Err(_) => {} // no quote: fall through to cancel
+                    // No quote: fall through to cancel.
+                    if let Ok(q) = self.client_quote(&g, &o.req.symbol) {
+                        let price = q.for_side(o.req.side);
+                        let v = o.remaining();
+                        self.fill_child(c, v, price, price);
+                        continue;
                     }
                 }
                 _ => {}
