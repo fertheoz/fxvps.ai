@@ -110,6 +110,8 @@ pub struct PlaceOrderRequest {
     pub oco_group: Option<u64>,
     /// Pending order expiry (ns since epoch).
     pub expire_at_ns: Option<u64>,
+    /// Market orders: client slippage tolerance in points (MT5 deviation).
+    pub max_deviation_points: Option<u32>,
 }
 
 impl PlaceOrderRequest {
@@ -135,6 +137,7 @@ impl PlaceOrderRequest {
             trailing_distance: None,
             oco_group: None,
             expire_at_ns: None,
+            max_deviation_points: None,
         }
     }
 }
@@ -625,6 +628,9 @@ impl CoreApi for InProcessCore {
             o.sl = protective(req.sl)?;
             o.tp = protective(req.tp)?;
             o.trailing_points = self.points(&req.symbol, req.trailing_distance)?;
+            if req.kind == OrderKind::Market {
+                o.max_deviation_points = req.max_deviation_points.map(i64::from);
+            }
             if req.kind != OrderKind::Market {
                 o.oco_group = req.oco_group.filter(|g| *g != 0);
                 o.expire_at = req.expire_at_ns.filter(|t| *t != 0);

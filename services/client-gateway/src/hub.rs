@@ -153,6 +153,8 @@ pub struct NewOrder {
     pub trailing_distance: Option<Fixed>,
     pub oco_group: Option<u64>,
     pub expire_at_ns: Option<u64>,
+    /// Market orders: client slippage tolerance in points.
+    pub max_deviation_points: Option<u32>,
 }
 
 impl NewOrder {
@@ -179,6 +181,7 @@ impl NewOrder {
             trailing_distance: None,
             oco_group: None,
             expire_at_ns: None,
+            max_deviation_points: None,
         }
     }
 }
@@ -638,6 +641,7 @@ impl Hub {
             trailing_distance: o.trailing_distance,
             oco_group: o.oco_group,
             expire_at_ns: o.expire_at_ns,
+            max_deviation_points: o.max_deviation_points,
         })
         .await?;
         Ok(())

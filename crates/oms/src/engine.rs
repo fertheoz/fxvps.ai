@@ -1031,6 +1031,7 @@ impl Engine {
                 } else if self.st.config.aggregate_a_book
                     && o.close_position.is_none()
                     && o.max_slippage_override.or(g.max_slippage_points).is_none()
+                    && o.req.max_deviation_points.is_none()
                 {
                     // one LP order per (symbol, side): no per-order guard
                     self.st.pending_lp.push(id);
@@ -1056,6 +1057,7 @@ impl Engine {
             .max_slippage_override
             .or(g.max_slippage_points)
             .unwrap_or(guard);
+        let max = o.req.max_deviation_points.map_or(max, |d| d.clamp(0, max));
         let m = self.order_markup(o, g, o.req.side).raw() * o.req.side.sign();
         Some(Price::from_raw(
             req.raw() + o.req.side.sign() * point * max - m,

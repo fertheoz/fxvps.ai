@@ -7,7 +7,7 @@ import { RafBatcher } from '@fxvps/trading-core';
 import type { ChartObjects, Quote } from '@fxvps/trading-core';
 import { setObjectsSaver, useTerminal } from './terminal';
 import { translate } from '../i18n';
-import { volumeToLots } from '@fxvps/trading-core';
+import { pipsToDistance, volumeToLots } from '@fxvps/trading-core';
 
 let api: TradingApi | null = null;
 
@@ -105,7 +105,9 @@ export const trade = {
   async market(symbol: string, side: 'buy' | 'sell', volume: number) {
     const s = useTerminal.getState();
     if (!s.activeAccountId) return;
-    const r = await getApi().placeOrder({ accountId: s.activeAccountId, symbol, side, type: 'market', volume });
+    const spec = s.symbols[symbol];
+    const maxDeviation = spec && s.maxDeviationPips > 0 ? pipsToDistance(s.maxDeviationPips, spec) : undefined;
+    const r = await getApi().placeOrder({ accountId: s.activeAccountId, symbol, side, type: 'market', volume, maxDeviation });
     const t = (k: Parameters<typeof translate>[1], v?: Record<string, string | number>) => translate(useTerminal.getState().lang, k, v);
     if (r.ok)
       s.toast('ok', t('toast.filled', { side: side.toUpperCase(), lots: volumeToLots(volume), symbol, price: r.price ?? '' }));

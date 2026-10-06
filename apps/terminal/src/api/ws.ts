@@ -497,6 +497,10 @@ export class WsTradingApi implements TradingApi {
             ocoGroup: pending && req.ocoGroup ? BigInt(req.ocoGroup) : 0n,
             expireAtNs: pending && req.expiry !== undefined ? msToNs(req.expiry) : 0n,
             tif: pending && req.expiry !== undefined ? TimeInForce.GTD : TimeInForce.TIME_IN_FORCE_UNSPECIFIED,
+            maxDeviationPoints:
+              !pending && req.maxDeviation !== undefined && req.maxDeviation > 0
+                ? Math.max(1, Math.round(req.maxDeviation * 10 ** spec.digits))
+                : 0,
           },
         }),
         requestId,

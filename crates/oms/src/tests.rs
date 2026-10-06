@@ -1480,3 +1480,24 @@ fn market_order_without_cap_gets_the_circuit_breaker() {
     h.market(1, "n", Side::Sell, "0.1");
     assert_eq!(h.router.take()[0].limit, Some(px("1.09450")));
 }
+
+#[test]
+fn client_deviation_tightens_the_cap() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 0;
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "10000");
+    // client allows 30 points from the bid at execution (1.10000)
+    let mut o = h.pending(1, "d", Side::Sell, OrderType::Market, None, None);
+    o.max_deviation_points = Some(30);
+    h.order(o);
+    assert_eq!(h.router.take()[0].limit, Some(px("1.09970")));
+    // a looser client value cannot widen the circuit breaker (550 points)
+    let mut o = h.pending(1, "w", Side::Sell, OrderType::Market, None, None);
+    o.max_deviation_points = Some(5_000);
+    h.order(o);
+    assert_eq!(h.router.take()[0].limit, Some(px("1.09450")));
+}

@@ -120,6 +120,8 @@ export interface TerminalState {
   /** Draw the ask price as a second line (candles follow the bid). */
   showAskLine: boolean;
   oneClickVolume: number;
+  /** Max slippage for market orders in pips (0 = no client limit). */
+  maxDeviationPips: number;
   // UI (transient)
   toolboxTab: ToolboxTab;
   ticket: TicketPreset | null;
@@ -174,6 +176,7 @@ export interface TerminalState {
   deleteTemplate(id: string): void;
   toggleAskLine(): void;
   setOneClickVolume(v: number): void;
+  setMaxDeviationPips(v: number): void;
   setToolboxTab(t: ToolboxTab): void;
   openTicket(preset?: Partial<TicketPreset>): void;
   closeTicket(): void;
@@ -243,6 +246,7 @@ export const useTerminal = create<TerminalState>()(
       indicatorSettings: DEFAULT_INDICATOR_SETTINGS,
       showAskLine: false,
       oneClickVolume: 10,
+      maxDeviationPips: 0,
       toolboxTab: 'positions',
       ticket: null,
       paletteOpen: false,
@@ -498,6 +502,9 @@ export const useTerminal = create<TerminalState>()(
       setOneClickVolume(oneClickVolume) {
         set({ oneClickVolume });
       },
+      setMaxDeviationPips(v) {
+        set({ maxDeviationPips: Number.isFinite(v) && v > 0 ? v : 0 });
+      },
       setToolboxTab(toolboxTab) {
         set({ toolboxTab });
       },
@@ -560,6 +567,7 @@ export const useTerminal = create<TerminalState>()(
         indicatorSettings: s.indicatorSettings,
         showAskLine: s.showAskLine,
         oneClickVolume: s.oneClickVolume,
+        maxDeviationPips: s.maxDeviationPips,
         activeAccountId: s.activeAccountId,
       }),
     },
