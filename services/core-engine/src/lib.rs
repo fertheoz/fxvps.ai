@@ -14,6 +14,7 @@
 //! - [`stack`]: starts fix-gateway + engine + bridge in-process (demo/dev).
 
 pub mod admin;
+pub mod replica;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -87,10 +88,72 @@ impl Settings {
     }
 }
 
+/// Command latency samples of the writer thread (journal write + apply), µs.
+#[derive(Default)]
+pub struct LatencyStats {
+    samples: Mutex<VecDeque<u32>>,
+    total: std::sync::atomic::AtomicU64,
+    started: std::sync::OnceLock<std::time::Instant>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatencyReport {
+    pub samples: usize,
+    pub total_commands: u64,
+    pub p50_us: u32,
+    pub p95_us: u32,
+    pub p99_us: u32,
+    pub max_us: u32,
+    pub uptime_s: u64,
+}
+
+impl LatencyStats {
+    const CAP: usize = 20_000;
+
+    fn record(&self, us: u32) {
+        self.started.get_or_init(std::time::Instant::now);
+        self.total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut s) = self.samples.lock() {
+            if s.len() >= Self::CAP {
+                s.pop_front();
+            }
+            s.push_back(us);
+        }
+    }
+
+    pub fn report(&self) -> LatencyReport {
+        let mut v: Vec<u32> = self
+            .samples
+            .lock()
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+        v.sort_unstable();
+        let pct = |p: f64| -> u32 {
+            if v.is_empty() {
+                0
+            } else {
+                v[((v.len() - 1) as f64 * p).round() as usize]
+            }
+        };
+        LatencyReport {
+            samples: v.len(),
+            total_commands: self.total.load(std::sync::atomic::Ordering::Relaxed),
+            p50_us: pct(0.5),
+            p95_us: pct(0.95),
+            p99_us: pct(0.99),
+            max_us: v.last().copied().unwrap_or(0),
+            uptime_s: self.started.get().map_or(0, |t| t.elapsed().as_secs()),
+        }
+    }
+}
+
 /// Cloneable handle used by async code to talk to the engine thread.
 #[derive(Clone)]
 pub struct EngineHandle {
     tx: SyncSender<Request>,
+    stats: Arc<LatencyStats>,
 }
 
 impl EngineHandle {
@@ -152,6 +215,11 @@ impl EngineHandle {
 
     pub fn shutdown(&self) {
         let _ = self.tx.send(Request::Shutdown);
+    }
+
+    /// Writer-thread command latency (journal write + apply).
+    pub fn latency(&self) -> LatencyReport {
+        self.stats.report()
     }
 }
 
@@ -321,6 +389,7 @@ struct Writer {
     lp: WriterLp,
     since_snapshot: u64,
     publisher: Option<output::Publisher>,
+    stats: Arc<LatencyStats>,
 }
 
 enum WriterLp {
@@ -330,6 +399,7 @@ enum WriterLp {
 
 impl Writer {
     fn apply(&mut self, cmd: Command) -> std::io::Result<Vec<Event>> {
+        let started = std::time::Instant::now();
         self.seq += 1;
         self.last_ts = now_ns().max(self.last_ts);
         let env = Envelope {
@@ -341,6 +411,8 @@ impl Writer {
         line.push(b'\n');
         self.journal.write_all(&line)?;
         let ev = self.engine.apply(&env);
+        self.stats
+            .record(started.elapsed().as_micros().min(u32::MAX as u128) as u32);
         self.since_snapshot += 1;
         if self.since_snapshot >= self.settings.snapshot_every {
             self.snapshot()?;
@@ -494,6 +566,7 @@ pub fn spawn_with(
         .append(true)
         .open(journal_path(&settings.data_dir))?;
     let (tx, rx) = sync_channel(settings.channel_capacity);
+    let stats = Arc::new(LatencyStats::default());
     let writer = Writer {
         engine,
         seq,
@@ -503,11 +576,12 @@ pub fn spawn_with(
         lp,
         since_snapshot: 0,
         publisher,
+        stats: stats.clone(),
     };
     let join = std::thread::Builder::new()
         .name("core-engine-writer".into())
         .spawn(move || writer.run(rx))?;
-    Ok((EngineHandle { tx }, join))
+    Ok((EngineHandle { tx, stats }, join))
 }
 
 // ----------------------------------------------------------------------

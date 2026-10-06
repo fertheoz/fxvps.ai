@@ -186,6 +186,8 @@ export const AdminUser = z.object({
   mfa: z.boolean(),
   active: z.boolean(),
   lastLogin: z.string().nullable(),
+  /** Tenant scope (stage 14); null = all tenants. */
+  tenant: z.string().nullable().optional(),
 });
 export type AdminUser = z.infer<typeof AdminUser>;
 

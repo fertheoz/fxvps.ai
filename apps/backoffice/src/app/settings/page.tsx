@@ -4,7 +4,7 @@ import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader } from "@/
 import { NumField, SelectField, TextField, useZodForm } from "@/components/form";
 import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
-import type { AlertSettings, SwapConfig } from "@/lib/api";
+import type { AlertSettings, SwapConfig, Tenant } from "@/lib/api";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import { Book, Settings } from "@/lib/schemas";
 import { CURRENCY_MINOR_DIGITS } from "@/lib/money";
@@ -23,6 +23,7 @@ export default function SettingsPage() {
         <SwapCard />
         <AlertsCard />
         <CalendarCard />
+        <TenantsCard />
         <Card>
           <CardHeader><CardTitle>{t("settings.appearance")}</CardTitle></CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-2">
@@ -159,6 +160,35 @@ function CalendarCard() {
         <p className="text-xs text-muted-foreground">{t("settings.calendarHint")}</p>
         <textarea className="min-h-28 rounded-md border border-border bg-background p-2 font-mono text-xs text-foreground" value={value} onChange={(e) => setText(e.target.value)} disabled={!editable} placeholder="2026-12-25" />
         {editable && <div><Button onClick={() => save.mutate(value.split(/\s+/).map((x) => x.trim()).filter(Boolean))} disabled={save.isPending || text === null} data-testid="calendar-save">{t("common.save")}</Button></div>}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Stage 14: tenant registry (id | name | groups | hostnames, one per line). */
+function TenantsCard() {
+  const t = useT();
+  const actor = useActor();
+  const toast = useToast();
+  const mfaOk = useMfaOk();
+  const q = useApiQuery("listTenants");
+  const editable = actor.can("users.edit") && mfaOk;
+  const [text, setText] = React.useState<string | null>(null);
+  const save = useApiMutation((ts: Tenant[]) => api().saveTenants(ts, actor), () => { toast(t("tenants.saved")); setText(null); });
+  if (!q.data) return <Card className="p-4">{t("common.loading")}</Card>;
+  const value = text ?? q.data.map((x) => `${x.id} | ${x.name} | ${x.groups.join(", ")} | ${x.hostnames.join(", ")}`).join("\n");
+  const parse = (v: string): Tenant[] => v.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+    const [id = "", name = "", groups = "", hosts = ""] = l.split("|").map((p) => p.trim());
+    const list = (x: string) => x.split(",").map((p) => p.trim()).filter(Boolean);
+    return { id, name, groups: list(groups), hostnames: list(hosts) };
+  });
+  return (
+    <Card data-testid="tenants-settings">
+      <CardHeader><CardTitle>{t("tenants.title")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-xs text-muted-foreground">{t("tenants.hint")}</p>
+        <textarea className="min-h-24 rounded-md border border-border bg-background p-2 font-mono text-xs text-foreground" value={value} onChange={(e) => setText(e.target.value)} disabled={!editable} placeholder="fxvps | fxvps.ai | demo-retail, demo-hedge | trade.fxvps.ai" />
+        {editable && <div><Button onClick={() => save.mutate(parse(value))} disabled={save.isPending || text === null} data-testid="tenants-save">{t("common.save")}</Button></div>}
       </CardContent>
     </Card>
   );

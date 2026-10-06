@@ -27,6 +27,7 @@ export default function DashboardPage() {
   const exp = useApiQuery("exposure", [], { live: 5000 });
   const fix = useApiQuery("listFixSessions", [], { live: 5000 });
   const lpx = useApiQuery("listLpExecutions", [], { live: 5000 });
+  const perf = useApiQuery("perf", [], { live: 10000 });
   const compact = (v: number) => f.money(v, "USD", { compact: true });
   const s = stats.data;
   const d = series.data;
@@ -96,6 +97,13 @@ export default function DashboardPage() {
                 <span className="text-muted-foreground">{t("reports.p95Latency")}</span><span className="text-right">{Math.round(d.execution.p95LatencyMs)} ms</span>
                 <span className="text-muted-foreground">{t("reports.fillRate")}</span><span className="text-right">{(d.execution.fillRate * 100).toFixed(0)}%</span>
                 <span className="text-muted-foreground">{t("reports.avgSlip")}</span><span className="text-right">{d.execution.avgClientSlipPts.toFixed(2)}</span>
+              </div>
+            )}
+            {perf.data && (
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-border/60 pt-2 text-xs tabular-nums" data-testid="dash-perf">
+                <span className="text-muted-foreground">{t("perf.title")} {t("perf.p50")} / {t("perf.p99")}</span>
+                <span className={`text-right ${perf.data.budget.ok ? "" : "text-amber-600 dark:text-amber-400"}`}>{perf.data.engine.p50Us} / {perf.data.engine.p99Us} µs <span className="text-muted-foreground">({t("perf.budget")} {perf.data.budget.p99Us})</span></span>
+                <span className="text-muted-foreground">{t("perf.replica")}</span><span className="text-right">{perf.data.replica ? `${perf.data.replica.lagCommands} ${t("perf.commands")}` : "—"}</span>
               </div>
             )}
           </CardContent>

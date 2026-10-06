@@ -314,6 +314,14 @@ export interface RolloverResult {
   reason: string;
 }
 
+export interface PerfReport {
+  engine: { samples: number; totalCommands: number; p50Us: number; p95Us: number; p99Us: number; maxUs: number; uptimeS: number };
+  writerSeq: number;
+  replica: { seq: number; lagCommands: number; reloads: number; applied: number } | null;
+  budget: { p99Us: number; ok: boolean };
+}
+export interface Tenant { id: string; name: string; groups: string[]; hostnames: string[] }
+
 export interface AlertSettings {
   lpDownGraceS: number;
   fillRateMinOrders: number;
@@ -489,6 +497,10 @@ export interface AdminApi {
   simState(): Promise<SimState>;
   simShock(symbol: string, pct: number, actor: Actor): Promise<unknown>;
   simScenario(s: { rejectPct: number; latencyMs: number }, actor: Actor): Promise<{ rejectPct: number; latencyMs: number }>;
+  /** Stage 14: engine latency budget / replica lag and tenants. */
+  perf(): Promise<PerfReport>;
+  listTenants(): Promise<Tenant[]>;
+  saveTenants(ts: Tenant[], actor: Actor): Promise<Tenant[]>;
 
   listGroups(): Promise<Group[]>;
   listRules(): Promise<RoutingRule[]>;

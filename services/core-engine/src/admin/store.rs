@@ -76,6 +76,23 @@ pub struct AdminUserRec {
     pub mfa: bool,
     pub active: bool,
     pub last_login: Option<String>,
+    /// Tenant scope (stage 14): the user sees only this tenant's groups/accounts; None = all.
+    #[serde(default)]
+    pub tenant: Option<String>,
+}
+
+/// A brand / white-label broker sharing this core (stage 14).
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TenantRec {
+    pub id: String,
+    pub name: String,
+    /// Engine groups that belong to the tenant.
+    #[serde(default)]
+    pub groups: Vec<String>,
+    /// Public hostnames (terminal / console) for routing and branding.
+    #[serde(default)]
+    pub hostnames: Vec<String>,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -368,6 +385,10 @@ pub enum AdminCmd {
     AlertSettingsSaved {
         settings: AlertSettings,
     },
+    /// Tenant registry (stage 14), full replacement.
+    TenantsSaved {
+        tenants: Vec<TenantRec>,
+    },
     /// Introducing-broker share of a parent account's children commission (percent).
     IbShareSet {
         account: u64,
@@ -488,6 +509,9 @@ pub struct AdminState {
     /// Routing-rule table history, oldest first (last 50).
     #[serde(default)]
     pub rule_versions: Vec<RuleVersion>,
+    /// Tenants (stage 14).
+    #[serde(default)]
+    pub tenants: BTreeMap<String, TenantRec>,
     /// Oldest first.
     pub audit: Vec<AuditRec>,
 }
@@ -844,6 +868,19 @@ impl AdminState {
                     "rules.update".into(),
                     "routing".into(),
                     format!("{count} rules"),
+                )
+            }
+            AdminCmd::TenantsSaved { tenants } => {
+                self.tenants = tenants.iter().map(|t| (t.id.clone(), t.clone())).collect();
+                self.audit(
+                    r,
+                    "tenants.update".into(),
+                    "tenants".into(),
+                    tenants
+                        .iter()
+                        .map(|t| format!("{} ({} groups)", t.id, t.groups.len()))
+                        .collect::<Vec<_>>()
+                        .join(", "),
                 )
             }
             AdminCmd::AlertSettingsSaved { settings } => {
