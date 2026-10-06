@@ -2,12 +2,12 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
-  { id: "vip-a", name: "VIP → A-book", enabled: true, groups: ["pro/ecn"], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: "ABook", aBookPct: null, markupPoints: 2, maxSlippagePoints: null, partialFill: null },
-  { id: "big-split", name: "Large tickets 70/30", enabled: true, groups: [], accounts: [], symbols: [], minLots: 5, maxLots: null, kind: "market", hoursUtc: null, routing: null, aBookPct: 70, markupPoints: null, maxSlippagePoints: 10, partialFill: null },
+  { id: "vip-a", name: "VIP → A-book", enabled: true, groups: ["pro/ecn"], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: "ABook", aBookPct: null, markupPoints: 2, maxSlippagePoints: null, partialFill: null, minToxicity: null, maxToxicity: null },
+  { id: "big-split", name: "Large tickets 70/30", enabled: true, groups: [], accounts: [], symbols: [], minLots: 5, maxLots: null, kind: "market", hoursUtc: null, routing: null, aBookPct: 70, markupPoints: null, maxSlippagePoints: 10, partialFill: null, minToxicity: null, maxToxicity: null },
 ];
 
 export class ForbiddenError extends Error {
@@ -28,6 +28,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     latency > 0 ? new Promise((res) => setTimeout(() => res(clone(v)), latency * (0.5 + rnd()))) : Promise.resolve(clone(v));
 
   let lpConfig: LpConfig | null = null;
+  let hedge: HedgePolicy = { enabled: true, mode: "switch_to_a_book", defaultSymbolLimit: 25, symbolLimits: { XAUUSD: 5 }, totalLimit: 100, accountLimit: 10, hedgeRatioPct: 100, releasePct: 80 };
   const lpRuntime = (p: LpPolicyRuntime): LpPolicyRuntime => p;
   let lpAgg: LpAggregation = {
     mode: "best_price",
@@ -183,6 +184,24 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
 
     async exposure() { tick(); return delay(exposure()); },
+    async hedgePolicy() { return delay(hedge); },
+    async saveHedgePolicy(p: HedgePolicy, actor) {
+      guard(actor, "risk.edit");
+      hedge = p;
+      audit(actor, "risk.hedge", "engine", `${p.enabled ? "on" : "off"} ${p.mode} symbol=${p.defaultSymbolLimit ?? "—"} total=${p.totalLimit ?? "—"}`);
+      return delay(hedge);
+    },
+    async clientFlow(): Promise<ClientFlowRow[]> {
+      const rnd = mulberry32(11);
+      return delay(s.clients.slice(0, 12).map((c, i) => {
+        const trades = 5 + Math.floor(rnd() * 60);
+        const shortPct = i % 4 === 0 ? 70 + rnd() * 25 : rnd() * 30;
+        const win = i % 4 === 0 ? 65 + rnd() * 20 : 35 + rnd() * 30;
+        const gain = i % 4 === 0 ? 2 + rnd() * 4 : rnd() * 1.5;
+        const tox = Math.min(100, Math.round(45 * shortPct / 100 + 30 * Math.max(0, (win / 100 - 0.5) * 2) + 25 * Math.min(1, gain / 5)));
+        return { login: c.login, name: c.name, group: c.group, currency: "USD", trades, fills: trades * 2, avgHoldSecs: shortPct > 50 ? 25 + rnd() * 40 : 900 + rnd() * 7200, shortHoldPct: shortPct, winRate: win, realisedPnl: (win - 50) * trades * 3, brokerPnl: (50 - win) * trades * 2, avgSlipGainPoints: gain, toxicity: tox };
+      }).sort((a, b) => b.toxicity - a.toxicity));
+    },
 
     async listClients(q) {
       const term = q?.search?.trim().toLowerCase();

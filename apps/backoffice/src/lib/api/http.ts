@@ -79,6 +79,16 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     dashboard: () => call("GET", "/v1/dashboard"),
     dashboardSeries: (range) => call("GET", `/v1/dashboard/series?range=${encodeURIComponent(range)}`),
     exposure: () => call("GET", "/v1/exposure"),
+    hedgePolicy: () => call("GET", "/v1/risk/hedge"),
+    // lots travel as raw 1e8 fixed-point on the wire (engine Qty)
+    saveHedgePolicy: (p, actor) => call("PUT", "/v1/risk/hedge", {
+      ...p,
+      defaultSymbolLimit: p.defaultSymbolLimit == null ? null : Math.round(p.defaultSymbolLimit * 1e8),
+      totalLimit: p.totalLimit == null ? null : Math.round(p.totalLimit * 1e8),
+      accountLimit: p.accountLimit == null ? null : Math.round(p.accountLimit * 1e8),
+      symbolLimits: Object.fromEntries(Object.entries(p.symbolLimits).map(([k, v]) => [k, Math.round(v * 1e8)])),
+    }, actor),
+    clientFlow: () => call("GET", "/v1/reports/clients"),
     listClients: (q) => call("GET", `/v1/accounts${q?.search ? `?search=${enc(q.search)}` : ""}`),
     openAccount: (req, actor) => call("POST", "/v1/accounts", req, actor),
     getClient: async (id) => {

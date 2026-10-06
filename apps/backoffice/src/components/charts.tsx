@@ -6,7 +6,7 @@ const tooltipStyle = { background: "var(--card)", border: "1px solid var(--borde
 
 export function ExposureChart({ data, fmt }: { data: { symbol: string; notional: number }[]; fmt: (minor: number) => string }) {
   return (
-    <ResponsiveContainer width="100%" height={Math.max(220, data.length * 26)}>
+    <ResponsiveContainer width="99%" height={Math.max(220, data.length * 26)}>
       <BarChart data={data} layout="vertical" margin={{ left: 8, right: 16 }}>
         <CartesianGrid stroke={CHART.grid} horizontal={false} />
         <XAxis type="number" tickFormatter={(v: number) => fmt(v)} stroke={CHART.axis} fontSize={11} />
@@ -22,7 +22,7 @@ export function ExposureChart({ data, fmt }: { data: { symbol: string; notional:
 
 export function PnlChart({ data, fmt }: { data: { t: string; aBook: number; bBook: number }[]; fmt: (minor: number) => string }) {
   return (
-    <ResponsiveContainer width="100%" height={240}>
+    <ResponsiveContainer width="99%" height={240}>
       <LineChart data={data} margin={{ left: 8, right: 16 }}>
         <CartesianGrid stroke={CHART.grid} />
         <XAxis dataKey="t" stroke={CHART.axis} fontSize={11} interval={3} />
@@ -39,7 +39,7 @@ export function PnlChart({ data, fmt }: { data: { t: string; aBook: number; bBoo
 /** Revenue legs per bucket (stacked): markup, commission, B-book result. */
 export function RevenueChart({ data, fmt, labels }: { data: { label: string; markup: number; commission: number; bBook: number }[]; fmt: (minor: number) => string; labels: [string, string, string] }) {
   return (
-    <ResponsiveContainer width="100%" height={260}>
+    <ResponsiveContainer width="99%" height={260}>
       <BarChart data={data} margin={{ left: 8, right: 16 }} stackOffset="sign">
         <CartesianGrid stroke={CHART.grid} vertical={false} />
         <XAxis dataKey="label" stroke={CHART.axis} fontSize={11} interval="preserveStartEnd" />
@@ -57,7 +57,7 @@ export function RevenueChart({ data, fmt, labels }: { data: { label: string; mar
 /** Traded lots per bucket with the order / reject counts on a second axis. */
 export function VolumeChart({ data, labels }: { data: { label: string; lots: number; orders: number; rejects: number }[]; labels: [string, string, string] }) {
   return (
-    <ResponsiveContainer width="100%" height={260}>
+    <ResponsiveContainer width="99%" height={260}>
       <BarChart data={data} margin={{ left: 8, right: 8 }}>
         <CartesianGrid stroke={CHART.grid} vertical={false} />
         <XAxis dataKey="label" stroke={CHART.axis} fontSize={11} interval="preserveStartEnd" />
@@ -75,7 +75,7 @@ export function VolumeChart({ data, labels }: { data: { label: string; lots: num
 
 export function FlowChart({ data, fmt, labels }: { data: { day: string; deposits: number; withdrawals: number }[]; fmt: (minor: number) => string; labels: [string, string] }) {
   return (
-    <ResponsiveContainer width="100%" height={240}>
+    <ResponsiveContainer width="99%" height={240}>
       <BarChart data={data} margin={{ left: 8, right: 16 }}>
         <CartesianGrid stroke={CHART.grid} vertical={false} />
         <XAxis dataKey="day" stroke={CHART.axis} fontSize={11} />

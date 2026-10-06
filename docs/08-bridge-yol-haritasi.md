@@ -77,10 +77,22 @@ referansa dönülür). Konsol: LP sayfası → Agregasyon kartı + LP performans
 Sonraki: simülatörün gerçek fiyatı izlemesi (follow) ve konsoldan senaryo
 tetikleme (şok, ret, gecikme) — simülatör test aracı olarak kalıcı.
 
-### Etap 7 — B-book ileri yönetim
+### Etap 7 — B-book ileri yönetim ✅
 Maruziyet limitleri (sembol/müşteri/toplam) aşılınca otomatik hedge (A'ya
 geçiş veya LP'de kısmi hedge), müşteri karlılık profili (toxic flow skoru:
 kısa tutma süresi, haber anı, kayma kazanımı), profil → kural motoru girdisi.
+
+Yapılan: `HedgePolicy` (motor günlüğünde, `Command::SetHedge`): sembol /
+toplam / müşteri-başı net B-book limitleri; kip **switch_to_a_book** (limit
+üstünde risk artırıcı yeni akış A-book'a, emir `hedge:limit` etiketli) veya
+**hedge_excess** (akış B-book'ta kalır, fazlalık omnibus hedge defterinde
+LP'ye gönderilir, `release_pct` altına inince çözülür; hedge K/Z broker
+defterine yazılır; değişmez: omnibus = A-book net + hedge). `FlowStats`
+müşteri profili (tutma süresi, kazanma, yakalanan fiyat iyileşmesi) →
+**toksisite 0–100**; kural motoru `minToxicity/maxToxicity` süzgeci.
+Konsol: Risk → hedge kartı + maruziyet tablosunda Hedge/Limit; Raporlar →
+"Müşteri akışı"; müşteri kartında toksisite rozeti; kural düzenleyicide
+toksisite alanları. Haber-anı ölçütü takvim kaynağı gelince eklenecek.
 
 ### Etap 8 — Swap/rollover ve ücret motoru
 Günlük swap uygulaması (çarşamba 3×), sembol bazında; ekstre ve gelir raporuna

@@ -215,6 +215,9 @@ pub fn exposure(e: &Engine) -> Value {
                 // lots(1e8) * contract size -> base units -> base minor units
                 x.net * s.contract_size as i128 * 10i128.pow(s.base.minor_exponent()) / 100_000_000
             });
+            let h = e.hedge_policy();
+            let limit = h.enabled.then(|| h.symbol_limit(&sym)).flatten();
+            let hedge = e.hedge_net(&sym);
             json!({
                 "symbol": sym,
                 "netLots": x.net as f64 / 1e8,
@@ -222,11 +225,70 @@ pub fn exposure(e: &Engine) -> Value {
                 "aBookLots": x.a as f64 / 1e8,
                 "bBookLots": x.b as f64 / 1e8,
                 "lpLots": e.omnibus_net(&sym) as f64 / 1e8,
+                "hedgeLots": hedge as f64 / 1e8,
+                "hedgePendingLots": e.hedge_pending(&sym) as f64 / 1e8,
+                "unhedgedBLots": (x.b as i64 + hedge) as f64 / 1e8,
+                "limitLots": limit.map(|q| q.raw() as f64 / 1e8),
+                "overLimit": limit.is_some_and(|l| (x.b as i64).abs() > l.raw()),
+                "hedgeRealized": e.hedge_realized(&sym) as f64
+                    / 10f64.powi(e.symbol_spec(&sym).map_or(2, |s| s.quote.minor_exponent() as i32)),
+                "hedgeCurrency": e.symbol_spec(&sym).map(|s| s.quote.to_string()),
             })
         })
         .collect();
     out.sort_by_key(|v| std::cmp::Reverse(v["notional"].as_i64().unwrap_or(0).unsigned_abs()));
     Value::Array(out)
+}
+
+/// B-book exposure / auto-hedge policy (`GET /v1/risk/hedge`), lots as floats.
+pub fn hedge_policy(e: &Engine) -> Value {
+    let h = e.hedge_policy();
+    let lots = |q: Option<Qty>| q.map(qty_f);
+    json!({
+        "enabled": h.enabled,
+        "mode": h.mode,
+        "defaultSymbolLimit": lots(h.default_symbol_limit),
+        "symbolLimits": h.symbol_limits.iter().map(|(s, q)| (s.clone(), qty_f(*q))).collect::<BTreeMap<_, _>>(),
+        "totalLimit": lots(h.total_limit),
+        "accountLimit": lots(h.account_limit),
+        "hedgeRatioPct": h.hedge_ratio_pct,
+        "releasePct": h.release_pct,
+    })
+}
+
+/// Per-client flow profile (`GET /v1/reports/clients`): holding times, win
+/// rate, captured price improvement and the toxicity score the rules use.
+pub fn client_flow(e: &Engine, admin: &AdminState) -> Value {
+    let mut rows: Vec<Value> = e
+        .accounts()
+        .filter_map(|a| {
+            let f = e.flow(a.id)?;
+            let g = e.group(&a.group)?;
+            let div = 10f64.powi(g.currency.minor_exponent() as i32);
+            Some(json!({
+                "login": a.id,
+                "name": admin.profiles.get(&a.id).map(|p| p.name.clone()),
+                "group": a.group,
+                "currency": g.currency.to_string(),
+                "trades": f.trades,
+                "fills": f.fills,
+                "avgHoldSecs": f.avg_hold_secs(),
+                "shortHoldPct": f.short_hold_ratio() * 100.0,
+                "winRate": f.win_rate() * 100.0,
+                "realisedPnl": f.pnl_minor as f64 / div,
+                "brokerPnl": f.broker_pnl_minor as f64 / div,
+                "avgSlipGainPoints": f.avg_slip_gain_points(),
+                "toxicity": f.toxicity(),
+            }))
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b["toxicity"]
+            .as_u64()
+            .cmp(&a["toxicity"].as_u64())
+            .then_with(|| b["trades"].as_u64().cmp(&a["trades"].as_u64()))
+    });
+    Value::Array(rows)
 }
 
 pub fn margin_calls(e: &Engine, admin: &AdminState) -> Value {

@@ -642,6 +642,8 @@ fn routing_rules_decide_book_and_override_markup() {
         markup_points: markup,
         max_slippage_points: None,
         partial_fill: None,
+        min_toxicity: None,
+        max_toxicity: None,
     };
     // EURUSD -> A-book with a 20-point markup; everything else stays in the B-book group.
     h.cmd(Command::SetRules(vec![rule(
@@ -1155,4 +1157,131 @@ fn netting_flip_yields_out_and_in_deals() {
     assert_eq!((d[2].entry, d[2].volume), (DealEntry::In, qty("0.5")));
     assert_ne!(d[1].position_id, d[2].position_id);
     assert_eq!(h.pos(1)[0].id, d[2].position_id);
+}
+
+#[test]
+fn hedge_switch_to_a_book_when_b_book_limit_exceeded() {
+    use risk::{HedgeMode, HedgePolicy};
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "b", "100000");
+    h.cmd(Command::SetHedge(HedgePolicy {
+        enabled: true,
+        mode: HedgeMode::SwitchToABook,
+        default_symbol_limit: Some(qty("1")),
+        ..HedgePolicy::default()
+    }));
+    let a = h.market(1, "h1", Side::Buy, "0.8");
+    assert!(h.router.take().is_empty(), "within the limit: B-book");
+    assert_eq!(h.e.order(a).unwrap().routing, Routing::BBook);
+    let b = h.market(1, "h2", Side::Buy, "0.5");
+    assert_eq!(h.router.take().len(), 1, "over the limit: goes to the LP");
+    let o = h.e.order(b).unwrap();
+    assert_eq!(o.routing, Routing::ABook);
+    assert_eq!(o.rule.as_deref(), Some("hedge:limit"));
+    // risk-reducing flow stays B-book even over the limit
+    let c = h.market(1, "h3", Side::Sell, "0.3");
+    assert!(h.router.take().is_empty());
+    assert_eq!(h.e.order(c).unwrap().routing, Routing::BBook);
+}
+
+#[test]
+fn hedge_excess_opens_and_unwinds_lp_hedge() {
+    use risk::{HedgeMode, HedgePolicy};
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "b", "100000");
+    h.cmd(Command::SetHedge(HedgePolicy {
+        enabled: true,
+        mode: HedgeMode::HedgeExcess,
+        default_symbol_limit: Some(qty("1")),
+        ..HedgePolicy::default()
+    }));
+    h.market(1, "x1", Side::Buy, "1.5");
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1, "excess 0.5 lot hedged at the LP");
+    assert_eq!(sent[0].side, Side::Sell);
+    assert_eq!(sent[0].volume, qty("0.5"));
+    assert!(h.e.lp_order(sent[0].lp_order_id).unwrap().hedge);
+    h.cmd(Command::LpFill {
+        lp_order_id: sent[0].lp_order_id,
+        exec_id: "hx1".into(),
+        volume: qty("0.5"),
+        price: px("1.10000"),
+    });
+    assert_eq!(h.e.hedge_net("EURUSD"), -qty("0.5").raw());
+    assert_eq!(h.e.omnibus_net("EURUSD"), h.e.hedge_net("EURUSD"));
+    // a tiny add stays under one hedge step: nothing new goes out
+    h.market(1, "x2", Side::Buy, "0.001");
+    assert!(h.router.take().is_empty());
+    // client closes the big one: exposure falls under the release level, hedge unwinds
+    let pid = h.pos(1)[0].id;
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: pid,
+        volume: None,
+        client_order_id: "c1".into(),
+    });
+    let sent = h.router.take();
+    let unwind = sent
+        .iter()
+        .find(|r| r.side == Side::Buy)
+        .expect("unwind hedge");
+    h.quote("EURUSD", "1.09900", "1.09910");
+    h.cmd(Command::LpFill {
+        lp_order_id: unwind.lp_order_id,
+        exec_id: "hx2".into(),
+        volume: unwind.volume,
+        price: px("1.09910"),
+    });
+    assert_eq!(h.e.hedge_pending("EURUSD"), 0);
+    assert!(h.e.hedge_net("EURUSD").abs() < qty("0.02").raw());
+    // sold 1.10000, bought back 1.09910: a gain on the hedge book
+    assert!(h.e.hedge_realized("EURUSD") > 0);
+    h.e.check_invariants().unwrap();
+}
+
+#[test]
+fn toxicity_feeds_rules_and_profile() {
+    use risk::{OrderKindFilter, RoutingRule};
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "b", "100000");
+    // a rule sending toxic flow (score >= 50) to the A-book
+    h.cmd(Command::SetRules(vec![RoutingRule {
+        id: "toxic".into(),
+        name: "toxic".into(),
+        enabled: true,
+        groups: vec![],
+        accounts: vec![],
+        symbols: vec![],
+        min_centilots: None,
+        max_centilots: None,
+        kind: OrderKindFilter::Any,
+        hours_utc: None,
+        routing: Some(Routing::ABook),
+        a_book_pct: None,
+        markup_points: None,
+        max_slippage_points: None,
+        partial_fill: None,
+        min_toxicity: Some(50),
+        max_toxicity: None,
+    }]));
+    // five scalps: open and close within the same second, all winners
+    for i in 0..5 {
+        h.market(1, &format!("o{i}"), Side::Buy, "0.1");
+        assert!(h.router.take().is_empty(), "not toxic yet: B-book");
+        let pid = h.pos(1)[0].id;
+        h.quote("EURUSD", "1.10100", "1.10110");
+        h.cmd(Command::ClosePosition {
+            account: 1,
+            position_id: pid,
+            volume: None,
+            client_order_id: format!("c{i}"),
+        });
+        h.quote("EURUSD", "1.10000", "1.10010");
+    }
+    let f = h.e.flow(1).unwrap();
+    assert_eq!(f.trades, 5);
+    assert_eq!(f.short_holds, 5);
+    assert!(h.e.toxicity(1) >= 50, "score {}", h.e.toxicity(1));
+    h.market(1, "o9", Side::Buy, "0.1");
+    assert_eq!(h.router.take().len(), 1, "toxic flow now routed to the LP");
 }

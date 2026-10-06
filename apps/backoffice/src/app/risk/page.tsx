@@ -1,10 +1,13 @@
 "use client";
 import * as React from "react";
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, PageHeader, Select } from "@/components/ui/primitives";
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Label, PageHeader, Select } from "@/components/ui/primitives";
 import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
-import type { MarginCallRow } from "@/lib/api";
+import { HEDGE_MODES, type HedgeMode, type HedgePolicy, type MarginCallRow } from "@/lib/api";
+import { NumField, SelectField } from "@/components/form";
+import { useMfaOk } from "@/lib/queries";
+import type { MessageKey } from "@/lib/i18n";
 
 export default function RiskPage() {
   const t = useT();
@@ -44,7 +47,7 @@ export default function RiskPage() {
           <CardHeader><CardTitle>{t("risk.topExposure")}</CardTitle></CardHeader>
           <CardContent>
             <table className="w-full text-sm">
-              <thead className="text-xs text-muted-foreground"><tr><th className="text-left">{t("positions.symbol")}</th><th className="text-right">Net lots</th><th className="text-right">A</th><th className="text-right">B</th><th className="text-right">LP</th><th className="text-right">Notional</th></tr></thead>
+              <thead className="text-xs text-muted-foreground"><tr><th className="text-left">{t("positions.symbol")}</th><th className="text-right">Net lots</th><th className="text-right">A</th><th className="text-right">B</th><th className="text-right">LP</th><th className="text-right">{t("risk.hedgeCol")}</th><th className="text-right">{t("risk.limitCol")}</th><th className="text-right">Notional</th></tr></thead>
               <tbody>
                 {(exp.data ?? []).slice(0, 10).map((e) => (
                   <tr key={e.symbol} className="border-t border-border tabular-nums">
@@ -53,6 +56,8 @@ export default function RiskPage() {
                     <td className="text-right">{e.aBookLots}</td>
                     <td className="text-right">{e.bBookLots}</td>
                     <td className={`text-right ${Math.abs(e.lpLots - e.aBookLots) > 0.001 ? "text-amber-600 dark:text-amber-400 font-semibold" : ""}`}>{e.lpLots}</td>
+                    <td className="text-right">{e.hedgeLots ? e.hedgeLots : "—"}{e.hedgePendingLots ? <span className="text-xs text-muted-foreground"> (+{e.hedgePendingLots})</span> : null}</td>
+                    <td className={`text-right ${e.overLimit ? "text-red-600 dark:text-red-400 font-semibold" : ""}`}>{e.limitLots != null ? e.limitLots : "—"}</td>
                     <td className="text-right">{f.money(e.notional, "USD", { compact: true })}</td>
                   </tr>
                 ))}
@@ -68,6 +73,7 @@ export default function RiskPage() {
           <CardHeader><CardTitle>{t("risk.marginCalls")} ({calls.length})</CardTitle></CardHeader>
           <CardContent>{list(calls, "margin-calls")}</CardContent>
         </Card>
+        <HedgeCard />
         <Card>
           <CardHeader><CardTitle>{t("risk.presets")}</CardTitle></CardHeader>
           <CardContent className="grid gap-3">
@@ -93,5 +99,65 @@ export default function RiskPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stage 7: B-book exposure limits / auto-hedge
+// ---------------------------------------------------------------------------
+
+function HedgeCard() {
+  const t = useT();
+  const q = useApiQuery("hedgePolicy", [], { live: 10000 });
+  if (q.isLoading) return <Card className="p-4">{t("common.loading")}</Card>;
+  if (q.error || !q.data) return <Card className="p-4 text-sm text-muted-foreground">{t("common.noResults")}</Card>;
+  return <HedgeForm key={JSON.stringify(q.data)} initial={q.data} />;
+}
+
+function HedgeForm({ initial }: { initial: HedgePolicy }) {
+  const t = useT();
+  const actor = useActor();
+  const toast = useToast();
+  const mfaOk = useMfaOk();
+  const editable = actor.can("risk.edit") && mfaOk;
+  const [p, setP] = React.useState<HedgePolicy>(initial);
+  const [limitsText, setLimitsText] = React.useState(Object.entries(initial.symbolLimits).map(([k, v]) => `${k} ${v}`).join("\n"));
+  const mut = useApiMutation((v: HedgePolicy) => api().saveHedgePolicy(v, actor), () => toast(t("risk.hedgeSaved")));
+  const set = <K extends keyof HedgePolicy>(k: K, v: HedgePolicy[K]) => setP({ ...p, [k]: v });
+  const save = () => {
+    const symbolLimits: Record<string, number> = {};
+    for (const line of limitsText.split("\n")) {
+      const [sym, lots] = line.trim().split(/[\s,=]+/);
+      const n = Number(lots);
+      if (sym && n > 0) symbolLimits[sym.toUpperCase()] = n;
+    }
+    mut.mutate({ ...p, symbolLimits });
+  };
+  return (
+    <Card data-testid="hedge-policy">
+      <CardHeader><CardTitle>{t("risk.hedge")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-xs text-muted-foreground">{t("risk.hedgeHint")}</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <SelectField label={t("risk.hedgeEnabled")} value={p.enabled ? "on" : "off"} options={["on", "off"] as const} onChange={(v) => set("enabled", v === "on")} disabled={!editable} />
+          <Label>
+            {t("risk.hedgeMode")}
+            <select className="rounded-md border border-border bg-background p-2 text-sm" value={p.mode} onChange={(e) => set("mode", e.target.value as HedgeMode)} disabled={!editable} data-testid="hedge-mode">
+              {HEDGE_MODES.map((m) => <option key={m} value={m}>{t(`risk.hedgeMode.${m}` as MessageKey)}</option>)}
+            </select>
+          </Label>
+          <NumField label={t("risk.symbolLimit")} value={p.defaultSymbolLimit ?? 0} onChange={(v) => set("defaultSymbolLimit", v > 0 ? v : null)} step={0.1} disabled={!editable} />
+          <NumField label={t("risk.totalLimit")} value={p.totalLimit ?? 0} onChange={(v) => set("totalLimit", v > 0 ? v : null)} step={1} disabled={!editable} />
+          <NumField label={t("risk.accountLimit")} value={p.accountLimit ?? 0} onChange={(v) => set("accountLimit", v > 0 ? v : null)} step={0.1} disabled={!editable || p.mode !== "switch_to_a_book"} />
+          <NumField label={t("risk.hedgeRatio")} value={p.hedgeRatioPct} onChange={(v) => set("hedgeRatioPct", Math.min(100, Math.max(1, Math.round(v))))} step={5} disabled={!editable || p.mode !== "hedge_excess"} />
+          <NumField label={t("risk.releasePct")} value={p.releasePct} onChange={(v) => set("releasePct", Math.min(100, Math.max(0, Math.round(v))))} step={5} disabled={!editable || p.mode !== "hedge_excess"} />
+        </div>
+        <Label>
+          {t("risk.symbolLimits")}
+          <textarea className="min-h-16 rounded-md border border-border bg-background p-2 font-mono text-xs" value={limitsText} onChange={(e) => setLimitsText(e.target.value)} disabled={!editable} placeholder="XAUUSD 5" />
+        </Label>
+        {editable && <div><Button onClick={save} disabled={mut.isPending} data-testid="hedge-save">{t("common.save")}</Button></div>}
+      </CardContent>
+    </Card>
   );
 }

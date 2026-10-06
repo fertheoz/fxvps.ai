@@ -2,7 +2,10 @@
 
 use ledger::AccountId;
 use money::{Money, Price, Qty};
-pub use risk::{GroupConfig, MarginMode, PartialFill, Routing, RoutingRule, Side, SymbolSpec};
+pub use risk::{
+    FlowStats, GroupConfig, HedgeMode, HedgePolicy, MarginMode, PartialFill, Routing, RoutingRule,
+    Side, SymbolSpec,
+};
 use serde::{Deserialize, Serialize};
 
 pub type AccountNo = u64;
@@ -306,6 +309,9 @@ pub struct LpOrder {
     /// router answered or in single-LP journals written before stage 6.
     #[serde(default)]
     pub lp: Option<String>,
+    /// Broker hedge of B-book excess (no client children; see `HedgePolicy`).
+    #[serde(default)]
+    pub hedge: bool,
 }
 
 /// One LP execution report applied to an [`LpOrder`].
@@ -388,6 +394,8 @@ pub enum Command {
         lp_order_id: LpOrderId,
         lp: String,
     },
+    /// B-book exposure limits / auto-hedge policy (stage 7).
+    SetHedge(HedgePolicy),
     /// Sends aggregated A-book orders (when aggregation is enabled).
     FlushLp,
     /// Daily rollover: charge/credit swaps.

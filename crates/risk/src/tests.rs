@@ -258,3 +258,22 @@ proptest! {
         prop_assert!(c.minor <= a.minor);
     }
 }
+
+#[test]
+fn toxicity_score_needs_evidence_and_weighs_scalping() {
+    let mut f = FlowStats::default();
+    for _ in 0..4 {
+        f.record_close(5, 100, -100);
+    }
+    assert_eq!(f.toxicity(), 0, "fewer than 5 trades");
+    f.record_close(5, 100, -100);
+    // 5/5 short holds, 100 % wins, no requested prices
+    assert_eq!(f.toxicity(), 75);
+    f.record_fill(10);
+    assert_eq!(f.toxicity(), 100);
+    let mut calm = FlowStats::default();
+    for i in 0..10 {
+        calm.record_close(3_600, if i % 2 == 0 { 50 } else { -50 }, 0);
+    }
+    assert_eq!(calm.toxicity(), 0);
+}

@@ -58,6 +58,22 @@ struct State {
     /// Routing rule table, evaluated top to bottom at order entry.
     #[serde(default)]
     rules: Vec<RoutingRule>,
+    /// B-book exposure limits / auto-hedge (stage 7).
+    #[serde(default)]
+    hedge: HedgePolicy,
+    /// Broker hedge book at the LP per symbol: signed raw lots, average price
+    /// (raw), realised result (minor units of the symbol's quote currency).
+    #[serde(default)]
+    hedge_net: BTreeMap<String, i64>,
+    #[serde(default)]
+    hedge_pending: BTreeMap<String, i64>,
+    #[serde(default)]
+    hedge_avg: BTreeMap<String, i64>,
+    #[serde(default)]
+    hedge_realized: BTreeMap<String, i128>,
+    /// Per-client flow profile (toxicity input).
+    #[serde(default)]
+    flow: BTreeMap<AccountNo, FlowStats>,
 }
 
 /// Serializable engine snapshot.
@@ -200,6 +216,36 @@ impl Engine {
     pub fn omnibus_net(&self, symbol: &str) -> i64 {
         *self.st.omnibus_net.get(symbol).unwrap_or(&0)
     }
+    pub fn hedge_policy(&self) -> &HedgePolicy {
+        &self.st.hedge
+    }
+    /// Broker hedge at the LP for the B-book excess (raw lots, signed).
+    pub fn hedge_net(&self, symbol: &str) -> i64 {
+        *self.st.hedge_net.get(symbol).unwrap_or(&0)
+    }
+    /// Hedge orders in flight (raw lots, signed).
+    pub fn hedge_pending(&self, symbol: &str) -> i64 {
+        *self.st.hedge_pending.get(symbol).unwrap_or(&0)
+    }
+    /// Realised hedge-book result, minor units of the symbol's quote currency.
+    pub fn hedge_realized(&self, symbol: &str) -> i128 {
+        *self.st.hedge_realized.get(symbol).unwrap_or(&0)
+    }
+    /// Net B-book client position per symbol (raw lots, signed).
+    pub fn b_book_net(&self, symbol: &str) -> i64 {
+        self.st
+            .positions
+            .values()
+            .filter(|p| p.routing == Routing::BBook && p.symbol == symbol)
+            .map(|p| p.side.sign() * p.volume.raw())
+            .sum()
+    }
+    pub fn flow(&self, account: AccountNo) -> Option<&FlowStats> {
+        self.st.flow.get(&account)
+    }
+    pub fn toxicity(&self, account: AccountNo) -> u8 {
+        self.st.flow.get(&account).map_or(0, FlowStats::toxicity)
+    }
     /// Deal by id.
     pub fn deal(&self, id: u64) -> Option<&Deal> {
         id.checked_sub(1)
@@ -294,10 +340,11 @@ impl Engine {
     ) -> Option<&RoutingRule> {
         let hour = ((self.st.now / 1_000_000_000) % 86_400 / 3_600) as u8;
         let centilots = volume.raw() / 1_000_000;
+        let tox = self.toxicity(account);
         self.st
             .rules
             .iter()
-            .find(|r| r.matches(group, account, symbol, centilots, pending, hour))
+            .find(|r| r.matches(group, account, symbol, centilots, pending, hour, tox))
     }
 
     fn client_quote(&self, g: &GroupConfig, symbol: &str) -> Result<Quote, RiskError> {
@@ -362,10 +409,12 @@ impl Engine {
             }
         }
         for (sym, v) in &self.st.omnibus_net {
-            if *v != *net.get(sym.as_str()).unwrap_or(&0) {
+            let expect = *net.get(sym.as_str()).unwrap_or(&0) + self.hedge_net(sym);
+            if *v != expect {
                 return Err(format!(
-                    "omnibus {sym} {v} != clients {:?}",
-                    net.get(sym.as_str())
+                    "omnibus {sym} {v} != clients {:?} + hedge {}",
+                    net.get(sym.as_str()),
+                    self.hedge_net(sym)
                 ));
             }
         }
@@ -402,6 +451,13 @@ impl Engine {
             }
             Command::SetRules(rules) => {
                 self.st.rules = rules.clone();
+            }
+            Command::SetHedge(policy) => {
+                self.st.hedge = policy.clone();
+                let symbols: Vec<String> = self.st.hedge_net.keys().cloned().collect();
+                for sym in symbols {
+                    self.rebalance_hedge(&sym);
+                }
             }
             Command::OpenAccount { account, group } => {
                 if !self.st.groups.contains_key(group) {
@@ -696,9 +752,20 @@ impl Engine {
         let rule = self
             .match_rule(&acc.group, req.account, &req.symbol, req.volume, pending)
             .cloned();
-        let routing = rule
+        let mut routing = rule
             .as_ref()
             .map_or(g.routing, |r| r.book_for(id, g.routing));
+        let mut rule_tag = rule.as_ref().map(|r| r.id.clone());
+        // B-book exposure guard: over the limit, risk-increasing flow goes A-book.
+        if routing == Routing::BBook
+            && close.is_none()
+            && self.st.hedge.enabled
+            && self.st.hedge.mode == HedgeMode::SwitchToABook
+            && self.b_book_over_limit(&req.symbol, req.account, req.side, req.volume)
+        {
+            routing = Routing::ABook;
+            rule_tag = Some("hedge:limit".into());
+        }
         let order = Order {
             id,
             req,
@@ -715,7 +782,7 @@ impl Engine {
             origin,
             rearm_px: None,
             lp_attempts: 0,
-            rule: rule.as_ref().map(|r| r.id.clone()),
+            rule: rule_tag,
             markup_override: rule.as_ref().and_then(|r| r.markup_points),
             max_slippage_override: rule.as_ref().and_then(|r| r.max_slippage_points),
             partial_fill_override: rule.as_ref().and_then(|r| r.partial_fill),
@@ -969,6 +1036,7 @@ impl Engine {
                 sent_bid: sent.map(|q| q.bid),
                 sent_ask: sent.map(|q| q.ask),
                 lp: None,
+                hedge: false,
             },
         );
         self.router.send(&req);
@@ -1006,6 +1074,188 @@ impl Engine {
         }
     }
 
+    /// Would `side × volume` of `account` push B-book exposure over a limit
+    /// (symbol, client, total)? Risk-reducing orders never do.
+    fn b_book_over_limit(&self, symbol: &str, account: AccountNo, side: Side, volume: Qty) -> bool {
+        let h = &self.st.hedge;
+        let net = self.b_book_net(symbol);
+        let proj = net + side.sign() * volume.raw();
+        if proj.abs() <= net.abs() {
+            return false;
+        }
+        if h.symbol_limit(symbol).is_some_and(|l| proj.abs() > l.raw()) {
+            return true;
+        }
+        if let Some(l) = h.account_limit {
+            let mine: i64 = self
+                .st
+                .positions
+                .values()
+                .filter(|p| {
+                    p.routing == Routing::BBook && p.symbol == symbol && p.account == account
+                })
+                .map(|p| p.side.sign() * p.volume.raw())
+                .sum();
+            if (mine + side.sign() * volume.raw()).abs() > l.raw() {
+                return true;
+            }
+        }
+        if let Some(l) = h.total_limit {
+            let mut total: i64 = 0;
+            for s in self.st.symbols.keys() {
+                total += if s == symbol {
+                    proj.abs()
+                } else {
+                    self.b_book_net(s).abs()
+                };
+            }
+            if total > l.raw() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// HedgeExcess: brings the broker hedge at the LP to its target for the
+    /// symbol — the excess over the limit (× ratio) while over it, zero once
+    /// exposure has fallen to `release_pct` of the limit — counting orders in
+    /// flight, in 0.01-lot steps.
+    fn rebalance_hedge(&mut self, symbol: &str) {
+        let h = &self.st.hedge;
+        if !h.enabled || h.mode != HedgeMode::HedgeExcess {
+            return;
+        }
+        let Some(limit) = h.symbol_limit(symbol).map(|q| q.raw()) else {
+            return;
+        };
+        let net = self.b_book_net(symbol);
+        let cur = self.hedge_net(symbol) + self.hedge_pending(symbol);
+        let target = if net.abs() > limit {
+            let excess = net - net.signum() * limit;
+            -(excess as i128 * h.hedge_ratio_pct as i128 / 100) as i64
+        } else if net.abs() as i128 * 100 <= limit as i128 * h.release_pct as i128 {
+            0
+        } else {
+            cur
+        };
+        const STEP: i64 = 1_000_000; // 0.01 lot
+        let delta = (target - cur) / STEP * STEP;
+        if delta == 0 {
+            return;
+        }
+        let side = if delta > 0 { Side::Buy } else { Side::Sell };
+        self.send_hedge(symbol.to_string(), side, Qty::from_raw(delta.abs()));
+    }
+
+    fn send_hedge(&mut self, symbol: String, side: Side, volume: Qty) {
+        let id = self.st.next_id;
+        self.st.next_id += 1;
+        let req = LpOrderRequest {
+            lp_order_id: id,
+            symbol: symbol.clone(),
+            side,
+            volume,
+            limit: None,
+            all_or_none: false,
+        };
+        let sent = self.st.quotes.get(&symbol);
+        *self.st.hedge_pending.entry(symbol.clone()).or_default() += side.sign() * volume.raw();
+        self.st.lp_orders.insert(
+            id,
+            LpOrder {
+                id,
+                symbol,
+                side,
+                volume,
+                filled: Qty::ZERO,
+                children: Vec::new(),
+                done: false,
+                fills: Vec::new(),
+                created_ts: self.st.now,
+                reject_reason: None,
+                limit: None,
+                sent_bid: sent.map(|q| q.bid),
+                sent_ask: sent.map(|q| q.ask),
+                lp: None,
+                hedge: true,
+            },
+        );
+        self.router.send(&req);
+        self.events.push(Event::LpOrderSent {
+            lp_order_id: id,
+            volume,
+        });
+    }
+
+    /// Fill of a broker hedge order: moves the omnibus and the hedge book;
+    /// a reducing fill realises P&L (broker book vs. LP counterparty).
+    fn on_hedge_fill(
+        &mut self,
+        lp_id: LpOrderId,
+        exec_id: &str,
+        volume: Qty,
+        price: Price,
+    ) -> R<()> {
+        let (symbol, side) = {
+            let lp = self.st.lp_orders.get_mut(&lp_id).expect("lp");
+            lp.filled = Qty::from_raw(lp.filled.raw() + volume.raw());
+            lp.done = lp.filled >= lp.volume;
+            lp.fills.push(LpExec {
+                exec_id: exec_id.to_string(),
+                volume,
+                price,
+                ts: self.st.now,
+            });
+            (lp.symbol.clone(), lp.side)
+        };
+        let signed = side.sign() * volume.raw();
+        *self.st.hedge_pending.entry(symbol.clone()).or_default() -= signed;
+        *self.st.omnibus_net.entry(symbol.clone()).or_default() += signed;
+        let cur = self.hedge_net(&symbol);
+        let avg = *self.st.hedge_avg.get(&symbol).unwrap_or(&0);
+        if cur == 0 || cur.signum() == signed.signum() {
+            // opening / adding: volume-weighted average
+            let total = cur.abs() as i128 + volume.raw() as i128;
+            let new_avg = (avg as i128 * cur.abs() as i128
+                + price.raw() as i128 * volume.raw() as i128)
+                / total;
+            self.st.hedge_avg.insert(symbol.clone(), new_avg as i64);
+        } else {
+            // reducing (possibly flipping): realise on the closed part
+            let closed = cur.abs().min(volume.raw());
+            if let Some(spec) = self.st.symbols.get(&symbol).cloned() {
+                let pos_side = if cur > 0 { Side::Buy } else { Side::Sell };
+                if let Ok(pnl) = risk::pnl_money(
+                    &spec,
+                    pos_side,
+                    Price::from_raw(avg),
+                    price,
+                    Qty::from_raw(closed),
+                    spec.quote,
+                    &self.st.quotes,
+                ) {
+                    *self.st.hedge_realized.entry(symbol.clone()).or_default() += pnl.minor;
+                    let _ = self.post(
+                        TxnKind::RealizedPnl,
+                        format!("hedge:{exec_id}"),
+                        vec![
+                            (BROKER_BOOK, pnl),
+                            (LP_COUNTERPARTY, Money::new(-pnl.minor, pnl.currency)),
+                        ],
+                    );
+                }
+            }
+            if volume.raw() > closed {
+                self.st.hedge_avg.insert(symbol.clone(), price.raw());
+            }
+        }
+        *self.st.hedge_net.entry(symbol.clone()).or_default() += signed;
+        if self.hedge_net(&symbol) == 0 {
+            self.st.hedge_avg.remove(&symbol);
+        }
+        Ok(())
+    }
+
     fn on_lp_fill(&mut self, lp_id: LpOrderId, exec_id: &str, volume: Qty, price: Price) -> R<()> {
         if !self.st.lp_exec_ids.insert(exec_id.to_string()) {
             return Ok(()); // duplicate execution report
@@ -1013,6 +1263,9 @@ impl Engine {
         let lp = self.st.lp_orders.get(&lp_id).ok_or("unknown LP order")?;
         if lp.done {
             return Err("LP order already complete".into());
+        }
+        if lp.hedge {
+            return self.on_hedge_fill(lp_id, exec_id, volume, price);
         }
         let children: Vec<(OrderId, i64)> = lp
             .children
@@ -1065,6 +1318,12 @@ impl Engine {
         }
         lp.done = true;
         lp.reject_reason = Some(reason.to_string());
+        if lp.hedge {
+            let left = lp.side.sign() * (lp.volume.raw() - lp.filled.raw());
+            let sym = lp.symbol.clone();
+            *self.st.hedge_pending.entry(sym.clone()).or_default() -= left;
+            return Ok(());
+        }
         let children = lp.children.clone();
         let was_limit = lp.limit.is_some();
         for c in children {
@@ -1148,6 +1407,12 @@ impl Engine {
         let acc = self.st.accounts[&account].clone();
         let g = self.st.groups[&acc.group].clone();
         let spec = self.st.symbols[&symbol].clone();
+        if let Some(req) = self.st.orders[&id].req.requested_price {
+            // Flow profile: how much better than requested did the client get?
+            let point = spec.point().raw().max(1);
+            let gain = (req.raw() - price.raw()) * side.sign() / point;
+            self.st.flow.entry(account).or_default().record_fill(gain);
+        }
         let mut commission = Money::zero(g.currency);
         // commission per side: the group's model, else the symbol's per-lot amount
         let c = match g.commission {
@@ -1274,6 +1539,7 @@ impl Engine {
             );
         }
         self.balance_event(account);
+        self.rebalance_hedge(&symbol);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1364,6 +1630,12 @@ impl Engine {
             }
         }
         let _ = self.post(TxnKind::RealizedPnl, format!("pnl:{exec}:{pid}"), postings);
+        let hold_secs = self.st.now.saturating_sub(p.opened_ts) / 1_000_000_000;
+        self.st
+            .flow
+            .entry(p.account)
+            .or_default()
+            .record_close(hold_secs, pnl.minor, legs.0);
         let remaining = Qty::from_raw(p.volume.raw() - v.raw());
         if remaining.is_positive() {
             let pm = self.st.positions.get_mut(&pid).expect("position");
