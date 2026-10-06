@@ -600,25 +600,6 @@ fn partial_fill_policies() {
     let o = h.e.order(id).unwrap();
     assert_eq!((o.status, o.filled), (OrderStatus::Cancelled, qty("0.3")));
 
-    // BookRemainder: the rest fills internally at the client price.
-    g.partial_fill = PartialFill::BookRemainder;
-    h.cmd(Command::SetGroup(g.clone()));
-    let id = h.market(1, "b", Side::Buy, "1");
-    let lp = h.router.take()[0].lp_order_id;
-    h.cmd(Command::LpFill {
-        lp_order_id: lp,
-        exec_id: "b1".into(),
-        volume: qty("0.4"),
-        price: px("1.1001"),
-    });
-    h.cmd(Command::LpReject {
-        lp_order_id: lp,
-        reason: "ioc remainder".into(),
-    });
-    let o = h.e.order(id).unwrap();
-    assert_eq!((o.status, o.filled), (OrderStatus::Filled, qty("1")));
-    assert!(h.router.take().is_empty());
-
     // AllOrNone: the LP order goes out fill-or-kill.
     g.partial_fill = PartialFill::AllOrNone;
     h.cmd(Command::SetGroup(g));

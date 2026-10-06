@@ -1006,18 +1006,6 @@ impl Engine {
                     self.send_lp(sym, side, vec![c]);
                     continue;
                 }
-                PartialFill::BookRemainder => {
-                    // The broker book takes the remainder at the client price.
-                    let acc = &self.st.accounts[&o.req.account];
-                    let g = self.st.groups[&acc.group].clone();
-                    // No quote: fall through to cancel.
-                    if let Ok(q) = self.client_quote(&g, &o.req.symbol) {
-                        let price = q.for_side(o.req.side);
-                        let v = o.remaining();
-                        self.fill_child(c, v, price, price);
-                        continue;
-                    }
-                }
                 _ => {}
             }
             let o = &self.st.orders[&c];

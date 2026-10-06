@@ -63,8 +63,6 @@ pub enum PartialFill {
     CancelRemainder,
     /// Send the remainder to the LP again, up to `max_attempts` LP orders in total.
     Retry { max_attempts: u32 },
-    /// Fill the remainder internally at the client price (broker book takes it).
-    BookRemainder,
     /// Fill-or-kill at the LP: all of it or nothing.
     AllOrNone,
 }

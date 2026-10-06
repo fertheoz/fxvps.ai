@@ -279,7 +279,6 @@ pub fn group(g: &GroupConfig, all_symbols: &[String]) -> Value {
         "partialFill": match g.partial_fill {
             PartialFill::CancelRemainder => "cancel",
             PartialFill::Retry { .. } => "retry",
-            PartialFill::BookRemainder => "book",
             PartialFill::AllOrNone => "all_or_none",
         },
         "maxAttempts": match g.partial_fill { PartialFill::Retry { max_attempts } => max_attempts, _ => 3 },
