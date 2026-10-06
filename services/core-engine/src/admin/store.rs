@@ -148,6 +148,9 @@ pub enum AdminCmd {
         group: String,
         details: String,
     },
+    RulesSaved {
+        count: usize,
+    },
     SymbolSaved {
         symbol: String,
         details: String,
@@ -363,6 +366,12 @@ impl AdminState {
             AdminCmd::GroupSaved { group, details } => {
                 self.audit(r, "group.update".into(), group.clone(), details.clone())
             }
+            AdminCmd::RulesSaved { count } => self.audit(
+                r,
+                "rules.update".into(),
+                "routing".into(),
+                format!("{count} rules"),
+            ),
             AdminCmd::SymbolSaved { symbol, details } => {
                 self.audit(r, "symbol.update".into(), symbol.clone(), details.clone())
             }

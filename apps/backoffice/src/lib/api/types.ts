@@ -74,6 +74,33 @@ export interface DashboardSeries {
   execution: { orders: number; fillRate: number; avgClientSlipPts: number; p95LatencyMs: number; p50LatencyMs: number };
 }
 
+/** Engine routing rule (camelCase mirror of risk::RoutingRule). */
+export interface RoutingRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  groups: string[];
+  accounts: number[];
+  symbols: string[];
+  /** Lots (converted to centi-lots on the wire). */
+  minLots: number | null;
+  maxLots: number | null;
+  kind: "any" | "market" | "pending";
+  hoursUtc: [number, number] | null;
+  routing: "ABook" | "BBook" | null;
+  aBookPct: number | null;
+  markupPoints: number | null;
+  maxSlippagePoints: number | null;
+  partialFill: "CancelRemainder" | "AllOrNone" | { Retry: { max_attempts: number } } | null;
+}
+
+export interface RulesDryRun {
+  since: string;
+  rules: { id: string; name: string; enabled: boolean; orders: number; lots: number }[];
+  unmatched: { orders: number; lots: number };
+  samples: { orderId: string; login: number; name: string | null; symbol: string; lots: number; rule: string | null; routing: "A" | "B" }[];
+}
+
 export interface BalanceOpResult {
   id: string;
   status: "applied" | "pending_approval";
@@ -247,6 +274,9 @@ export interface AdminApi {
   setGroup(id: string, group: string, actor: Actor): Promise<Client>;
 
   listGroups(): Promise<Group[]>;
+  listRules(): Promise<RoutingRule[]>;
+  saveRules(rules: RoutingRule[], actor: Actor): Promise<RoutingRule[]>;
+  rulesDryRun(): Promise<RulesDryRun>;
   saveGroup(g: Group, actor: Actor): Promise<Group>;
 
   listSymbols(): Promise<SymbolSpec[]>;

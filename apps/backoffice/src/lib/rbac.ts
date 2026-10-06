@@ -62,6 +62,7 @@ export const ROUTE_PERMISSIONS: Record<string, Permission> = {
   "/": "dashboard.view",
   "/clients": "clients.view",
   "/groups": "groups.view",
+  "/rules": "groups.view",
   "/symbols": "symbols.view",
   "/positions": "positions.view",
   "/risk": "risk.view",

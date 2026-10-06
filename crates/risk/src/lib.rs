@@ -55,6 +55,120 @@ pub enum MarginMode {
     Netting,
 }
 
+/// Which orders a routing rule applies to.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OrderKindFilter {
+    #[default]
+    Any,
+    Market,
+    Pending,
+}
+
+/// One row of the routing rule table: the first enabled rule whose filters all
+/// match an order decides its book and may override the group's markup,
+/// slippage cap and partial-fill policy. Empty lists match everything.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingRule {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub groups: Vec<String>,
+    #[serde(default)]
+    pub accounts: Vec<u64>,
+    #[serde(default)]
+    pub symbols: Vec<String>,
+    /// Lots × 100 (centi-lots) to stay integral; `None` = no bound.
+    #[serde(default)]
+    pub min_centilots: Option<i64>,
+    #[serde(default)]
+    pub max_centilots: Option<i64>,
+    #[serde(default)]
+    pub kind: OrderKindFilter,
+    /// UTC hour window `[from, to)`; wraps past midnight when from > to.
+    #[serde(default)]
+    pub hours_utc: Option<(u8, u8)>,
+    /// Fixed book, or none to use `a_book_pct` / the group default.
+    #[serde(default)]
+    pub routing: Option<Routing>,
+    /// Hybrid: this percentage of matching orders (by order id) goes A-book, the rest B-book.
+    #[serde(default)]
+    pub a_book_pct: Option<u8>,
+    #[serde(default)]
+    pub markup_points: Option<i64>,
+    #[serde(default)]
+    pub max_slippage_points: Option<i64>,
+    #[serde(default)]
+    pub partial_fill: Option<PartialFill>,
+}
+
+impl RoutingRule {
+    /// Does the rule apply to an order of `account` in `group` on `symbol`?
+    pub fn matches(
+        &self,
+        group: &str,
+        account: u64,
+        symbol: &str,
+        centilots: i64,
+        pending: bool,
+        hour_utc: u8,
+    ) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        if !self.groups.is_empty() && !self.groups.iter().any(|g| g == group) {
+            return false;
+        }
+        if !self.accounts.is_empty() && !self.accounts.contains(&account) {
+            return false;
+        }
+        if !self.symbols.is_empty() && !self.symbols.iter().any(|s| s == symbol) {
+            return false;
+        }
+        if self.min_centilots.is_some_and(|m| centilots < m)
+            || self.max_centilots.is_some_and(|m| centilots > m)
+        {
+            return false;
+        }
+        match self.kind {
+            OrderKindFilter::Any => {}
+            OrderKindFilter::Market if pending => return false,
+            OrderKindFilter::Pending if !pending => return false,
+            _ => {}
+        }
+        if let Some((from, to)) = self.hours_utc {
+            let inside = if from <= to {
+                hour_utc >= from && hour_utc < to
+            } else {
+                hour_utc >= from || hour_utc < to
+            };
+            if !inside {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Book for a matching order: fixed routing, else the hybrid split by order id, else `default`.
+    pub fn book_for(&self, order_id: u64, default: Routing) -> Routing {
+        if let Some(r) = self.routing {
+            return r;
+        }
+        match self.a_book_pct {
+            Some(pct) => {
+                if (order_id % 100) < u64::from(pct) {
+                    Routing::ABook
+                } else {
+                    Routing::BBook
+                }
+            }
+            None => default,
+        }
+    }
+}
+
 /// Commission charged per fill (per side), overriding the symbol's per-lot commission.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum GroupCommission {

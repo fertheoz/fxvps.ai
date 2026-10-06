@@ -14,7 +14,7 @@ use money::{Currency, Money, Price, Qty};
 use oms::{Command, Engine, Event};
 use risk::{
     AssetClass, EsmaPreset, GroupCommission, GroupConfig, MarginMode, PartialFill, Routing,
-    SymbolSpec,
+    RoutingRule, SymbolSpec,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -40,6 +40,8 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/approvals/{id}/approve", post(approve))
         .route("/v1/approvals/{id}/reject", post(reject))
         .route("/v1/groups", get(list_groups))
+        .route("/v1/rules", get(list_rules).put(save_rules))
+        .route("/v1/rules/dry-run", get(rules_dry_run))
         .route("/v1/groups/{id}", put(save_group))
         .route("/v1/groups/{id}/apply-preset", post(apply_preset))
         .route("/v1/symbols", get(list_symbols))
@@ -851,6 +853,59 @@ async fn set_group(
 // ---------------------------------------------------------------------------
 // groups / symbols (journaled as engine SetGroup / AddSymbol)
 // ---------------------------------------------------------------------------
+
+async fn list_rules(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "groups.view")?;
+    Ok(Json(ctx.q(views::rules).await?))
+}
+
+async fn save_rules(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(rules): Json<Vec<RoutingRule>>,
+) -> ApiResult {
+    need(&actor, "groups.edit")?;
+    if rules.len() > 200 {
+        return Err(ApiError::bad("at most 200 rules"));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for r in &rules {
+        if r.id.is_empty() || r.id.len() > 32 || !seen.insert(r.id.clone()) {
+            return Err(ApiError::bad("rule ids must be unique, 1-32 characters"));
+        }
+        if r.name.len() > 64 {
+            return Err(ApiError::bad("rule name: at most 64 characters"));
+        }
+        if r.a_book_pct.is_some_and(|p| p > 100) {
+            return Err(ApiError::bad("aBookPct must be 0..100"));
+        }
+        if r.markup_points.is_some_and(|p| !(0..=1000).contains(&p))
+            || r.max_slippage_points
+                .is_some_and(|p| !(0..=1000).contains(&p))
+        {
+            return Err(ApiError::bad("points must be 0..1000"));
+        }
+        if r.hours_utc.is_some_and(|(a, b)| a > 23 || b > 24) {
+            return Err(ApiError::bad("hoursUtc must be within 0..24"));
+        }
+    }
+    let n = rules.len();
+    let mut store = ctx.store.lock().await;
+    ctx.cmd(Command::SetRules(rules)).await?;
+    store.append(&actor, AdminCmd::RulesSaved { count: n })?;
+    drop(store);
+    ctx.notify(&["listRules", "rulesDryRun", "listAudit"]);
+    Ok(Json(ctx.q(views::rules).await?))
+}
+
+async fn rules_dry_run(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "groups.view")?;
+    let since = now_ns().saturating_sub(DAY_NS);
+    let st = ctx.view_state().await;
+    Ok(Json(
+        ctx.q(move |e| views::rules_dry_run(e, &st, since)).await?,
+    ))
+}
 
 async fn list_groups(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "groups.view")?;

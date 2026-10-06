@@ -2,7 +2,7 @@
 
 use ledger::AccountId;
 use money::{Money, Price, Qty};
-pub use risk::{GroupConfig, MarginMode, Routing, Side, SymbolSpec};
+pub use risk::{GroupConfig, MarginMode, PartialFill, Routing, RoutingRule, Side, SymbolSpec};
 use serde::{Deserialize, Serialize};
 
 pub type AccountNo = u64;
@@ -137,6 +137,15 @@ pub struct Order {
     /// LP orders this order has been part of (retries and re-arms send again).
     #[serde(default)]
     pub lp_attempts: u32,
+    /// Routing rule that decided this order (see `RoutingRule`), with its overrides.
+    #[serde(default)]
+    pub rule: Option<String>,
+    #[serde(default)]
+    pub markup_override: Option<i64>,
+    #[serde(default)]
+    pub max_slippage_override: Option<i64>,
+    #[serde(default)]
+    pub partial_fill_override: Option<PartialFill>,
 }
 
 /// Origin of an order (deal reason in the history).
@@ -308,6 +317,8 @@ pub struct LpExec {
 pub enum Command {
     AddSymbol(SymbolSpec),
     SetGroup(GroupConfig),
+    /// Replaces the routing rule table (evaluated top to bottom).
+    SetRules(Vec<RoutingRule>),
     OpenAccount {
         account: AccountNo,
         group: String,

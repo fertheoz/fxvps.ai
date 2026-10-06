@@ -2,8 +2,13 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, LpConfig, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
+
+let mockRules: RoutingRule[] = [
+  { id: "vip-a", name: "VIP → A-book", enabled: true, groups: ["pro/ecn"], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: "ABook", aBookPct: null, markupPoints: 2, maxSlippagePoints: null, partialFill: null },
+  { id: "big-split", name: "Large tickets 70/30", enabled: true, groups: [], accounts: [], symbols: [], minLots: 5, maxLots: null, kind: "market", hoursUtc: null, routing: null, aBookPct: 70, markupPoints: null, maxSlippagePoints: 10, partialFill: null },
+];
 
 export class ForbiddenError extends Error {
   constructor(public permission: string) {
@@ -268,6 +273,21 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
 
     async listGroups() { return delay(s.groups); },
+    async listRules() { return delay(mockRules); },
+    async saveRules(rules: RoutingRule[], actor) {
+      guard(actor, "groups.edit");
+      mockRules = rules;
+      audit(actor, "rules.update", "routing", `${rules.length} rules`);
+      return delay(mockRules);
+    },
+    async rulesDryRun(): Promise<RulesDryRun> {
+      return delay({
+        since: new Date(SEED_NOW - 864e5).toISOString(),
+        rules: mockRules.map((r, i) => ({ id: r.id, name: r.name, enabled: r.enabled, orders: r.enabled ? 40 - i * 7 : 0, lots: r.enabled ? 12.5 - i : 0 })),
+        unmatched: { orders: 120, lots: 48.2 },
+        samples: s.trades.slice(0, 5).map((x) => ({ orderId: x.id, login: x.login, name: null, symbol: x.symbol, lots: x.lots, rule: mockRules[0]?.name ?? null, routing: x.book })),
+      });
+    },
     async saveGroup(g: Group, actor) {
       guard(actor, "groups.edit");
       const v = GroupSchema.parse(g);

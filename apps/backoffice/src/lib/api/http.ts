@@ -1,6 +1,18 @@
-import type { AdminApi, Actor, ApprovalRequest } from "./types";
+import type { AdminApi, Actor, ApprovalRequest, RoutingRule } from "./types";
 
 /** Error returned by the admin API: `{ error: { code, message, permission? } }`. */
+
+/** Wire form of a routing rule: lots travel as centi-lots. */
+type WireRule = Omit<RoutingRule, "minLots" | "maxLots"> & { minCentilots: number | null; maxCentilots: number | null };
+const toWireRule = (r: RoutingRule): WireRule => {
+  const { minLots, maxLots, ...rest } = r;
+  return { ...rest, minCentilots: minLots === null ? null : Math.round(minLots * 100), maxCentilots: maxLots === null ? null : Math.round(maxLots * 100) };
+};
+const fromWireRule = (w: WireRule): RoutingRule => {
+  const { minCentilots, maxCentilots, ...rest } = w;
+  return { ...rest, minLots: minCentilots === null ? null : minCentilots / 100, maxLots: maxCentilots === null ? null : maxCentilots / 100 };
+};
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -82,6 +94,9 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     setKyc: (id, kyc, actor) => call("PATCH", `/v1/accounts/${enc(id)}/kyc`, { kyc }, actor),
     setGroup: (id, group, actor) => call("PATCH", `/v1/accounts/${enc(id)}/group`, { group }, actor),
     listGroups: () => call("GET", "/v1/groups"),
+    listRules: async () => (await call<WireRule[]>("GET", "/v1/rules")).map(fromWireRule),
+    saveRules: async (rules, actor) => (await call<WireRule[]>("PUT", "/v1/rules", rules.map(toWireRule), actor)).map(fromWireRule),
+    rulesDryRun: () => call("GET", "/v1/rules/dry-run"),
     saveGroup: (g, actor) => call("PUT", `/v1/groups/${enc(g.id)}`, g, actor),
     listSymbols: () => call("GET", "/v1/symbols"),
     saveSymbol: (s, actor) => call("PUT", `/v1/symbols/${enc(s.name)}`, s, actor),
