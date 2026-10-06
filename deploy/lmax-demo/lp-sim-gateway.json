@@ -1,0 +1,39 @@
+{
+  "lp": "SIM",
+  "heartbeat_secs": 30,
+  "market_depth": 5,
+  "reconnect_delay_ms": 3000,
+  "max_logon_failures": 0,
+  "enabled": true,
+  "security_id_source": "8",
+  "store_dir": null,
+  "md": {
+    "addr": "127.0.0.1:9880",
+    "sender_comp_id": "FXVPS-SIM-MD",
+    "target_comp_id": "SIMMD",
+    "username": "demo",
+    "password": "demo",
+    "reset_on_logon": true,
+    "tls": null
+  },
+  "trade": {
+    "addr": "127.0.0.1:9881",
+    "sender_comp_id": "FXVPS-SIM-TRD",
+    "target_comp_id": "SIMTRD",
+    "username": "demo",
+    "password": "demo",
+    "reset_on_logon": true,
+    "tls": null
+  },
+  "instruments": [
+    { "symbol": "EUR/USD", "security_id": "4001", "tick_size": "0.00001", "qty_step": "1", "contract_size": 1 },
+    { "symbol": "GBP/USD", "security_id": "4002", "tick_size": "0.00001", "qty_step": "1", "contract_size": 1 },
+    { "symbol": "USD/JPY", "security_id": "4004", "tick_size": "0.001", "qty_step": "1", "contract_size": 1 },
+    { "symbol": "AUD/USD", "security_id": "4007", "tick_size": "0.00001", "qty_step": "1", "contract_size": 1 },
+    { "symbol": "USD/CHF", "security_id": "4003", "tick_size": "0.00001", "qty_step": "1", "contract_size": 1 },
+    { "symbol": "USD/CAD", "security_id": "4005", "tick_size": "0.00001", "qty_step": "1", "contract_size": 1 },
+    { "symbol": "NZD/USD", "security_id": "4006", "tick_size": "0.00001", "qty_step": "1", "contract_size": 1 },
+    { "symbol": "XAU/USD", "security_id": "4100", "tick_size": "0.01", "qty_step": "1", "contract_size": 1 }
+  ],
+  "nats": null
+}

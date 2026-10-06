@@ -159,6 +159,8 @@ export interface Statement {
 /** An order sent to the LP, its executions and the client orders it was allocated to. */
 export interface LpExecution {
   id: string;
+  /** LP that took the order (multi-LP); null in journals from before aggregation. */
+  lp?: string | null;
   symbol: string;
   side: "buy" | "sell";
   lots: number;
@@ -294,6 +296,11 @@ export interface AdminApi {
   reconnect(sessionId: string, actor: Actor): Promise<FixSession>;
   /** Managed fix-gateway config; passwords are never returned (`password_set` instead). */
   getLpConfig(): Promise<LpConfig | null>;
+  /** Multi-LP aggregation policy + runtime per LP (404 when no in-process stack). */
+  getLpAggregation(): Promise<LpAggregation>;
+  saveLpAggregation(c: LpAggregationInput, actor: Actor): Promise<LpAggregation>;
+  /** Per-LP execution quality (fill rate, rejects, slippage, latency). */
+  lpReport(): Promise<LpReportRow[]>;
   /** Empty/absent password keeps the stored one. Restarts the FIX sessions. */
   saveLpConfig(c: LpConfig, actor: Actor): Promise<LpConfig>;
 
@@ -343,6 +350,63 @@ export interface LpInstrument {
   qty_step?: string;
   /** Units per LP OrderQty: 1 = units, 10000 = LMAX FX contracts. */
   contract_size?: number;
+}
+
+export type AggMode = "best_price" | "vwap" | "priority" | "round_robin";
+export const AGG_MODES: readonly AggMode[] = ["best_price", "vwap", "priority", "round_robin"];
+
+/** One LP's policy as edited in the console (lots as decimal strings, null = no limit). */
+export interface LpPolicy {
+  name: string;
+  enabled: boolean;
+  priority: number;
+  minLots: string | null;
+  maxLots: string | null;
+  /** Core symbols (EURUSD); empty = all the LP quotes. */
+  symbols: string[];
+}
+
+export interface LpPolicyRuntime extends Omit<LpPolicy, "minLots" | "maxLots"> {
+  minLots: number | null;
+  maxLots: number | null;
+  /** Symbols with a current book. */
+  quoting: number;
+  /** Symbols excluded by the deviation guard right now. */
+  deviating: string[];
+  lastQuoteAt: string | null;
+  mdUp: boolean;
+  tradeUp: boolean;
+}
+
+export interface LpAggregation {
+  mode: AggMode;
+  maxDeviationPoints: number;
+  lps: LpPolicyRuntime[];
+}
+
+export interface LpAggregationInput {
+  mode: AggMode;
+  maxDeviationPoints: number;
+  lps: LpPolicy[];
+}
+
+export interface LpReportRow {
+  lp: string;
+  orders: number;
+  filled: number;
+  partial: number;
+  rejected: number;
+  working: number;
+  requestedLots: number;
+  filledLots: number;
+  fillRate: number;
+  rejectRate: number;
+  avgSlipPoints: number;
+  p95SlipPoints: number;
+  p50LatencyMs: number;
+  p95LatencyMs: number;
+  lastFillAt: string | null;
+  symbols: number;
 }
 
 /** fix-gateway `GatewayConfig`. */

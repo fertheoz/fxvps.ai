@@ -1,5 +1,5 @@
-//! In-process trading stack: fix-gateway -> core-engine (with
-//! [`FixLpRouter`]) -> [`InProcessCore`]. Used by client-gateway `--demo`
+//! In-process trading stack: one fix-gateway per LP -> [`Aggregator`] ->
+//! core-engine (with [`AggLpRouter`]) -> [`InProcessCore`]. Used by client-gateway `--demo`
 //! and by tests; production splits these into processes (NATS follow-up).
 
 use std::path::PathBuf;
@@ -13,7 +13,8 @@ use risk::{AssetClass, GroupConfig, MarginMode, Routing, SymbolSpec};
 use tokio::sync::broadcast;
 
 use crate::api::{AccountNames, CoreError, InProcessCore};
-use crate::lp_fix::{run_bridge, FixLpRouter, SymbolMap};
+use crate::lp_agg::{AggConfig, Aggregator};
+use crate::lp_fix::{run_bridge, AggLpRouter, LpLink, SymbolMap};
 use crate::output::Publisher;
 use crate::{spawn_with, EngineHandle, LpFeedback, LpMode, Settings};
 
@@ -144,7 +145,12 @@ pub fn core_symbol(lp_symbol: &str) -> String {
 
 #[derive(Clone, Debug)]
 pub struct StackConfig {
+    /// Primary LP (its instruments seed the engine symbols).
     pub gateway: GatewayConfig,
+    /// Further LPs aggregated with the primary (stage 6); distinct `lp` names.
+    pub extra_gateways: Vec<GatewayConfig>,
+    /// Initial aggregation policy (the admin API changes it at runtime).
+    pub aggregation: AggConfig,
     pub data_dir: PathBuf,
     pub snapshot_every: u64,
     /// Applied when the journal holds no accounts yet.
@@ -159,6 +165,8 @@ impl StackConfig {
     pub fn new(gateway: GatewayConfig, data_dir: impl Into<PathBuf>) -> StackConfig {
         StackConfig {
             gateway,
+            extra_gateways: Vec::new(),
+            aggregation: AggConfig::default(),
             data_dir: data_dir.into(),
             snapshot_every: 1_000,
             seed: None,
@@ -185,37 +193,57 @@ pub enum StackError {
 pub struct CoreStack {
     pub core: Arc<InProcessCore>,
     pub engine: EngineHandle,
-    gateway: GatewayHandle,
+    /// Shared multi-LP book and policy (admin API `/v1/lp/aggregation`).
+    pub agg: Arc<Aggregator>,
+    gateways: Vec<GatewayHandle>,
     writer: std::thread::JoinHandle<()>,
-    bridge: tokio::task::JoinHandle<()>,
+    bridges: Vec<tokio::task::JoinHandle<()>>,
+    status: std::sync::Arc<std::sync::RwLock<Vec<fix_gateway::SessionStatus>>>,
+    status_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl CoreStack {
     pub async fn start(cfg: StackConfig) -> Result<CoreStack, StackError> {
-        let mut symbols = SymbolMap::default();
-        for i in &cfg.gateway.instruments {
-            // LP OrderQty per engine lot (100 000 units): LMAX FX contracts are
-            // 10 000 units, so 1 lot = 10 contracts; contract_size 1 = units.
-            let (lot, cs) = (lot_units(&i.symbol), i.contract_size.max(1));
-            if lot % cs != 0 {
-                return Err(StackError::Config(format!(
-                    "{}: contract_size {cs} does not divide a {lot}-unit lot",
-                    i.symbol
-                )));
+        let all: Vec<&GatewayConfig> = std::iter::once(&cfg.gateway)
+            .chain(cfg.extra_gateways.iter())
+            .collect();
+        let mut lp_names = std::collections::BTreeSet::new();
+        for g in &all {
+            if !lp_names.insert(g.lp.as_str()) {
+                return Err(StackError::Config(format!("duplicate LP name {}", g.lp)));
             }
-            symbols.insert(&core_symbol(&i.symbol), &i.symbol, lot / cs);
         }
-        let symbols = Arc::new(symbols);
-        let gateway = fix_gateway::start(cfg.gateway.clone())?;
-        // subscribe before anything else so the first MD snapshot is not missed
-        let gw_events = gateway.subscribe();
+        let agg = Arc::new(Aggregator::new(cfg.aggregation.clone()));
         let feedback = LpFeedback::default();
-        let router = FixLpRouter::new(
-            gateway.orders(),
-            feedback.clone(),
-            symbols.clone(),
-            cfg.lp_prefix.clone(),
-        );
+        let mut gateways = Vec::new();
+        let mut links = Vec::new();
+        let mut subs = Vec::new();
+        for g in &all {
+            let mut symbols = SymbolMap::default();
+            for i in &g.instruments {
+                // LP OrderQty per engine lot (100 000 units): LMAX FX contracts are
+                // 10 000 units, so 1 lot = 10 contracts; contract_size 1 = units.
+                let (lot, cs) = (lot_units(&i.symbol), i.contract_size.max(1));
+                if lot % cs != 0 {
+                    return Err(StackError::Config(format!(
+                        "{} {}: contract_size {cs} does not divide a {lot}-unit lot",
+                        g.lp, i.symbol
+                    )));
+                }
+                symbols.insert(&core_symbol(&i.symbol), &i.symbol, lot / cs);
+            }
+            let symbols = Arc::new(symbols);
+            let gateway = fix_gateway::start((*g).clone())?;
+            // subscribe before anything else so the first MD snapshot is not missed
+            subs.push((g.lp.clone(), gateway.subscribe(), symbols.clone()));
+            links.push(LpLink {
+                name: g.lp.clone(),
+                orders: gateway.orders(),
+                symbols,
+            });
+            gateways.push(gateway);
+        }
+        let router = AggLpRouter::new(links, agg.clone(), feedback.clone(), cfg.lp_prefix.clone());
         let names = AccountNames::default();
         if let Some(seed) = &cfg.seed {
             for (n, no) in seed.all_accounts() {
@@ -239,12 +267,17 @@ impl CoreStack {
             },
             Some(publisher),
         )?;
-        // Instruments added to the LP config after the first start become
+        // Instruments of every LP (added after the first start too) become
         // engine symbols on the next start (the seed only runs once).
-        for i in &cfg.gateway.instruments {
+        let mut seen = std::collections::BTreeSet::new();
+        for i in all.iter().flat_map(|g| g.instruments.iter()) {
             let Some(spec) = fx_spec(&i.symbol, i.tick_size) else {
                 continue;
             };
+            if !seen.insert(spec.symbol.clone()) {
+                continue;
+            }
+            agg.set_point(&spec.symbol, spec.point());
             let name = spec.symbol.clone();
             let known = engine
                 .read(move |e| e.symbols().any(|x| x.symbol == name))
@@ -275,33 +308,73 @@ impl CoreStack {
                 }
             }
         }
-        let bridge = tokio::spawn(run_bridge(
-            engine.clone(),
-            gw_events,
-            symbols,
-            cfg.lp_prefix.clone(),
-            events.clone(),
-        ));
+        let bridges = subs
+            .into_iter()
+            .map(|(lp, rx, symbols)| {
+                tokio::spawn(run_bridge(
+                    engine.clone(),
+                    rx,
+                    symbols,
+                    cfg.lp_prefix.clone(),
+                    events.clone(),
+                    lp,
+                    agg.clone(),
+                ))
+            })
+            .collect();
+        // One session table over all gateways (admin API `/v1/lp/sessions`):
+        // the single gateway's own table, or a merged copy refreshed twice a second.
+        let (status, status_task) = if gateways.len() == 1 {
+            (gateways[0].status_source(), None)
+        } else {
+            let sources: Vec<_> = gateways.iter().map(|g| g.status_source()).collect();
+            let merged = Arc::new(std::sync::RwLock::new(Vec::new()));
+            let w = merged.clone();
+            let task = tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_millis(500));
+                loop {
+                    tick.tick().await;
+                    let rows: Vec<fix_gateway::SessionStatus> = sources
+                        .iter()
+                        .flat_map(|s| s.read().map(|t| t.clone()).unwrap_or_default())
+                        .collect();
+                    if let Ok(mut t) = w.write() {
+                        *t = rows;
+                    }
+                }
+            });
+            (merged, Some(task))
+        };
         let core = Arc::new(InProcessCore::new(engine.clone(), events, names).await?);
         Ok(CoreStack {
             core,
             engine,
-            gateway,
+            agg,
+            gateways,
             writer,
-            bridge,
+            bridges,
+            status,
+            status_task,
         })
     }
 
-    /// FIX session table of the in-process gateway (admin API `/v1/lp/sessions`).
+    /// FIX session table of the in-process gateways (admin API `/v1/lp/sessions`).
     pub fn lp_status(&self) -> std::sync::Arc<std::sync::RwLock<Vec<fix_gateway::SessionStatus>>> {
-        self.gateway.status_source()
+        self.status.clone()
     }
 
     /// Stops the bridge, the FIX sessions and the engine (final snapshot).
     pub async fn shutdown(self) {
-        self.bridge.abort();
-        let _ = self.bridge.await;
-        self.gateway.shutdown().await;
+        for b in self.bridges {
+            b.abort();
+            let _ = b.await;
+        }
+        if let Some(t) = self.status_task {
+            t.abort();
+        }
+        for g in self.gateways {
+            g.shutdown().await;
+        }
         self.engine.shutdown();
         let _ = tokio::task::spawn_blocking(move || self.writer.join()).await;
     }

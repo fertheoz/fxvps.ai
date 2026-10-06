@@ -302,6 +302,10 @@ pub struct LpOrder {
     pub sent_bid: Option<Price>,
     #[serde(default)]
     pub sent_ask: Option<Price>,
+    /// LP that took the order (`Command::LpRouted`); `None` before the
+    /// router answered or in single-LP journals written before stage 6.
+    #[serde(default)]
+    pub lp: Option<String>,
 }
 
 /// One LP execution report applied to an [`LpOrder`].
@@ -377,6 +381,12 @@ pub enum Command {
     LpReject {
         lp_order_id: LpOrderId,
         reason: String,
+    },
+    /// The router handed the omnibus order to this LP (journaled so a
+    /// replay reproduces the per-LP reports without the router).
+    LpRouted {
+        lp_order_id: LpOrderId,
+        lp: String,
     },
     /// Sends aggregated A-book orders (when aggregation is enabled).
     FlushLp,

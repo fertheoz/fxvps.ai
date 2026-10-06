@@ -173,6 +173,10 @@ pub enum AdminCmd {
     LpConfigSaved {
         details: String,
     },
+    /// Multi-LP aggregation policy (applied to the running aggregator too).
+    AggregationSaved {
+        cfg: crate::lp_agg::AggConfig,
+    },
     AccountGroupSet {
         account: u64,
         group: String,
@@ -207,6 +211,9 @@ pub struct AdminState {
     pub profiles: BTreeMap<u64, ClientProfile>,
     pub users: BTreeMap<String, AdminUserRec>,
     pub settings: SettingsRec,
+    /// Multi-LP aggregation policy (stage 6); `None` = engine default.
+    #[serde(default)]
+    pub aggregation: Option<crate::lp_agg::AggConfig>,
     /// Oldest first.
     pub audit: Vec<AuditRec>,
 }
@@ -352,6 +359,20 @@ impl AdminState {
             }
             AdminCmd::LpConfigSaved { details } => {
                 self.audit(r, "lp.config".into(), "fix-gateway".into(), details.clone())
+            }
+            AdminCmd::AggregationSaved { cfg } => {
+                self.aggregation = Some(cfg.clone());
+                let lps: Vec<String> = cfg
+                    .lps
+                    .iter()
+                    .map(|p| format!("{}{}", p.name, if p.enabled { "" } else { " (off)" }))
+                    .collect();
+                self.audit(
+                    r,
+                    "lp.aggregation".into(),
+                    "aggregator".into(),
+                    format!("{:?}; {}", cfg.mode, lps.join(", ")),
+                )
             }
             AdminCmd::AccountGroupSet {
                 account,

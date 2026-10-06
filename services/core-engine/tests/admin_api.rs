@@ -86,6 +86,7 @@ impl T {
         cfg.lp_status = Some(std::sync::Arc::new(std::sync::RwLock::new(vec![
             fix_gateway::SessionStatus {
                 kind: fix_gateway::SessionKind::Trading,
+                lp: "LMAX".into(),
                 sender_comp_id: "FXVPS".into(),
                 target_comp_id: "LMAX".into(),
                 logged_on: true,

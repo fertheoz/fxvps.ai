@@ -40,6 +40,10 @@ pub struct SimInstrument {
     pub volatility_ticks: i64,
     /// Size of the best level; level `i` carries `(i + 1) * level_size`.
     pub level_size: Qty,
+    /// Pull towards `initial_mid` per step (ticks); 0 = pure random walk.
+    /// Keeps a simulated LP near a real one when both feed the aggregator.
+    #[serde(default)]
+    pub revert_ticks: i64,
 }
 
 fn default_tick() -> u64 {
@@ -118,6 +122,7 @@ impl SimConfig {
                 spread_ticks: 2,
                 volatility_ticks: 2,
                 level_size: Fixed::from_int(1_000_000),
+                revert_ticks: 0,
             }],
         }
     }

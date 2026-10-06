@@ -54,17 +54,28 @@ iyileştirme), komisyon (lot/işlem/notional bps, min-maks), hacim kademeli
 komisyon. Konsolda "Kazanç kalemleri" sihirbazı: her kalem tek kart, önizleme
 ("bu ayarla dünkü akışta gelir X olurdu" — Etap 1 verisinden).
 
-### Etap 5 — Kural motoru (hibrit yönlendirme)
+### Etap 5 — Kural motoru (hibrit yönlendirme) ✅ (#106)
 Sıralı kurallar: *müşteri / grup / sembol / hacim / emir tipi / saat* →
 *defter (A/B/yüzde A)*, *markup profili*, *slippage profili*, *LP*. İlk eşleşen
 kazanır. Konsolda sürükle-bırak liste + kuru koşum ("son 24 saatte hangi emir
 hangi kurala düşerdi").
 
-### Etap 6 — Çoklu LP ve agregasyon
+### Etap 6 — Çoklu LP ve agregasyon ✅ (LP simülatörü ikinci LP; simülatör kalıcı)
 İkinci FIX oturumu (önce LMAX ikinci hesap / LP simülatörü). Agregasyon
 defteri; yönlendirme: *best price*, *VWAP (hacme göre)*, *öncelikli LP*,
 *round-robin*; LP bazında min/max emir, sembol haritası, kesme (kill switch).
 Rapor: LP bazında dolum oranı, kayma, red, gecikme karşılaştırması.
+
+Yapılan: `FIX_LP_FILES` ile LP başına bir fix-gateway; `lp_agg::Aggregator`
+(LP bazında defter → motor birleşik en iyi alış/satış'ı günlükler, müşteri
+birleşik derinliği görür); `AggLpRouter` kip + politika ile LP seçer, kapalı
+kanalda sıradakine düşer, seçimi `Command::LpRouted` ile günlükler;
+LP başına kill switch / öncelik / min-maks lot / sembol listesi; sapma
+koruması (öncelik-1 LP'den N puan uzak LP yok sayılır, çapraz defterde
+referansa dönülür). Konsol: LP sayfası → Agregasyon kartı + LP performansı
+(`/v1/lp/aggregation`, `/v1/reports/lp`), LP icralarında LP sütunu.
+Sonraki: simülatörün gerçek fiyatı izlemesi (follow) ve konsoldan senaryo
+tetikleme (şok, ret, gecikme) — simülatör test aracı olarak kalıcı.
 
 ### Etap 7 — B-book ileri yönetim
 Maruziyet limitleri (sembol/müşteri/toplam) aşılınca otomatik hedge (A'ya

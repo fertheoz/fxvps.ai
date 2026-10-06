@@ -575,6 +575,11 @@ impl Engine {
                 lp_order_id,
                 reason,
             } => self.on_lp_reject(*lp_order_id, reason)?,
+            Command::LpRouted { lp_order_id, lp } => {
+                if let Some(l) = self.st.lp_orders.get_mut(lp_order_id) {
+                    l.lp = Some(lp.clone());
+                }
+            }
             Command::FlushLp => self.flush_lp(),
             Command::Rollover => self.rollover()?,
             Command::Tick => {}
@@ -963,6 +968,7 @@ impl Engine {
                 limit,
                 sent_bid: sent.map(|q| q.bid),
                 sent_ask: sent.map(|q| q.ask),
+                lp: None,
             },
         );
         self.router.send(&req);

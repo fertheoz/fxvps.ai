@@ -1,0 +1,106 @@
+# Second LP of the demo platform: the in-house LP simulator (stage 6, multi-LP
+# aggregation). Permanent part of the stack: it stays for aggregation demos and
+# for tests the console can drive later (price shocks, rejects, latency).
+# Loopback only; "demo"/"demo" are simulator credentials, not secrets.
+# Mids start at LMAX's closes of 6 Oct 2026 and random-walk with a pull back
+# to the start (revert_ticks), so the simulated LP stays near the real one.
+
+tick_interval_ms = 250
+depth = 5
+seed = 2026
+security_id_source = "8"
+
+[md]
+listen = "127.0.0.1:9880"
+comp_id = "SIMMD"
+client_comp_id = "FXVPS-SIM-MD"
+username = "demo"
+password = "demo"
+
+[trade]
+listen = "127.0.0.1:9881"
+comp_id = "SIMTRD"
+client_comp_id = "FXVPS-SIM-TRD"
+username = "demo"
+password = "demo"
+
+# Sizes are units (gateway contract_size 1): best level 1 000 000 = 10 lots.
+[[instruments]]
+symbol = "EUR/USD"
+security_id = "4001"
+initial_mid = "1.12485"
+tick_size = "0.00001"
+spread_ticks = 3
+volatility_ticks = 3
+level_size = "1000000"
+revert_ticks = 1
+
+[[instruments]]
+symbol = "GBP/USD"
+security_id = "4002"
+initial_mid = "1.32640"
+tick_size = "0.00001"
+spread_ticks = 4
+volatility_ticks = 4
+level_size = "1000000"
+revert_ticks = 1
+
+[[instruments]]
+symbol = "USD/JPY"
+security_id = "4004"
+initial_mid = "158.117"
+tick_size = "0.001"
+spread_ticks = 4
+volatility_ticks = 4
+level_size = "1000000"
+revert_ticks = 1
+
+[[instruments]]
+symbol = "AUD/USD"
+security_id = "4007"
+initial_mid = "0.69760"
+tick_size = "0.00001"
+spread_ticks = 4
+volatility_ticks = 3
+level_size = "1000000"
+revert_ticks = 1
+
+[[instruments]]
+symbol = "USD/CHF"
+security_id = "4003"
+initial_mid = "0.83250"
+tick_size = "0.00001"
+spread_ticks = 4
+volatility_ticks = 3
+level_size = "1000000"
+revert_ticks = 1
+
+[[instruments]]
+symbol = "USD/CAD"
+security_id = "4005"
+initial_mid = "1.42440"
+tick_size = "0.00001"
+spread_ticks = 5
+volatility_ticks = 4
+level_size = "1000000"
+revert_ticks = 1
+
+[[instruments]]
+symbol = "NZD/USD"
+security_id = "4006"
+initial_mid = "0.56159"
+tick_size = "0.00001"
+spread_ticks = 5
+volatility_ticks = 3
+level_size = "1000000"
+revert_ticks = 1
+
+[[instruments]]
+symbol = "XAU/USD"
+security_id = "4100"
+initial_mid = "4146.55"
+tick_size = "0.01"
+spread_ticks = 30
+volatility_ticks = 15
+level_size = "10000"
+revert_ticks = 3

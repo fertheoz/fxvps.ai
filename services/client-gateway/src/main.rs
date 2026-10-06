@@ -87,6 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut fix_handle = None;
     let mut admin_engine = None;
     let mut lp_status = None;
+    let mut lp_agg = None;
     let hub: Arc<Hub> = if demo {
         let d = Demo::start(cfg, auth, None).await?;
         let hub = d.hub.clone();
@@ -95,9 +96,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if let Some(gw_cfg) = gw_cfg {
         // fix-gateway + core-engine in-process against a configured LP; the
         // journal lives in --data-dir. Fresh journals get the demo seed (dev use).
-        let instruments = gw_cfg.instruments.clone();
+        let mut instruments = gw_cfg.instruments.clone();
         let mut st = StackConfig::new(gw_cfg.clone(), &data_dir);
         st.seed = Some(demo_seed(&cfg, &gw_cfg)?);
+        // Further LPs (stage 6): `FIX_LP_FILES=a.json,b.toml`, aggregated with the primary.
+        for path in std::env::var("FIX_LP_FILES")
+            .ok()
+            .into_iter()
+            .flat_map(|v| v.split(',').map(str::to_string).collect::<Vec<_>>())
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+        {
+            let g = if path.ends_with(".json") {
+                serde_json::from_slice::<fix_gateway::GatewayConfig>(&std::fs::read(&path)?)?
+            } else {
+                fix_gateway::GatewayConfig::load(&path)?
+            };
+            if !g.enabled {
+                tracing::warn!(lp = %g.lp, path, "additional LP paused (enabled=false)");
+                continue;
+            }
+            tracing::info!(lp = %g.lp, path, instruments = g.instruments.len(), "additional LP");
+            for i in &g.instruments {
+                if !instruments.iter().any(|x| x.symbol == i.symbol) {
+                    instruments.push(i.clone());
+                }
+            }
+            st.extra_gateways.push(g);
+        }
         let stack = CoreStack::start(st).await?;
         let core: Arc<dyn CoreApi> = stack.core.clone();
         let hub = Hub::with_instruments(cfg, auth, &instruments, Some(core.clone()));
@@ -132,6 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         admin_engine = Some(stack.engine.clone());
         lp_status = Some(stack.lp_status());
+        lp_agg = Some(stack.agg.clone());
         fix_handle = Some(stack);
         hub
     } else {
@@ -182,6 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut acfg = admin::AdminConfig::new(&data_dir).with_env(flag("CORE_DEV_AUTH"))?;
         let table = lp_status.clone().unwrap_or_default();
         acfg.lp_status = Some(table.clone());
+        acfg.agg = lp_agg.clone();
         if let Some(path) = &managed_path {
             let token = std::env::var("FIX_ADMIN_TOKEN")
                 .ok()

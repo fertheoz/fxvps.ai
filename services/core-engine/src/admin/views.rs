@@ -662,6 +662,7 @@ pub fn lp_executions(e: &Engine) -> Value {
                 .collect();
             json!({
                 "id": l.id.to_string(),
+                "lp": l.lp,
                 "symbol": l.symbol,
                 "side": side_str(l.side),
                 "lots": qty_f(l.volume),
@@ -761,6 +762,148 @@ pub fn revenue(e: &Engine, since_ns: u64) -> Value {
 
 /// FIX session rows in the back office `FixSession` shape. Sequence numbers
 /// and latency are not tracked by the gateway yet and are reported as 0.
+/// Aggregation policy plus runtime per LP (`GET /v1/lp/aggregation`).
+pub fn lp_aggregation(
+    agg: &crate::lp_agg::Aggregator,
+    sessions: &[fix_gateway::SessionStatus],
+) -> Value {
+    let cfg = agg.config();
+    let lps: Vec<Value> = agg
+        .runtime()
+        .into_iter()
+        .map(|r| {
+            let up = |kind: fix_gateway::SessionKind| {
+                sessions
+                    .iter()
+                    .any(|s| s.lp == r.name && s.kind == kind && s.logged_on)
+            };
+            json!({
+                "name": r.name,
+                "enabled": r.policy.enabled,
+                "priority": r.policy.priority,
+                "minLots": r.policy.min_lots.map(qty_f),
+                "maxLots": r.policy.max_lots.map(qty_f),
+                "symbols": r.policy.symbols,
+                "quoting": r.quoting,
+                "deviating": r.deviating,
+                "lastQuoteAt": (r.last_quote_ns > 0).then(|| iso(r.last_quote_ns)),
+                "mdUp": up(fix_gateway::SessionKind::MarketData),
+                "tradeUp": up(fix_gateway::SessionKind::Trading),
+            })
+        })
+        .collect();
+    json!({
+        "mode": cfg.mode,
+        "maxDeviationPoints": cfg.max_deviation_points,
+        "lps": lps,
+    })
+}
+
+fn lp_pctl(v: &mut [f64], q: f64) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let i = ((v.len() as f64 - 1.0) * q).round() as usize;
+    v[i.min(v.len() - 1)]
+}
+
+/// Per-LP execution quality (`GET /v1/reports/lp`): fill rate, rejects,
+/// slippage against the quote at send time (points), first-fill latency.
+pub fn lp_report(e: &Engine) -> Value {
+    #[derive(Default)]
+    struct Acc {
+        orders: u64,
+        filled: u64,
+        partial: u64,
+        rejected: u64,
+        working: u64,
+        req_lots: f64,
+        fill_lots: f64,
+        slip: Vec<f64>,
+        lat: Vec<f64>,
+        last: u64,
+        symbols: std::collections::BTreeSet<String>,
+    }
+    let points: BTreeMap<String, f64> = e
+        .symbols()
+        .map(|s| (s.symbol.clone(), price_f(s.point())))
+        .collect();
+    let mut by: BTreeMap<String, Acc> = BTreeMap::new();
+    for l in e.lp_orders() {
+        let a = by
+            .entry(l.lp.clone().unwrap_or_else(|| "unassigned".into()))
+            .or_default();
+        a.orders += 1;
+        a.req_lots += qty_f(l.volume);
+        let lots: f64 = l.fills.iter().map(|f| qty_f(f.volume)).sum();
+        a.fill_lots += lots;
+        if lots <= 0.0 && l.reject_reason.is_some() {
+            a.rejected += 1;
+        } else if !l.done {
+            a.working += 1;
+        } else if lots + 1e-9 < qty_f(l.volume) {
+            a.partial += 1;
+        } else {
+            a.filled += 1;
+        }
+        a.symbols.insert(l.symbol.clone());
+        if let Some(f) = l.fills.first() {
+            a.lat
+                .push(f.ts.saturating_sub(l.created_ts) as f64 / 1_000_000.0);
+            a.last = a.last.max(f.ts);
+        }
+        let reference = match l.side {
+            risk::Side::Buy => l.sent_ask,
+            risk::Side::Sell => l.sent_bid,
+        };
+        if let (Some(r), Some(p)) = (reference, points.get(&l.symbol)) {
+            if lots > 0.0 && *p > 0.0 {
+                let notional: f64 = l
+                    .fills
+                    .iter()
+                    .map(|f| qty_f(f.volume) * price_f(f.price))
+                    .sum();
+                let avg = notional / lots;
+                let slip = match l.side {
+                    risk::Side::Buy => avg - price_f(r),
+                    risk::Side::Sell => price_f(r) - avg,
+                } / p;
+                a.slip.push(slip);
+            }
+        }
+    }
+    Value::Array(
+        by.into_iter()
+            .map(|(name, mut a)| {
+                let avg_slip = if a.slip.is_empty() {
+                    0.0
+                } else {
+                    a.slip.iter().sum::<f64>() / a.slip.len() as f64
+                };
+                json!({
+                    "lp": name,
+                    "orders": a.orders,
+                    "filled": a.filled,
+                    "partial": a.partial,
+                    "rejected": a.rejected,
+                    "working": a.working,
+                    "requestedLots": a.req_lots,
+                    "filledLots": a.fill_lots,
+                    "fillRate": if a.req_lots > 0.0 { a.fill_lots / a.req_lots } else { 0.0 },
+                    "rejectRate": if a.orders > 0 { a.rejected as f64 / a.orders as f64 } else { 0.0 },
+                    "avgSlipPoints": avg_slip,
+                    "p95SlipPoints": lp_pctl(&mut a.slip, 0.95),
+                    "p50LatencyMs": lp_pctl(&mut a.lat, 0.5),
+                    "p95LatencyMs": lp_pctl(&mut a.lat, 0.95),
+                    "lastFillAt": (a.last > 0).then(|| iso(a.last)),
+                    "symbols": a.symbols.len(),
+                })
+            })
+            .collect(),
+    )
+}
+
 pub fn lp_sessions(rows: &[fix_gateway::SessionStatus]) -> Value {
     Value::Array(
         rows.iter()
@@ -776,9 +919,14 @@ pub fn lp_sessions(rows: &[fix_gateway::SessionStatus]) -> Value {
                 } else {
                     "disconnected"
                 };
+                let lp = if r.lp.is_empty() {
+                    r.target_comp_id.clone()
+                } else {
+                    r.lp.clone()
+                };
                 json!({
-                    "id": format!("{}-{}", r.target_comp_id, kind.to_lowercase()),
-                    "lp": r.target_comp_id,
+                    "id": format!("{lp}-{}", kind.to_lowercase()),
+                    "lp": lp,
                     "kind": kind,
                     "senderCompId": r.sender_comp_id,
                     "targetCompId": r.target_comp_id,

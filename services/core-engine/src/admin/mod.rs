@@ -45,6 +45,8 @@ pub struct AdminConfig {
     /// Managed LP config of a fix-gateway (`GET|PUT <url>/config`, bearer token);
     /// `None`: `/v1/lp/config` answers 404.
     pub lp_admin: Option<LpAdmin>,
+    /// Multi-LP aggregator of an in-process stack; `None`: `/v1/lp/aggregation` answers 404.
+    pub agg: Option<Arc<crate::lp_agg::Aggregator>>,
 }
 
 /// fix-gateway admin endpoint (`FIX_ADMIN_TOKEN` on the gateway side).
@@ -66,6 +68,7 @@ impl AdminConfig {
             live_interval_ms: 1_000,
             lp_status: None,
             lp_admin: None,
+            agg: None,
         }
     }
 
@@ -103,6 +106,7 @@ pub struct AdminCtx {
     pub tickets: Arc<stream::Tickets>,
     pub lp_status: Option<LpStatus>,
     pub lp_admin: Option<LpAdmin>,
+    pub agg: Option<Arc<crate::lp_agg::Aggregator>>,
     pub http: reqwest::Client,
 }
 
@@ -255,6 +259,10 @@ fn cors(origins: &[String]) -> CorsLayer {
 /// engine routes. Spawns the live-update ticker on the current runtime.
 pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::io::Result<Router> {
     let store = AdminStore::open(&cfg.data_dir)?;
+    // The saved aggregation policy outlives restarts.
+    if let (Some(a), Some(c)) = (&cfg.agg, &store.state.aggregation) {
+        a.set_config(c.clone());
+    }
     let (live, _) = broadcast::channel(256);
     let ctx = AdminCtx {
         engine: engine.clone(),
@@ -264,6 +272,7 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
         tickets: Arc::default(),
         lp_status: cfg.lp_status.clone(),
         lp_admin: cfg.lp_admin.clone(),
+        agg: cfg.agg.clone(),
         http: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
