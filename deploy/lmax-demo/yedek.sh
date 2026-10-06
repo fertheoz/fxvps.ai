@@ -45,7 +45,7 @@ cp -r keys "$TMP/yedek/keys"
 for f in .env docker-compose.yml docker-compose.override.yml lp-sim.toml lp-sim-gateway.json console-nginx.conf terminal-nginx.conf; do
   [ -e "$f" ] && cp "$f" "$TMP/yedek/"
 done
-docker compose exec -T postgres pg_dump -U fxvps identity > "$TMP/yedek/identity.sql" || fail "pg_dump"
+docker compose exec -T postgres pg_dump -h 127.0.0.1 -p 5433 -U fxvps identity > "$TMP/yedek/identity.sql" || fail "pg_dump"
 
 tar -C "$TMP" -czf "$TMP/yedek.tgz" yedek
 ENC="$OUT/fxvps-$STAMP.tgz.enc"

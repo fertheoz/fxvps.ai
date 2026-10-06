@@ -32,9 +32,9 @@ mkdir core-data && cp -r "$TMP/yedek/core-data/." core-data/ && chown -R 65532:6
 [ -e "$TMP/yedek/fix-store/lp.json" ] && { cp "$TMP/yedek/fix-store/lp.json" fix-store/lp.json; chmod 600 fix-store/lp.json; chown 65532:65532 fix-store/lp.json; }
 docker compose --profile tunnel start identity
 sleep 5
-docker compose exec -T postgres psql -U fxvps -d postgres -c "DROP DATABASE IF EXISTS identity_restore; CREATE DATABASE identity_restore;" >/dev/null
-docker compose exec -T postgres psql -U fxvps -d identity_restore < "$TMP/yedek/identity.sql" >/dev/null
+docker compose exec -T postgres psql -h 127.0.0.1 -p 5433 -U fxvps -d postgres -c "DROP DATABASE IF EXISTS identity_restore; CREATE DATABASE identity_restore;" >/dev/null
+docker compose exec -T postgres psql -h 127.0.0.1 -p 5433 -U fxvps -d identity_restore < "$TMP/yedek/identity.sql" >/dev/null
 docker compose --profile tunnel stop identity
-docker compose exec -T postgres psql -U fxvps -d postgres -c "ALTER DATABASE identity RENAME TO identity_eski_$STAMP; ALTER DATABASE identity_restore RENAME TO identity;" >/dev/null
+docker compose exec -T postgres psql -h 127.0.0.1 -p 5433 -U fxvps -d postgres -c "ALTER DATABASE identity RENAME TO identity_eski_$STAMP; ALTER DATABASE identity_restore RENAME TO identity;" >/dev/null
 docker compose --profile tunnel up -d identity trading console terminal
 echo "$(date -u +%FT%TZ) GERİ YÜKLENDİ $ENC (eski veri: core-data.eski-$STAMP, identity_eski_$STAMP)" | tee -a dagit.log
