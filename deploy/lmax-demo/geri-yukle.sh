@@ -17,7 +17,7 @@ IMG="${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-core-engine:${FIXVPS_TAG:-late
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-sha256sum -c "${ENC%.tgz.enc}.sha256" --quiet 2>/dev/null && echo "sha256 OK" || echo "UYARI: sha256 dosyası yok/uyuşmuyor"
+( cd "$(dirname "$ENC")" && sha256sum -c --quiet "$(basename "${ENC%.tgz.enc}").sha256" ) 2>/dev/null && echo "sha256 OK" || echo "UYARI: sha256 dosyası yok/uyuşmuyor"
 openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$ENC" -pass "file:$KEY" | tar -C "$TMP" -xzf -
 echo "çözüldü: $(du -sh "$TMP/yedek" | cut -f1)"
 REPORT=$(docker run --rm --network none -v "$TMP/yedek/core-data:/data:ro" "$IMG" verify --data-dir /data)
