@@ -48,7 +48,7 @@ export function handleShortcut(e: KeyboardEvent): boolean {
     return true;
   }
   if (isTyping(e.target) || mod) return false;
-  if (e.altKey && ['1', '2', '4'].includes(e.key)) {
+  if (e.altKey && ['1', '2', '4', '6'].includes(e.key)) {
     s.setLayout(Number(e.key) as ChartLayout);
     return true;
   }

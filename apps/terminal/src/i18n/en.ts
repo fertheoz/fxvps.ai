@@ -107,6 +107,8 @@ export const en = {
   'chart.buy': 'BUY',
   'chart.lots': 'Lots',
   'chart.detach': 'Detach',
+  'chart.dragHint': 'Drag onto another chart to swap places',
+  'chart.max': 'At most {n} charts can be open; the symbol replaced the active chart',
   'chart.loading': 'Loading chart…',
   'chart.askLine': 'Ask line',
   'ticket.title': 'New Order',
