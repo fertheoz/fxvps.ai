@@ -103,6 +103,8 @@ export interface TerminalState {
   activeChart: number;
   /** Chart slots taken out of the grid: minimised ones show as chips, closed ones do not. */
   hiddenCharts: Record<number, 'min' | 'closed'>;
+  /** Chart slot filling the whole chart area (Windows-style maximise); null = grid. */
+  maximizedChart: number | null;
   /** Bottom panel: normal split, maximised over the charts, or collapsed to its tab strip. */
   toolboxMode: 'normal' | 'max' | 'min';
   /** Side panels in the split (pinned) or folded into an edge strip that opens on hover. */
@@ -144,6 +146,9 @@ export interface TerminalState {
   setLayout(l: ChartLayout): void;
   hideChart(index: number, how: 'min' | 'closed'): void;
   restoreChart(index: number): void;
+  toggleMaximize(index: number): void;
+  /** Swaps the chart with its visual neighbour in the grid. */
+  moveChart(index: number, dir: 'left' | 'right' | 'up' | 'down'): void;
   /** Swaps two chart slots (a chart header dragged onto another chart). */
   swapCharts(a: number, b: number): void;
   /**
@@ -227,6 +232,7 @@ export const useTerminal = create<TerminalState>()(
       charts: defaultCharts,
       activeChart: 0,
       hiddenCharts: {},
+      maximizedChart: null,
       toolboxMode: 'normal',
       sidePinned: { left: true, right: true },
       mwColumns: DEFAULT_MW_COLUMNS,
@@ -350,9 +356,10 @@ export const useTerminal = create<TerminalState>()(
       },
       setLayout(layout) {
         // Picking a layout brings every slot back.
-        set({ layout, activeChart: Math.min(get().activeChart, layout - 1), hiddenCharts: {} });
+        set({ layout, activeChart: Math.min(get().activeChart, layout - 1), hiddenCharts: {}, maximizedChart: null });
       },
       hideChart(index, how) {
+        if (get().maximizedChart === index) set({ maximizedChart: null });
         const hidden = { ...get().hiddenCharts, [index]: how };
         const visible = Array.from({ length: get().layout }, (_, i) => i).filter((i) => !hidden[i]);
         set({ hiddenCharts: hidden, activeChart: visible.includes(get().activeChart) ? get().activeChart : (visible[0] ?? 0) });
@@ -377,6 +384,26 @@ export const useTerminal = create<TerminalState>()(
       toggleMwColumn(id) {
         const cur = get().mwColumns;
         set({ mwColumns: cur.includes(id) ? cur.filter((c) => c !== id) : [...cur, id] });
+      },
+      toggleMaximize(index) {
+        set({ maximizedChart: get().maximizedChart === index ? null : index, activeChart: index });
+      },
+      moveChart(index, dir) {
+        const { layout, hiddenCharts } = get();
+        const visible = Array.from({ length: layout }, (_, i) => i).filter((i) => !hiddenCharts[i]);
+        const pos = visible.indexOf(index);
+        if (pos < 0) return;
+        // same grid as ChartGrid: one row up to 2 charts, then rows of 2 (3-4) or 3 (5-6)
+        const perRow = visible.length <= 2 ? visible.length : visible.length > 4 ? 3 : 2;
+        const col = pos % perRow;
+        const target =
+          dir === 'left' ? (col > 0 ? pos - 1 : -1)
+          : dir === 'right' ? (col < perRow - 1 ? pos + 1 : -1)
+          : dir === 'up' ? pos - perRow
+          : pos + perRow;
+        const other = visible[target];
+        if (target < 0 || other === undefined) return;
+        get().swapCharts(index, other);
       },
       swapCharts(a, b) {
         if (a === b) return;

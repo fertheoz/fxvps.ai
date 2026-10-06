@@ -15,6 +15,8 @@ export function ChartGrid() {
   const hidden = useTerminal((s) => s.hiddenCharts);
   const charts = useTerminal((s) => s.charts);
   const restoreChart = useTerminal((s) => s.restoreChart);
+  const hideChart = useTerminal((s) => s.hideChart);
+  const maximized = useTerminal((s) => s.maximizedChart);
   // Slots still in the grid; the rest sit in the toolbar as chips (minimised) or are gone (closed).
   const visible = Array.from({ length: layout }, (_, i) => i).filter((i) => !hidden[i]);
   const minimized = Object.entries(hidden)
@@ -35,6 +37,8 @@ export function ChartGrid() {
       </Group>
     );
   const grid = () => {
+    // one chart maximised over the whole chart area (title bar □ / double-click)
+    if (maximized !== null && visible.includes(maximized)) return <ChartPanel index={maximized} />;
     if (!visible.length) return <div className="h-full grid place-items-center text-muted text-[12px]">{t('chart.allHidden')}</div>;
     if (visible.length <= 2) return row(visible);
     // 3–4 charts: two rows of two; 5–6: two rows of three.
@@ -88,17 +92,6 @@ export function ChartGrid() {
               onClick={() => setLayout(l)}
             >
               {l}
-            </button>
-          ))}
-          {minimized.map((i) => (
-            <button
-              key={`min-${i}`}
-              className="h-5 px-1.5 rounded border border-dashed border-line text-[10px] text-muted hover:text-fg"
-              title={t('chart.restore')}
-              onClick={() => restoreChart(i)}
-              data-testid={`chart-restore-${i}`}
-            >
-              ▢ {charts[i]?.symbol} {charts[i]?.timeframe}
             </button>
           ))}
         </div>
@@ -164,6 +157,31 @@ export function ChartGrid() {
         </div>
       </div>
       <div className="flex-1 min-h-0">{grid()}</div>
+      {minimized.length > 0 && (
+        // MetaTrader-style strip of minimised charts under the chart area
+        <div className="flex items-center gap-1 h-7 px-2 border-t border-line bg-panel shrink-0 overflow-x-auto whitespace-nowrap" data-testid="minimized-strip">
+          {minimized.map((i) => (
+            <span key={`min-${i}`} className="flex items-center h-5 rounded border border-line bg-panel-2 text-[11px]">
+              <button
+                className="px-2 h-full text-muted hover:text-fg"
+                title={t('chart.restore')}
+                onClick={() => restoreChart(i)}
+                data-testid={`chart-restore-${i}`}
+              >
+                ▭ {charts[i]?.symbol},{charts[i]?.timeframe}
+              </button>
+              <button
+                className="px-1 h-full text-muted hover:text-down border-l border-line"
+                title={t('chart.close')}
+                aria-label={t('chart.close')}
+                onClick={() => hideChart(i, 'closed')}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
