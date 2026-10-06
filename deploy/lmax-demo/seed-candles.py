@@ -135,7 +135,7 @@ def main():
         for interval, rng, frames in FETCHES:
             rows = source_rows(symbol, interval, rng)
             time.sleep(0.3)
-            if not rows and interval == "1m":
+            if not rows and interval == "1m" and symbol not in ALIASES and symbol not in INVERTED:
                 break  # unknown to the source: do not ask twice more
             if interval == "5m" and symbol in ALIASES:
                 own = own_close(symbol)
