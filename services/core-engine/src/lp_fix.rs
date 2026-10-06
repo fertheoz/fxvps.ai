@@ -174,6 +174,8 @@ struct Markups {
     /// symbol -> point (raw)
     points: BTreeMap<String, i64>,
     at: Option<Instant>,
+    /// Symbols whose first book was logged (one line each, for field diagnosis).
+    logged: std::collections::BTreeSet<String>,
 }
 
 impl Markups {
@@ -255,7 +257,18 @@ pub async fn run_bridge(
             if let GatewayEvent::Quote(q) = &ev {
                 if let Some((sym, _)) = symbols.from_lp(&q.symbol) {
                     markups.refresh(&engine).await;
-                    for d in markups.depths(sym, q, domain::now_ns()) {
+                    let depths = markups.depths(sym, q, domain::now_ns());
+                    if markups.logged.insert(sym.to_string()) {
+                        tracing::info!(
+                            symbol = sym,
+                            bids = q.bids.len(),
+                            asks = q.asks.len(),
+                            top_bid_qty = q.bids.first().map_or(0, |l| l.qty.raw()),
+                            groups = depths.len(),
+                            "first lp book"
+                        );
+                    }
+                    for d in depths {
                         let _ = events.send(Arc::new(CoreEvent::Depth(d)));
                     }
                 }
