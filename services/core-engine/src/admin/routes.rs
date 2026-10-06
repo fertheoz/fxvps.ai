@@ -844,7 +844,7 @@ struct GroupDto {
     /// "retail" | "professional" | null (no ESMA leverage cap).
     #[serde(default)]
     esma: Option<String>,
-    /// "cancel" | "retry" | "book" | "all_or_none" (what happens to an unfilled remainder).
+    /// "cancel" | "retry" | "all_or_none" (what happens to an unfilled remainder).
     #[serde(default)]
     partial_fill: Option<String>,
     #[serde(default)]
@@ -906,11 +906,10 @@ async fn save_group(
         Some("retry") => PartialFill::Retry {
             max_attempts: g.max_attempts.unwrap_or(3).clamp(1, 10),
         },
-        Some("book") => PartialFill::BookRemainder,
         Some("all_or_none") => PartialFill::AllOrNone,
         _ => {
             return Err(ApiError::bad(
-                "partialFill must be cancel, retry, book or all_or_none",
+                "partialFill must be cancel, retry or all_or_none",
             ))
         }
     };

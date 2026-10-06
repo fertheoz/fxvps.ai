@@ -13,7 +13,7 @@ export const Book = z.enum(["A", "B"]);
 export const MarginMode = z.enum(["retail_hedged", "retail_netting", "exchange"]);
 export const CommissionType = z.enum(["per_lot", "per_million", "percent"]);
 /** What happens to the part of an A-book order the LP did not fill. */
-export const PartialFillPolicy = z.enum(["cancel", "retry", "book", "all_or_none"]);
+export const PartialFillPolicy = z.enum(["cancel", "retry", "all_or_none"]);
 /** ESMA leverage cap applied on top of the group leverage (retail: FX majors 1:30, minors/gold 1:20…). */
 export const EsmaCap = z.enum(["none", "retail", "professional"]);
 

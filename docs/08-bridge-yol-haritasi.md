@@ -27,7 +27,7 @@ Durum işaretleri: ✅ var · 🟡 kısmen · ⬜ yok
 
 ## Etaplar (sırayla)
 
-### Etap 1 — Yürütme kalitesi raporu  ← ŞİMDİ
+### Etap 1 — Yürütme kalitesi raporu ✅ (#83)
 `/v1/reports/execution` + konsolda "Yürütme" sekmesi. Her müşteri emri için:
 istenen fiyat, dolum fiyatı, **müşteri kayması (puan, +=aleyhine)**, LP ortalama
 fiyatı, **LP'ye karşı yakalanan fark (puan)**, LP gecikmesi (gönderim→ilk
@@ -35,16 +35,16 @@ dolum, ms), LP dolum adedi (kısmi dolum izi), yeniden kurma (re-arm) bayrağı,
 defter. Sembol bazında özet: emir adedi, dolum oranı, kısmi oranı, ortalama ve
 p95 kayma, fiyat iyileşme payı, ortalama gecikme, ortalama yakalama. CSV.
 
-### Etap 2 — LP kaymasının gerçek ölçümü
+### Etap 2 — LP kaymasının gerçek ölçümü ✅ (#90)
 LP emri gönderilirken **o andaki LP kotasyonu** `LpOrder`'a yazılır
 (`sent_bid/sent_ask`); rapor "LP'nin yaşattığı kayma"yı istenen değil, gönderim
 anındaki LP fiyatına göre verir. Deneme sayacı (`attempts`) gerçek sayaca döner
 (re-arm bayrağı yerine). Gecikme p50/p95/p99.
 
-### Etap 3 — Kısmi dolum ve reddetme politikası (grup + sembol bazında)
-Seçenekler: *kalanı iptal et* (bugünkü), *kalanı yeniden dene (N deneme, M ms)*,
-*kalanı B-book'a al*, *tamamı reddet (all-or-none)*. Konsolda grup formunda
-basit radyo + iki sayı. Rapor Etap 1'e "politika sonucu" sütunu ekler.
+### Etap 3 — Kısmi dolum politikası (grup bazında) ✅ (#91)
+*kalanı iptal et* (varsayılan), *kalanı yeniden dene (N LP emri)*, *all-or-none
+(LP'ye FOK)*. "Kalanı B-book'a al" bilinçli dışarıda: A-book pozisyonu omnibus
+hedge'siz kalır, dolum başına defter izi gerekir → Etap 7'de.
 
 ### Etap 4 — Kazanç kapıları: markup/slippage/komisyon kuralları
 Bugün tek `markup_points`. Eklenecek: alış/satış ayrı markup, sembol ve
