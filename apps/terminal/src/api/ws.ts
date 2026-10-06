@@ -22,7 +22,7 @@ import {
   type Depth as WireDepth,
 } from './gen/fxvps_client_v1_pb';
 import { decimalToBig, decimalToString, toDecimal } from './decimal';
-import { MOCK_SYMBOLS, toSpec } from '@fxvps/trading-core';
+import { MOCK_SYMBOLS, toSpec, volumeToLots } from '@fxvps/trading-core';
 import type {
   Account,
   Bar,
@@ -507,7 +507,12 @@ export class WsTradingApi implements TradingApi {
       return { ok: false, error: (e as Error).message };
     }
     if (!fill) return { ok: true, orderId: requestId };
-    return this.fillResult(req.accountId, req.symbol, requestId, await fill);
+    const r = this.fillResult(req.accountId, req.symbol, requestId, await fill);
+    const what = `${req.side} ${req.type} ${volumeToLots(req.volume)} ${req.symbol}`;
+    if (!r.ok) this.emitJournal('error', `${what}: ${r.error ?? 'rejected'}`);
+    else if (pending) this.emitJournal('info', `${what} placed${req.price !== undefined ? ` @ ${req.price}` : ''}`);
+    else this.emitJournal('info', `${what} filled${r.price !== undefined ? ` @ ${r.price}` : ''}`);
+    return r;
   }
 
   /** Market execution outcome from the terminal OrderUpdate (undefined = no report in time). */
@@ -543,6 +548,7 @@ export class WsTradingApi implements TradingApi {
           trailingDistance: trailing === undefined ? undefined : toDecimal(trailing),
         },
       }));
+      this.emitJournal('info', `#${positionId} ${p.symbol}: SL ${sl ?? '—'} TP ${tp ?? '—'}${trailing ? ` trail ${trailing}` : ''}`);
       return { ok: true, positionId };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
@@ -573,7 +579,11 @@ export class WsTradingApi implements TradingApi {
       this.cancelFillWait(requestId);
       return { ok: false, error: (e as Error).message };
     }
-    return this.fillResult(accountId, p.symbol, requestId, await fill, positionId);
+    const r = this.fillResult(accountId, p.symbol, requestId, await fill, positionId);
+    const what = `close #${positionId} ${volumeToLots(vol)} ${p.symbol}`;
+    if (r.ok) this.emitJournal('info', `${what}${r.price !== undefined ? ` @ ${r.price}` : ''}`);
+    else this.emitJournal('error', `${what}: ${r.error ?? 'rejected'}`);
+    return r;
   }
 
   async modifyOrder(accountId: string, orderId: string, changes: OrderChanges): Promise<OrderResult> {
