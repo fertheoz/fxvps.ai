@@ -175,14 +175,11 @@ async fn depth_frames_follow_depth_subscription() {
         })
         .await;
     assert!(d.bids.len() > 1 && d.asks.len() > 1, "{d:?}");
-    let best_bid = fx(d.bids[0].price.clone());
-    let best_ask = fx(d.asks[0].price.clone());
+    let best_bid = fx(d.bids[0].price);
+    let best_ask = fx(d.asks[0].price);
     assert!(best_bid < best_ask, "{d:?}");
-    assert!(
-        fx(d.bids[1].price.clone()) < best_bid,
-        "bids best first: {d:?}"
-    );
-    assert!(fx(d.bids[0].qty.clone()).is_positive(), "{d:?}");
+    assert!(fx(d.bids[1].price) < best_bid, "bids best first: {d:?}");
+    assert!(fx(d.bids[0].qty).is_positive(), "{d:?}");
 }
 
 #[tokio::test]
