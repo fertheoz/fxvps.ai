@@ -23,6 +23,9 @@ import { DEFAULT_MW_COLUMNS, type MwColumnId } from '../components/mwColumns';
 export type Theme = 'dark' | 'light';
 /** Charts on screen at once; 6 is the ceiling (every chart costs the client CPU and memory). */
 export type ChartLayout = 1 | 2 | 4 | 6;
+export type ChartStyle = 'candles' | 'bars' | 'line' | 'area';
+/** Up/down colours: the theme's green/red, blue/orange, or a single muted tone. */
+export type ColorScheme = 'classic' | 'blueOrange' | 'mono';
 export const MAX_CHARTS = 6;
 /** Drawing tool armed on the chart. */
 export type ChartTool = 'hline' | 'alert' | 'trend' | 'rect' | 'fib' | null;
@@ -106,6 +109,10 @@ export interface TerminalState {
   sidePinned: { left: boolean; right: boolean };
   /** Market Watch columns shown (catalogue in components/mwColumns.ts). */
   mwColumns: MwColumnId[];
+  /** Main series style and colours of every chart (right-click menu). */
+  chartStyle: ChartStyle;
+  colorScheme: ColorScheme;
+  showGrid: boolean;
   indicators: Indicators;
   indicatorSettings: IndicatorSettings;
   /** Draw the ask price as a second line (candles follow the bid). */
@@ -146,6 +153,9 @@ export interface TerminalState {
   setToolboxMode(mode: 'normal' | 'max' | 'min'): void;
   setSidePinned(side: 'left' | 'right', pinned: boolean): void;
   toggleMwColumn(id: MwColumnId): void;
+  setChartStyle(style: ChartStyle): void;
+  setColorScheme(scheme: ColorScheme): void;
+  toggleGrid(): void;
   setChartSymbol(symbol: string, index?: number): void;
   setChartTimeframe(tf: Timeframe, index?: number): void;
   setActiveChart(i: number): void;
@@ -217,6 +227,9 @@ export const useTerminal = create<TerminalState>()(
       toolboxMode: 'normal',
       sidePinned: { left: true, right: true },
       mwColumns: DEFAULT_MW_COLUMNS,
+      chartStyle: 'candles',
+      colorScheme: 'classic',
+      showGrid: true,
       indicators: { sma: false, ema: true, bollinger: false, rsi: false, volume: true },
       indicatorSettings: DEFAULT_INDICATOR_SETTINGS,
       showAskLine: false,
@@ -347,6 +360,15 @@ export const useTerminal = create<TerminalState>()(
       },
       setSidePinned(side, pinned) {
         set({ sidePinned: { ...get().sidePinned, [side]: pinned } });
+      },
+      setChartStyle(chartStyle) {
+        set({ chartStyle });
+      },
+      setColorScheme(colorScheme) {
+        set({ colorScheme });
+      },
+      toggleGrid() {
+        set({ showGrid: !get().showGrid });
       },
       toggleMwColumn(id) {
         const cur = get().mwColumns;
@@ -497,6 +519,9 @@ export const useTerminal = create<TerminalState>()(
         toolboxMode: s.toolboxMode,
         sidePinned: s.sidePinned,
         mwColumns: s.mwColumns,
+        chartStyle: s.chartStyle,
+        colorScheme: s.colorScheme,
+        showGrid: s.showGrid,
         indicators: s.indicators,
         indicatorSettings: s.indicatorSettings,
         showAskLine: s.showAskLine,

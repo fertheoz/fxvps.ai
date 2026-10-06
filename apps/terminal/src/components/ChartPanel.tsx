@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  AreaSeries,
+  BarSeries,
   CandlestickSeries,
   ColorType,
   CrosshairMode,
@@ -10,8 +12,39 @@ import {
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
+  type SeriesType,
   type UTCTimestamp,
 } from 'lightweight-charts';
+import { ContextMenu, type MenuItem } from './ContextMenu';
+import type { ChartStyle, ColorScheme } from '../store/terminal';
+
+/** Up / down colours of a scheme (classic follows the theme). */
+function schemeColors(scheme: ColorScheme): { up: string; down: string } {
+  switch (scheme) {
+    case 'blueOrange':
+      return { up: '#3b82f6', down: '#f59e0b' };
+    case 'mono':
+      return { up: '#9aa4b2', down: '#4b5563' };
+    default:
+      return { up: cssVar('--up'), down: cssVar('--down') };
+  }
+}
+
+/** Saves the chart's canvas as a PNG (reads the ref at click time). */
+function downloadSnapshot(ref: { current: IChartApi | null }, filename: string) {
+  const chart = ref.current;
+  if (!chart) return;
+  const a = document.createElement('a');
+  a.href = chart.takeScreenshot().toDataURL('image/png');
+  a.download = filename;
+  a.click();
+}
+
+/** A bar in the main series' data shape for the chosen style. */
+function mainPoint(style: ChartStyle, b: Bar) {
+  const time = b.time as UTCTimestamp;
+  return style === 'line' || style === 'area' ? { time, value: b.close } : { time, open: b.open, high: b.high, low: b.low, close: b.close };
+}
 import { TIMEFRAMES, TIMEFRAME_SECONDS, type Bar, type Position } from '@fxvps/trading-core';
 import { getApi, trade } from '../store/api';
 import { selectOrders, selectPositions, useTerminal, type Indicators } from '../store/terminal';
@@ -140,7 +173,21 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const [lotsText, setLotsText] = useState(volumeToLots(oneClickVolume));
   const [busy, setBusy] = useState(false);
 
-  // create chart once
+  const chartStyle = useTerminal((s) => s.chartStyle);
+  const colorScheme = useTerminal((s) => s.colorScheme);
+  const showGrid = useTerminal((s) => s.showGrid);
+  const setChartStyle = useTerminal((s) => s.setChartStyle);
+  const setColorScheme = useTerminal((s) => s.setColorScheme);
+  const toggleGrid = useTerminal((s) => s.toggleGrid);
+  const toggleIndicator = useTerminal((s) => s.toggleIndicator);
+  const indicatorsOn = useTerminal((s) => s.indicators);
+  const toggleAskLine = useTerminal((s) => s.toggleAskLine);
+  // Items are built in the click handler (the menu reads refs), never during render.
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
+  // Bumped when the chart is rebuilt (style change): data effects run again.
+  const [chartGen, setChartGen] = useState(0);
+
+  // create chart (again whenever the main series style changes)
   useEffect(() => {
     if (!host.current) return;
     const chart = createChart(host.current, {
@@ -152,10 +199,19 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       localization: { locale: 'en-US' },
     });
     chartRef.current = chart;
-    candleRef.current = chart.addSeries(CandlestickSeries, { borderVisible: false });
+    const main: ISeriesApi<SeriesType> =
+      chartStyle === 'bars'
+        ? chart.addSeries(BarSeries, { thinBars: false })
+        : chartStyle === 'line'
+          ? chart.addSeries(LineSeries, { lineWidth: 2, priceLineVisible: true })
+          : chartStyle === 'area'
+            ? chart.addSeries(AreaSeries, { lineWidth: 2 })
+            : chart.addSeries(CandlestickSeries, { borderVisible: false });
+    candleRef.current = main as ISeriesApi<'Candlestick'>;
     const shapes = new ShapesPrimitive();
     candleRef.current.attachPrimitive(shapes);
     shapesRef.current = shapes;
+    setChartGen((g) => g + 1);
     return () => {
       chart.remove();
       chartRef.current = null;
@@ -164,7 +220,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       indRef.current = {};
       linesRef.current = [];
     };
-  }, []);
+  }, [chartStyle]);
 
   const lang = useTerminal((s) => s.lang);
   useEffect(() => {
@@ -176,14 +232,19 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    const up = cssVar('--up');
-    const down = cssVar('--down');
+    const { up, down } = schemeColors(colorScheme);
     chart.applyOptions({
       layout: { textColor: cssVar('--muted') },
-      grid: { vertLines: { color: cssVar('--border') + '66' }, horzLines: { color: cssVar('--border') + '66' } },
+      grid: {
+        vertLines: { color: cssVar('--border') + '66', visible: showGrid },
+        horzLines: { color: cssVar('--border') + '66', visible: showGrid },
+      },
     });
-    candleRef.current?.applyOptions({ upColor: up, downColor: down, wickUpColor: up, wickDownColor: down });
-  }, [theme]);
+    const main = candleRef.current as ISeriesApi<SeriesType> | null;
+    if (chartStyle === 'line') main?.applyOptions({ color: up } as never);
+    else if (chartStyle === 'area') main?.applyOptions({ lineColor: up, topColor: up + '55', bottomColor: up + '05' } as never);
+    else main?.applyOptions({ upColor: up, downColor: down, wickUpColor: up, wickDownColor: down } as never);
+  }, [theme, colorScheme, showGrid, chartStyle, chartGen]);
 
   const refreshIndicators = (ind: Indicators) => {
     const chart = chartRef.current;
@@ -247,7 +308,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       .then((bars) => {
         if (cancelled || !candleRef.current) return;
         barsRef.current = bars;
-        candleRef.current.setData(bars.map((b) => ({ time: ts(b.time), open: b.open, high: b.high, low: b.low, close: b.close })));
+        (candleRef.current as ISeriesApi<SeriesType>).setData(bars.map((b) => mainPoint(chartStyle, b)) as never);
         refreshIndicators(useTerminal.getState().indicators);
         chartRef.current?.timeScale().scrollToRealTime();
         setLoadedKey(`${symbol}|${timeframe}`);
@@ -255,7 +316,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     return () => {
       cancelled = true;
     };
-  }, [symbol, timeframe, spec]);
+  }, [symbol, timeframe, spec, chartGen]); // eslint-disable-line react-hooks/exhaustive-deps -- chartStyle is folded into chartGen
 
   // indicator toggles
   useEffect(() => {
@@ -271,7 +332,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     if (last && bar.time < last.time) return;
     if (last && bar.time === last.time) bars[bars.length - 1] = bar;
     else bars.push(bar);
-    candleRef.current.update({ time: ts(bar.time), open: bar.open, high: bar.high, low: bar.low, close: bar.close });
+    (candleRef.current as ISeriesApi<SeriesType>).update(mainPoint(chartStyle, bar) as never);
     volRef.current?.update({ time: ts(bar.time), value: bar.volume, color: (bar.close >= bar.open ? cssVar('--up') : cssVar('--down')) + '55' });
     const r = indRef.current;
     if (r.sma || r.ema || r.rsi || r.bbM) {
@@ -292,7 +353,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       const rv = lastOf(rsi(closes, cfg.rsi.period));
       if (r.rsi && rv != null) r.rsi.update({ time, value: rv });
     }
-  }, [quote, timeframe, loading]);
+  }, [quote, timeframe, loading, chartStyle]);
 
   // position & order lines
   useEffect(() => {
@@ -328,7 +389,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       add(o.price, '#f59e0b', `${o.side.toUpperCase()} ${o.type.replace('_', ' ').toUpperCase()} ${volumeToLots(o.volume)}`, LineStyle.Dotted);
       if (o.limitPrice !== undefined) add(o.limitPrice, '#f59e0b', `LMT #${o.id}`, LineStyle.SparseDotted);
     }
-  }, [positions, orders, objects, spec, loading, theme]);
+  }, [positions, orders, objects, spec, loading, theme, chartGen]);
 
   // Drag SL/TP lines -> modifyPosition (server-side protection).
   const lineAt = (clientY: number) => {
@@ -496,7 +557,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     }
     if (askLineRef.current) askLineRef.current.applyOptions({ price: quote.ask });
     else askLineRef.current = series.createPriceLine({ price: quote.ask, color: cssVar('--muted'), lineWidth: 1, lineStyle: LineStyle.SparseDotted, axisLabelVisible: true, title: 'ask' });
-  }, [showAskLine, quote, spec, loading]);
+  }, [showAskLine, quote, spec, loading, chartGen]);
 
   // The movable line: an object picked up by a long press, a tool being placed, else the caller's draft.
   const editOrder = edit?.kind === 'order' ? orders.find((o) => o.id === edit.id) : undefined;
@@ -704,6 +765,48 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
 
   if (!slot) return null;
 
+  // Event handler (never called during render): the menu only references it.
+  const onSnapshot = () => downloadSnapshot(chartRef, `${slot.symbol}-${slot.timeframe}.png`);
+  /** Right-click menu: look, overlays, objects, window and a PNG snapshot. */
+  const chartMenu = (): MenuItem[] => {
+    const tick = (on: boolean) => (on ? '✓' : undefined);
+    const style = (s: ChartStyle, label: string, first = false): MenuItem => ({ label, hint: tick(chartStyle === s), onClick: () => setChartStyle(s), separator: first });
+    const scheme = (c: ColorScheme, label: string, first = false): MenuItem => ({ label, hint: tick(colorScheme === c), onClick: () => setColorScheme(c), separator: first });
+    return [
+      style('candles', t('chart.style.candles')),
+      style('bars', t('chart.style.bars')),
+      style('line', t('chart.style.line')),
+      style('area', t('chart.style.area')),
+      scheme('classic', t('chart.scheme.classic'), true),
+      scheme('blueOrange', t('chart.scheme.blueOrange')),
+      scheme('mono', t('chart.scheme.mono')),
+      { label: t('chart.grid'), hint: tick(showGrid), onClick: toggleGrid, separator: true },
+      { label: t('chart.volume'), hint: tick(indicatorsOn.volume), onClick: () => toggleIndicator('volume') },
+      { label: t('chart.askLine'), hint: tick(showAskLine), onClick: toggleAskLine },
+      {
+        label: t('obj.clearAll'),
+        separator: true,
+        disabled: !objects || !activeAccountId,
+        onClick: () => {
+          if (!objects || !activeAccountId || !spec) return;
+          setObjects(activeAccountId, {
+            ...objects,
+            lines: objects.lines.filter((l) => l.symbol !== spec.name),
+            alerts: objects.alerts.filter((a) => a.symbol !== spec.name),
+            shapes: (objects.shapes ?? []).filter((x) => x.symbol !== spec.name),
+          });
+        },
+      },
+      { label: t('chart.snapshot'), onClick: onSnapshot, separator: true },
+      ...(detached
+        ? []
+        : [
+            { label: t('chart.minimize'), onClick: () => hideChart(index, 'min'), separator: true } as MenuItem,
+            { label: t('chart.close'), onClick: () => hideChart(index, 'closed') } as MenuItem,
+          ]),
+    ];
+  };
+
   const oneClick = async (side: 'buy' | 'sell') => {
     const v = lotsToVolume(lotsText);
     if (v === null || !spec) return;
@@ -814,8 +917,14 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
           onPointerMove={pressMove}
           onPointerUp={pressEnd}
           onPointerCancel={pressEnd}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setActive(index);
+            setMenu({ x: e.clientX, y: e.clientY, items: chartMenu() });
+          }}
           data-testid={`chart-canvas-${index}`}
         />
+        {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} testId="chart-menu" />}
         {loading && <div className="absolute inset-0 grid place-items-center text-muted">{t('chart.loading')}</div>}
         {drawTool && isActive && !drawing && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-3 h-8 rounded-full bg-accent text-white text-[12px] font-medium grid place-items-center shadow-lg pointer-events-none" data-testid={`chart-draw-hint-${index}`}>
