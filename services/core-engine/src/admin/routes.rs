@@ -12,7 +12,10 @@ use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use money::{Currency, Money, Price, Qty};
 use oms::{Command, Engine, Event};
-use risk::{AssetClass, EsmaPreset, GroupConfig, MarginMode, PartialFill, Routing, SymbolSpec};
+use risk::{
+    AssetClass, EsmaPreset, GroupCommission, GroupConfig, MarginMode, PartialFill, Routing,
+    SymbolSpec,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -849,6 +852,22 @@ struct GroupDto {
     partial_fill: Option<String>,
     #[serde(default)]
     max_attempts: Option<u32>,
+    #[serde(default)]
+    markup_bid_points: Option<i64>,
+    #[serde(default)]
+    markup_ask_points: Option<i64>,
+    /// symbol -> points (both sides), overrides the group markups.
+    #[serde(default)]
+    symbol_markups: Option<BTreeMap<String, i64>>,
+    #[serde(default)]
+    max_slippage_points: Option<i64>,
+    #[serde(default)]
+    pass_price_improvement: Option<bool>,
+    /// "symbol" (use the symbol's per-lot commission) | "per_lot" | "per_million"; value in minor units.
+    #[serde(default)]
+    commission_type: Option<String>,
+    #[serde(default)]
+    commission_value: Option<i64>,
 }
 
 async fn group_json(ctx: &AdminCtx, name: String) -> ApiResult {
@@ -952,6 +971,53 @@ async fn save_group(
     cfg.markup_points = g.markup_points;
     cfg.esma = esma;
     cfg.partial_fill = partial_fill;
+    let pts = |v: Option<i64>, what: &str| -> Result<Option<i64>, ApiError> {
+        match v {
+            Some(p) if !(0..=1000).contains(&p) => {
+                Err(ApiError::bad(format!("{what} must be 0..1000")))
+            }
+            v => Ok(v),
+        }
+    };
+    cfg.markup_bid_points = pts(g.markup_bid_points, "markupBidPoints")?;
+    cfg.markup_ask_points = pts(g.markup_ask_points, "markupAskPoints")?;
+    if let Some(sm) = g.symbol_markups {
+        for (s, p) in &sm {
+            if !all.contains(s) {
+                return Err(ApiError::bad(format!(
+                    "unknown symbol {s} in symbolMarkups"
+                )));
+            }
+            pts(Some(*p), "symbolMarkups")?;
+        }
+        cfg.symbol_markup_points = sm;
+    }
+    cfg.max_slippage_points = pts(g.max_slippage_points, "maxSlippagePoints")?;
+    if let Some(p) = g.pass_price_improvement {
+        cfg.pass_price_improvement = p;
+    }
+    let value = g.commission_value.unwrap_or(0);
+    if !(0..=10_000_000).contains(&value) {
+        return Err(ApiError::bad(
+            "commissionValue must be 0..10000000 (minor units)",
+        ));
+    }
+    cfg.commission = match g.commission_type.as_deref() {
+        None | Some("symbol") | Some("") => None,
+        Some("per_lot") => Some(GroupCommission::PerLot { minor: value }),
+        Some("per_million") | Some("percent") => Some(GroupCommission::PerMillion {
+            minor: if g.commission_type.as_deref() == Some("percent") {
+                value * 10_000
+            } else {
+                value
+            },
+        }),
+        _ => {
+            return Err(ApiError::bad(
+                "commissionType must be symbol, per_lot or per_million",
+            ))
+        }
+    };
     cfg.routing = routing;
     cfg.allowed_symbols = match g.symbols {
         Some(s) if s.len() != all.len() => Some(s.into_iter().collect()),
