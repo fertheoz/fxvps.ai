@@ -1392,3 +1392,35 @@ fn market_hours_and_holidays_reject_new_orders_only() {
         .iter()
         .any(|e| matches!(e, Event::Rollover { applied: false, .. })));
 }
+
+#[test]
+fn same_exec_id_on_different_lp_orders_is_not_a_duplicate() {
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "a", "100000");
+    h.market(1, "x1", Side::Buy, "0.1");
+    let first = h.router.take()[0].lp_order_id;
+    h.cmd(Command::LpFill {
+        lp_order_id: first,
+        exec_id: "E1".into(),
+        volume: qty("0.1"),
+        price: px("1.1001"),
+    });
+    // a replay of the same fill is ignored
+    h.cmd(Command::LpFill {
+        lp_order_id: first,
+        exec_id: "E1".into(),
+        volume: qty("0.1"),
+        price: px("1.1001"),
+    });
+    h.market(1, "x2", Side::Buy, "0.1");
+    let second = h.router.take()[0].lp_order_id;
+    // simulator restarted: its exec ids begin at E1 again
+    h.cmd(Command::LpFill {
+        lp_order_id: second,
+        exec_id: "E1".into(),
+        volume: qty("0.1"),
+        price: px("1.1002"),
+    });
+    let lots: i64 = h.pos(1).iter().map(|p| p.volume.raw()).sum();
+    assert_eq!(lots, qty("0.2").raw());
+}

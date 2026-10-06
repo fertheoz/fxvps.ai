@@ -224,7 +224,15 @@ fn session_for(cfg: &GatewayConfig, ep: &SessionEndpoint, store: Store) -> Sessi
 }
 
 /// Starts MD and trading supervisors. Event channel capacity: 4096.
-pub fn start(cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
+pub fn start(mut cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
+    // `FIX_MAX_ORDERS_PER_SEC` overrides the brake (0 = off): isolated load
+    // tests against the simulator; never set it for a real LP.
+    if let Some(v) = std::env::var("FIX_MAX_ORDERS_PER_SEC")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+    {
+        cfg.max_orders_per_sec = v;
+    }
     let (events, _) = broadcast::channel(4096);
     let (orders, orders_rx) = mpsc::channel(1024);
     let (shutdown, sd) = watch::channel(false);

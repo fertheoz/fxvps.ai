@@ -51,9 +51,15 @@ docker pull -q "$PREFIX-core-engine:$TAG" >/dev/null
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 for f in snapshot.json journal.jsonl; do [ -e "core-data/$f" ] && cp "core-data/$f" "$TMP/"; done
+# the engine image runs as nonroot: the copy must be readable (mktemp -d is 0700)
+chmod 755 "$TMP"; chmod 644 "$TMP"/* 2>/dev/null || true
 if [ -e "$TMP/journal.jsonl" ]; then
   R=$(docker run --rm --network none -v "$TMP:/data:ro" "$PREFIX-core-engine:$TAG" verify --data-dir /data 2>&1) || { echo "KAPI: yeni imaj journal'ı replay edemedi: $R" >&2; exit 2; }
   echo "$R" | grep -q '"ok":true' || { echo "KAPI: değişmezler bozuk: $R" >&2; exit 2; }
+  # a gate that saw nothing is no gate: the replayed state must be the live one
+  if [ -s "$TMP/journal.jsonl" ] || [ -s "$TMP/snapshot.json" ]; then
+    echo "$R" | grep -q '"seq":0,' && { echo "KAPI: journal okunamadı (seq 0): $R" >&2; exit 2; }
+  fi
   echo "kapı OK: $(echo "$R" | cut -c1-160)"
 fi
 

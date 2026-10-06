@@ -111,7 +111,7 @@ export function App({ api }: { api: TradingApi }) {
         <Group orientation="horizontal" id="main-h">
           {pinned.left && (
             <>
-              <Panel id="mw" defaultSize="21" minSize="14">
+              <Panel id="mw" defaultSize="18" minSize="11">
                 <MarketWatch />
               </Panel>
               <Separator />
