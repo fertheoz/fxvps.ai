@@ -80,6 +80,8 @@ export const en = {
   'conn.reconnecting': 'Reconnecting',
   'conn.disconnected': 'Disconnected',
   'mw.title': 'Market Watch',
+  'side.pin': 'Pin panel (keep it open)',
+  'side.unpin': 'Unpin: fold into the edge, opens on hover',
   'mw.search': 'Search symbols',
   'mw.symbol': 'Symbol',
   'mw.bid': 'Bid',

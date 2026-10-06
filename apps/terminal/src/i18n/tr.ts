@@ -82,6 +82,8 @@ export const tr: Record<MessageKey, string> = {
   'conn.reconnecting': 'Yeniden bağlanıyor',
   'conn.disconnected': 'Bağlantı yok',
   'mw.title': 'Piyasa İzleme',
+  'side.pin': 'Paneli sabitle (açık kalsın)',
+  'side.unpin': 'Sabitlemeyi kaldır: kenara katlanır, üzerine gelince açılır',
   'mw.search': 'Sembol ara',
   'mw.symbol': 'Sembol',
   'mw.bid': 'Alış',

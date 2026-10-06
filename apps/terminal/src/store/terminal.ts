@@ -99,6 +99,8 @@ export interface TerminalState {
   hiddenCharts: Record<number, 'min' | 'closed'>;
   /** Bottom panel: normal split, maximised over the charts, or collapsed to its tab strip. */
   toolboxMode: 'normal' | 'max' | 'min';
+  /** Side panels in the split (pinned) or folded into an edge strip that opens on hover. */
+  sidePinned: { left: boolean; right: boolean };
   indicators: Indicators;
   indicatorSettings: IndicatorSettings;
   /** Draw the ask price as a second line (candles follow the bid). */
@@ -129,6 +131,7 @@ export interface TerminalState {
   hideChart(index: number, how: 'min' | 'closed'): void;
   restoreChart(index: number): void;
   setToolboxMode(mode: 'normal' | 'max' | 'min'): void;
+  setSidePinned(side: 'left' | 'right', pinned: boolean): void;
   setChartSymbol(symbol: string, index?: number): void;
   setChartTimeframe(tf: Timeframe, index?: number): void;
   setActiveChart(i: number): void;
@@ -196,6 +199,7 @@ export const useTerminal = create<TerminalState>()(
       activeChart: 0,
       hiddenCharts: {},
       toolboxMode: 'normal',
+      sidePinned: { left: true, right: true },
       indicators: { sma: false, ema: true, bollinger: false, rsi: false, volume: true },
       indicatorSettings: DEFAULT_INDICATOR_SETTINGS,
       showAskLine: false,
@@ -324,6 +328,9 @@ export const useTerminal = create<TerminalState>()(
         delete hidden[index];
         set({ hiddenCharts: hidden, activeChart: index });
       },
+      setSidePinned(side, pinned) {
+        set({ sidePinned: { ...get().sidePinned, [side]: pinned } });
+      },
       setToolboxMode(toolboxMode) {
         set({ toolboxMode });
       },
@@ -428,6 +435,7 @@ export const useTerminal = create<TerminalState>()(
         charts: s.charts,
         hiddenCharts: s.hiddenCharts,
         toolboxMode: s.toolboxMode,
+        sidePinned: s.sidePinned,
         indicators: s.indicators,
         indicatorSettings: s.indicatorSettings,
         showAskLine: s.showAskLine,
