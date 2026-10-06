@@ -87,7 +87,7 @@ const MarketRow = memo(function MarketRow({ symbol, onOpen }: { symbol: string; 
       tabIndex={0}
       data-testid={`m-row-${symbol}`}
       onClick={() => onOpen(symbol)}
-      className="flex items-center gap-3 px-4 h-[60px] cursor-pointer active:bg-hover border-b border-line/40"
+      className="flex items-center gap-3 px-4 h-[46px] cursor-pointer active:bg-hover border-b border-line/40"
     >
       <button
         aria-label={t('mw.favorite')}
@@ -100,8 +100,8 @@ const MarketRow = memo(function MarketRow({ symbol, onOpen }: { symbol: string; 
         {fav ? '★' : '☆'}
       </button>
       <div className="flex-1 min-w-0">
-        <div className="font-semibold text-[15px] tracking-tight">{symbol}</div>
-        <div className="num text-[11px] text-muted truncate">{q ? `${t('m.spread')} ${spreadPoints(q, spec.digits)}` : spec.description}</div>
+        <div className="font-semibold text-[14px] leading-tight tracking-tight">{symbol}</div>
+        <div className="num text-[10px] leading-tight text-muted truncate">{q ? `${t('m.spread')} ${spreadPoints(q, spec.digits)}` : spec.description}</div>
       </div>
       {q ? (
         <>
@@ -138,7 +138,7 @@ function Markets({ onOpen }: { onOpen: (s: string) => void }) {
   return (
     <div className="fx-view flex flex-col h-full">
       <Hero />
-      <div className="flex gap-2 px-4 pb-3">
+      <div className="flex gap-2 px-4 pb-2">
         <input
           type="search"
           value={query}
@@ -171,12 +171,12 @@ function Hero() {
   const account = useTerminal(selectActiveAccount);
   if (!m || !account) return null;
   return (
-    <div className="fx-card mx-4 my-3 px-4 py-3 flex items-end justify-between" data-testid="m-hero">
+    <div className="fx-card mx-4 my-2 px-4 py-2 flex items-end justify-between" data-testid="m-hero">
       <div>
         <div className="text-[11px] uppercase tracking-wider text-muted">
           {t('top.equity')} · {account.currency}
         </div>
-        <div className="num text-[28px] font-semibold leading-tight tracking-tight">{formatMoney(m.equity)}</div>
+        <div className="num text-[24px] font-semibold leading-tight tracking-tight">{formatMoney(m.equity)}</div>
       </div>
       <div className="text-right">
         <div className={`num text-[15px] font-semibold ${tone(m.floating)}`}>
@@ -494,7 +494,7 @@ const PositionCard = memo(function PositionCard({ p }: { p: Position }) {
   };
   const inp = 'num flex-1 min-w-0 h-10 rounded-xl bg-panel-2 border border-line/60 px-3 outline-none focus:border-accent';
   return (
-    <div className="fx-card p-4" data-testid={`m-pos-${p.id}`}>
+    <div className="fx-card px-3 py-2.5" data-testid={`m-pos-${p.id}`}>
       <div className="flex items-start justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -513,12 +513,12 @@ const PositionCard = memo(function PositionCard({ p }: { p: Position }) {
         </div>
       </div>
       {edit && (
-        <div className="flex gap-2 mt-3">
+        <div className="flex gap-2 mt-2">
           <input className={inp} inputMode="decimal" value={sl} onChange={(e) => setSl(e.target.value)} placeholder={t('ticket.sl')} aria-label={t('ticket.sl')} />
           <input className={inp} inputMode="decimal" value={tp} onChange={(e) => setTp(e.target.value)} placeholder={t('ticket.tp')} aria-label={t('ticket.tp')} />
         </div>
       )}
-      <div className="flex gap-2 mt-3">
+      <div className="flex gap-2 mt-2">
         {edit ? (
           <>
             <button className="flex-1 h-10 rounded-xl border border-line text-muted" onClick={() => setEdit(false)}>
@@ -565,7 +565,7 @@ function OrderCard({ o }: { o: PendingOrder }) {
     if (!r.ok) toast('error', t('toast.rejected', { error: r.error ?? '' }));
   };
   return (
-    <div className="fx-card p-4 flex items-center justify-between">
+    <div className="fx-card px-3 py-2 flex items-center justify-between">
       <div>
         <div className="font-semibold text-[15px]">
           {o.symbol} <span className={`text-[11px] uppercase ${o.side === 'buy' ? 'text-up' : 'text-down'}`}>{o.side} {o.type.replace('_', ' ')}</span>
@@ -584,7 +584,7 @@ function OrderCard({ o }: { o: PendingOrder }) {
 function DealRow({ d }: { d: Deal }) {
   const digits = useTerminal((s) => s.symbols[d.symbol]?.digits ?? 5);
   return (
-    <div className="flex items-center justify-between px-1 py-3 border-b border-line/40">
+    <div className="flex items-center justify-between px-1 py-1.5 border-b border-line/40">
       <div>
         <div className="font-medium">
           {d.symbol} <span className={`text-[11px] uppercase ${d.side === 'buy' ? 'text-up' : 'text-down'}`}>{d.side} {d.entry}</span>
@@ -667,7 +667,7 @@ function TradeView() {
   return (
     <div className="fx-view flex flex-col h-full" data-testid="m-trade">
       <Hero />
-      <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-3">
+      <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-2">
         {positions.length === 0 && orders.length === 0 && <div className="p-10 text-center text-muted">{t('tb.empty')}</div>}
         {positions.length > 0 && title(t('tb.positions'), positions.length)}
         <BulkClose positions={positions} />
@@ -723,7 +723,7 @@ function closedPositions(deals: Deal[]): ClosedPosition[] {
 function ClosedPositionRow({ p }: { p: ClosedPosition }) {
   const digits = useTerminal((s) => s.symbols[p.symbol]?.digits ?? 5);
   return (
-    <div className="flex items-center justify-between px-1 py-3 border-b border-line/40">
+    <div className="flex items-center justify-between px-1 py-1.5 border-b border-line/40">
       <div>
         <div className="font-medium">
           {p.symbol} <span className={`text-[11px] uppercase ${p.side === 'buy' ? 'text-up' : 'text-down'}`}>{p.side} {volumeToLots(p.volume)}</span>
@@ -744,7 +744,7 @@ function OrderHistoryRow({ o }: { o: OrderHistoryEntry }) {
   const digits = useTerminal((s) => s.symbols[o.symbol]?.digits ?? 5);
   const cls = o.status === 'filled' ? 'text-up' : o.status === 'working' ? 'text-accent' : 'text-muted';
   return (
-    <div className="flex items-center justify-between px-1 py-3 border-b border-line/40" title={o.text}>
+    <div className="flex items-center justify-between px-1 py-1.5 border-b border-line/40" title={o.text}>
       <div>
         <div className="font-medium">
           {o.symbol} <span className={`text-[11px] uppercase ${o.side === 'buy' ? 'text-up' : 'text-down'}`}>{o.side} {o.type.replace('_', ' ')}</span>
@@ -784,7 +784,7 @@ function HistoryView() {
   const empty = <div className="p-10 text-center text-muted">{t('tb.empty')}</div>;
   return (
     <div className="fx-view flex flex-col h-full" data-testid="m-history">
-      <div className="fx-card mx-4 my-3 px-4 py-3 flex items-end justify-between">
+      <div className="fx-card mx-4 my-2 px-4 py-2 flex items-end justify-between">
         <div>
           <div className="text-[11px] uppercase tracking-wider text-muted">{t('tb.total')}</div>
           <div className={`num text-[24px] font-semibold leading-tight ${tone(total)}`}>
@@ -794,7 +794,7 @@ function HistoryView() {
         </div>
         <div className="num text-[12px] text-muted">{positions.length}</div>
       </div>
-      <div className="mx-4 mb-3 p-1 rounded-full bg-panel-2 flex">
+      <div className="mx-4 mb-2 p-1 rounded-full bg-panel-2 flex">
         {(['positions', 'orders', 'deals'] as const).map((x) => (
           <button
             key={x}
