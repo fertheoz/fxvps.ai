@@ -74,6 +74,14 @@ struct State {
     /// Per-client flow profile (toxicity input).
     #[serde(default)]
     flow: BTreeMap<AccountNo, FlowStats>,
+    /// Rollover schedule (stage 8) and the UTC day it last ran (0 = never).
+    #[serde(default)]
+    swap: SwapConfig,
+    #[serde(default)]
+    last_rollover_day: u64,
+    /// Swap share handed from `reduce_position` to the closing deal (transient).
+    #[serde(default)]
+    pending_deal_swap: i128,
 }
 
 /// Serializable engine snapshot.
@@ -215,6 +223,13 @@ impl Engine {
 
     pub fn omnibus_net(&self, symbol: &str) -> i64 {
         *self.st.omnibus_net.get(symbol).unwrap_or(&0)
+    }
+    pub fn swap_config(&self) -> &SwapConfig {
+        &self.st.swap
+    }
+    /// UTC day (days since epoch) of the last rollover, 0 = never.
+    pub fn last_rollover_day(&self) -> u64 {
+        self.st.last_rollover_day
     }
     pub fn hedge_policy(&self) -> &HedgePolicy {
         &self.st.hedge
@@ -451,6 +466,9 @@ impl Engine {
             }
             Command::SetRules(rules) => {
                 self.st.rules = rules.clone();
+            }
+            Command::SetSwapConfig(c) => {
+                self.st.swap = c.clone();
             }
             Command::SetHedge(policy) => {
                 self.st.hedge = policy.clone();
@@ -1525,6 +1543,7 @@ impl Engine {
                 trailing_points: r.trailing_points,
                 routing,
                 opened_ts: self.st.now,
+                swap_minor: 0,
             };
             self.st.positions.insert(pid, pos);
             self.st.orders.get_mut(&id).expect("order").position = Some(pid);
@@ -1574,6 +1593,7 @@ impl Engine {
             lp_price,
             broker_pnl: legs.0,
             lp_pnl: legs.1,
+            swap: std::mem::take(&mut self.st.pending_deal_swap),
         });
         self.events.push(Event::DealAdded { deal_id: id });
     }
@@ -1630,6 +1650,14 @@ impl Engine {
             }
         }
         let _ = self.post(TxnKind::RealizedPnl, format!("pnl:{exec}:{pid}"), postings);
+        // the closed part takes its share of the accumulated swap with it
+        if p.swap_minor != 0 && p.volume.raw() > 0 {
+            let share = p.swap_minor * v.raw() as i128 / p.volume.raw() as i128;
+            if let Some(pm) = self.st.positions.get_mut(&pid) {
+                pm.swap_minor -= share;
+            }
+            self.st.pending_deal_swap = share;
+        }
         let hold_secs = self.st.now.saturating_sub(p.opened_ts) / 1_000_000_000;
         self.st
             .flow
@@ -1872,34 +1900,83 @@ impl Engine {
         }
     }
 
+    /// Daily swap: once per UTC day (idempotent across restarts), skipped on
+    /// weekends when configured, three days on the symbol's triple day,
+    /// scaled by the group multiplier; charged to the client against the
+    /// book's counterparty and accumulated on the position for the reports.
     fn rollover(&mut self) -> R<()> {
+        let day = self.st.now / 86_400_000_000_000;
+        let skip = |e: &mut Engine, reason: &str| {
+            e.events.push(Event::Rollover {
+                applied: false,
+                positions: 0,
+                reason: reason.into(),
+            });
+            Ok(())
+        };
+        if !self.st.swap.enabled {
+            return skip(self, "disabled");
+        }
+        if day == self.st.last_rollover_day {
+            return skip(self, "already applied today");
+        }
+        let weekday = risk::weekday_utc(self.st.now);
+        if self.st.swap.skip_weekend && (weekday == 0 || weekday == 6) {
+            return skip(self, "weekend");
+        }
+        self.st.last_rollover_day = day;
         let ps: Vec<Position> = self.st.positions.values().cloned().collect();
+        let mut touched = BTreeSet::new();
+        let mut n = 0u32;
         for p in ps {
-            let spec = &self.st.symbols[&p.symbol];
-            let acc = &self.st.accounts[&p.account];
-            let g = &self.st.groups[&acc.group];
-            let rate = match p.side {
-                Side::Buy => spec.swap_long,
-                Side::Sell => spec.swap_short,
+            let spec = self.st.symbols[&p.symbol].clone();
+            let acc = self.st.accounts[&p.account].clone();
+            let g = self.st.groups[&acc.group].clone();
+            let days = if weekday == spec.triple_swap_day {
+                3
+            } else {
+                1
             };
-            let scaled = rate.raw() as i128 * p.volume.raw() as i128 / SCALE as i128;
+            let scaled = risk::swap_scaled(&spec, p.side, p.volume, g.swap_multiplier_pct) * days;
+            if scaled == 0 {
+                continue;
+            }
             let m = Money::from_scaled(scaled, spec.quote, Rounding::HalfEven).map_err(e2s)?;
             let m = self
                 .st
                 .quotes
                 .convert(m, g.currency, Rounding::HalfEven)
                 .map_err(e2s)?;
+            if m.is_zero() {
+                continue;
+            }
             let cp = match p.routing {
                 Routing::ABook => LP_COUNTERPARTY,
                 Routing::BBook => BROKER_BOOK,
             };
-            let lid = acc.ledger_id;
             self.post(
                 TxnKind::Swap,
-                format!("swap:{}:{}", self.st.seq, p.id),
-                vec![(lid, m), (cp, Money::new(-m.minor, m.currency))],
+                format!("swap:{day}:{}", p.id),
+                vec![(acc.ledger_id, m), (cp, Money::new(-m.minor, m.currency))],
             )?;
+            if let Some(pm) = self.st.positions.get_mut(&p.id) {
+                pm.swap_minor += m.minor;
+            }
+            touched.insert(p.account);
+            n += 1;
         }
+        for a in touched {
+            self.balance_event(a);
+        }
+        self.events.push(Event::Rollover {
+            applied: true,
+            positions: n,
+            reason: if weekday == 3 {
+                "triple day".into()
+            } else {
+                String::new()
+            },
+        });
         Ok(())
     }
 }

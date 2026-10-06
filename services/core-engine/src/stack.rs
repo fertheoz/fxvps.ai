@@ -200,6 +200,7 @@ pub struct CoreStack {
     bridges: Vec<tokio::task::JoinHandle<()>>,
     status: std::sync::Arc<std::sync::RwLock<Vec<fix_gateway::SessionStatus>>>,
     status_task: Option<tokio::task::JoinHandle<()>>,
+    rollover_task: tokio::task::JoinHandle<()>,
 }
 
 impl CoreStack {
@@ -345,8 +346,34 @@ impl CoreStack {
             });
             (merged, Some(task))
         };
+        // Daily rollover at the configured UTC hour; the engine itself makes it
+        // idempotent per UTC day, so a restart around the hour is harmless.
+        let rollover_engine = engine.clone();
+        let rollover_task = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(30));
+            let mut sent_day = 0u64;
+            loop {
+                tick.tick().await;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let (day, hour) = (now / 86_400, (now % 86_400) / 3_600);
+                let Ok(cfg) = rollover_engine.read(|e| e.swap_config().clone()).await else {
+                    break;
+                };
+                if cfg.enabled && hour == cfg.rollover_hour_utc as u64 && day != sent_day {
+                    sent_day = day;
+                    match rollover_engine.command(Command::Rollover).await {
+                        Ok(ev) => tracing::info!(?ev, "daily rollover"),
+                        Err(e) => tracing::warn!(error = %e, "daily rollover failed"),
+                    }
+                }
+            }
+        });
         let core = Arc::new(InProcessCore::new(engine.clone(), events, names).await?);
         Ok(CoreStack {
+            rollover_task,
             core,
             engine,
             agg,
@@ -372,6 +399,7 @@ impl CoreStack {
         if let Some(t) = self.status_task {
             t.abort();
         }
+        self.rollover_task.abort();
         for g in self.gateways {
             g.shutdown().await;
         }

@@ -132,7 +132,7 @@ pub fn position(e: &Engine, p: &Position) -> Value {
         "openPrice": price_f(p.open_price),
         "currentPrice": current,
         "pnl": pnl,
-        "swap": 0,
+        "swap": minor(p.swap_minor),
         "book": book(p.routing),
         "openedAt": iso(p.opened_ts),
     })
@@ -291,6 +291,29 @@ pub fn client_flow(e: &Engine, admin: &AdminState) -> Value {
     Value::Array(rows)
 }
 
+pub fn weekday_name(d: u8) -> &'static str {
+    ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][(d % 7) as usize]
+}
+
+pub fn weekday_index(name: &str) -> Option<u8> {
+    ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+        .iter()
+        .position(|d| *d == name)
+        .map(|i| i as u8)
+}
+
+/// Rollover schedule plus when it last ran (`GET /v1/settings/swap`).
+pub fn swap_config(e: &Engine) -> Value {
+    let c = e.swap_config();
+    let last = e.last_rollover_day();
+    json!({
+        "enabled": c.enabled,
+        "rolloverHourUtc": c.rollover_hour_utc,
+        "skipWeekend": c.skip_weekend,
+        "lastRolloverAt": (last > 0).then(|| iso(last * 86_400_000_000_000)),
+    })
+}
+
 pub fn margin_calls(e: &Engine, admin: &AdminState) -> Value {
     let mut rows: Vec<(i128, Value)> = Vec::new();
     for a in e.accounts() {
@@ -340,7 +363,7 @@ pub fn group(g: &GroupConfig, all_symbols: &[String]) -> Value {
         "symbolMarkups": g.symbol_markup_points,
         "maxSlippagePoints": g.max_slippage_points,
         "passPriceImprovement": g.pass_price_improvement,
-        "swapMultiplier": 1,
+        "swapMultiplier": g.swap_multiplier_pct as f64 / 100.0,
         "book": book(g.routing),
         "symbols": symbols,
         "esma": g.esma.map(|p| match p { EsmaPreset::Retail => "retail", EsmaPreset::Professional => "professional" }),
@@ -391,8 +414,8 @@ pub fn symbol(s: &SymbolSpec) -> Value {
         "lotStep": qty_f(s.lot_step),
         "swapLong": price_f(s.swap_long),
         "swapShort": price_f(s.swap_short),
-        "swapType": "money",
-        "tripleSwapDay": "wed",
+        "swapType": match s.swap_mode { risk::SwapMode::Money => "money", risk::SwapMode::Points => "points" },
+        "tripleSwapDay": weekday_name(s.triple_swap_day),
         "tradeSessions": [],
         "enabled": true,
         "lp": "LP",
@@ -466,7 +489,7 @@ pub fn trades(e: &Engine) -> Value {
                 "closePrice": close,
                 "pnl": minor(d.pnl.minor),
                 "commission": minor(d.commission.minor),
-                "swap": 0,
+                "swap": minor(d.swap),
                 "book": routing,
                 "closedAt": iso(d.ts),
             })
@@ -747,6 +770,7 @@ struct RevenueTotals {
     markup: i128,
     b_book: i128,
     commission: i128,
+    swap: i128,
     lp: i128,
 }
 
@@ -754,6 +778,7 @@ impl RevenueTotals {
     fn add(&mut self, kind: TxnKind, a_book: bool, broker: i128, lp: i128) {
         match (kind, a_book) {
             (TxnKind::Commission, _) => self.commission += broker,
+            (TxnKind::Swap, _) => self.swap += broker,
             (_, true) => self.markup += broker,
             (_, false) => self.b_book += broker,
         }
@@ -765,8 +790,9 @@ impl RevenueTotals {
             "markup": minor(self.markup),
             "bBook": minor(self.b_book),
             "commission": minor(self.commission),
+            "swap": minor(self.swap),
             "lp": minor(self.lp),
-            "total": minor(self.markup + self.b_book + self.commission),
+            "total": minor(self.markup + self.b_book + self.commission + self.swap),
         })
     }
 }
@@ -788,11 +814,15 @@ pub fn revenue(e: &Engine, since_ns: u64) -> Value {
             if d.ts >= since_ns {
                 recent.add(kind, a_book, broker, lp);
             }
-            let commission = kind == TxnKind::Commission;
+            let tag = match kind {
+                TxnKind::Commission => ("c", "commission"),
+                TxnKind::Swap => ("s", "swap"),
+                _ => ("d", "pnl"),
+            };
             rows.push(json!({
-                "id": format!("{}{}", if commission { "c" } else { "d" }, d.id),
+                "id": format!("{}{}", tag.0, d.id),
                 "at": iso(d.ts),
-                "kind": if commission { "commission" } else { "pnl" },
+                "kind": tag.1,
                 "ref": format!("deal {} · position {}", d.id, d.position_id),
                 "book": if a_book { "A" } else { "B" },
                 "login": d.account,
@@ -815,6 +845,14 @@ pub fn revenue(e: &Engine, since_ns: u64) -> Value {
                 -d.commission.minor,
                 0,
             );
+        }
+        if d.swap != 0 {
+            // B-book: the swap is ours; A-book: it passes through to the LP
+            if a_book {
+                row(TxnKind::Swap, d.swap, 0, -d.swap);
+            } else {
+                row(TxnKind::Swap, d.swap, -d.swap, 0);
+            }
         }
     }
     rows.reverse();

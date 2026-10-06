@@ -135,6 +135,9 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     listUsers: () => call("GET", "/v1/admin-users"),
     saveUser: (u, actor) => call("PUT", `/v1/admin-users/${enc(u.id)}`, u, actor),
     getSettings: () => call("GET", "/v1/settings"),
+    getSwapConfig: () => call("GET", "/v1/settings/swap"),
+    saveSwapConfig: (c, actor) => call("PUT", "/v1/settings/swap", { enabled: c.enabled, rolloverHourUtc: c.rolloverHourUtc, skipWeekend: c.skipWeekend }, actor),
+    runRollover: (actor) => call("POST", "/v1/settings/swap/rollover", {}, actor),
     getMe: () => call("GET", "/v1/me"),
     saveSettings: (s, actor) => call("PUT", "/v1/settings", s, actor),
 

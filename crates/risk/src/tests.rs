@@ -277,3 +277,35 @@ fn toxicity_score_needs_evidence_and_weighs_scalping() {
     }
     assert_eq!(calm.toxicity(), 0);
 }
+
+#[test]
+fn swap_modes_weekday_and_multiplier() {
+    let mut eu = SymbolSpec::fx("EURUSD", Currency::EUR, Currency::USD, 5);
+    eu.swap_long = px("-7");
+    eu.swap_short = px("2");
+    // money mode: -7 USD per lot per day × 2 lots × 50 % = -7
+    assert_eq!(
+        swap_scaled(&eu, Side::Buy, qty("2"), 50),
+        px("-7").raw() as i128
+    );
+    assert_eq!(
+        swap_scaled(&eu, Side::Sell, qty("1"), 100),
+        px("2").raw() as i128
+    );
+    // points mode: -7 points × 0.00001 × 100 000 × 1 lot = -7 USD
+    eu.swap_mode = SwapMode::Points;
+    assert_eq!(
+        swap_scaled(&eu, Side::Buy, qty("1"), 100),
+        px("-7").raw() as i128
+    );
+    // 1970-01-01 Thursday; +2 days Saturday; +3 Sunday
+    assert_eq!(weekday_utc(0), 4);
+    assert_eq!(weekday_utc(2 * 86_400_000_000_000), 6);
+    assert_eq!(weekday_utc(3 * 86_400_000_000_000), 0);
+    assert!(SwapConfig {
+        rollover_hour_utc: 24,
+        ..SwapConfig::default()
+    }
+    .validate()
+    .is_err());
+}

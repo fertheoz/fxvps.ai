@@ -94,9 +94,18 @@ Konsol: Risk → hedge kartı + maruziyet tablosunda Hedge/Limit; Raporlar →
 "Müşteri akışı"; müşteri kartında toksisite rozeti; kural düzenleyicide
 toksisite alanları. Haber-anı ölçütü takvim kaynağı gelince eklenecek.
 
-### Etap 8 — Swap/rollover ve ücret motoru
+### Etap 8 — Swap/rollover ve ücret motoru ✅
 Günlük swap uygulaması (çarşamba 3×), sembol bazında; ekstre ve gelir raporuna
 "swap" kalemi gerçek olur.
+
+Yapılan: `SwapConfig` (saat UTC, hafta sonu atla, açık/kapalı; `Command::SetSwapConfig`),
+stack içinde zamanlayıcı; motor rollover'ı UTC günü başına **bir kez** uygular
+(yeniden başlatmaya dayanıklı), sembolün `triple_swap_day`'inde 3 gün, grup
+`swap_multiplier_pct` ile ölçekler, `SwapMode::{Money, Points}`; swap pozisyonda
+birikir, kapanışta kapanan parçayla deal'e geçer → pozisyon/işlem/ekstre/gelir
+raporlarında gerçek swap. Konsol: Ayarlar → Swap kartı (+ "şimdi koş"),
+sembolde swap tipi/üçlü gün, grupta swap çarpanı. Terminal pozisyon swap alanı
+proto genişlemesi bekliyor.
 
 ### Etap 9 — Dashboard ve rapor genişliği
 Saatlik/günlük seriler (hacim, gelir kalemleri, kayma, gecikme), LP sağlık

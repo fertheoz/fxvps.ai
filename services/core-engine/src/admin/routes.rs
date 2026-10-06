@@ -52,6 +52,8 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/risk/margin-calls", get(margin_calls))
         .route("/v1/risk/presets", get(presets))
         .route("/v1/risk/hedge", get(hedge_get).put(hedge_put))
+        .route("/v1/settings/swap", get(swap_get).put(swap_put))
+        .route("/v1/settings/swap/rollover", post(swap_rollover))
         .route("/v1/reports/clients", get(client_flow))
         .route("/v1/lp/sessions", get(lp_sessions))
         .route("/v1/lp/config", get(lp_config_get).put(lp_config_put))
@@ -956,6 +958,9 @@ struct GroupDto {
     commission_type: Option<String>,
     #[serde(default)]
     commission_value: Option<i64>,
+    /// Swap scale, 1.0 = the symbol's swap, 0 = swap-free.
+    #[serde(default)]
+    swap_multiplier: Option<f64>,
 }
 
 async fn group_json(ctx: &AdminCtx, name: String) -> ApiResult {
@@ -1059,6 +1064,12 @@ async fn save_group(
     cfg.markup_points = g.markup_points;
     cfg.esma = esma;
     cfg.partial_fill = partial_fill;
+    if let Some(m) = g.swap_multiplier {
+        if !(0.0..=10.0).contains(&m) {
+            return Err(ApiError::bad("swapMultiplier must be 0..10"));
+        }
+        cfg.swap_multiplier_pct = (m * 100.0).round() as u32;
+    }
     let pts = |v: Option<i64>, what: &str| -> Result<Option<i64>, ApiError> {
         match v {
             Some(p) if !(0..=1000).contains(&p) => {
@@ -1203,6 +1214,12 @@ struct SymbolDto {
     swap_long: f64,
     #[serde(default)]
     swap_short: f64,
+    /// "money" | "points"
+    #[serde(default)]
+    swap_type: Option<String>,
+    /// "sun".. "sat"
+    #[serde(default)]
+    triple_swap_day: Option<String>,
 }
 
 async fn save_symbol(
@@ -1274,6 +1291,15 @@ async fn save_symbol(
     spec.lot_step = Qty::from_raw(views::fixed(s.lot_step));
     spec.swap_long = Price::from_raw(views::fixed(s.swap_long));
     spec.swap_short = Price::from_raw(views::fixed(s.swap_short));
+    spec.swap_mode = match s.swap_type.as_deref() {
+        None | Some("money") => risk::SwapMode::Money,
+        Some("points") => risk::SwapMode::Points,
+        _ => return Err(ApiError::bad("swapType must be money or points")),
+    };
+    if let Some(d) = s.triple_swap_day.as_deref() {
+        spec.triple_swap_day =
+            views::weekday_index(d).ok_or_else(|| ApiError::bad("invalid tripleSwapDay"))?;
+    }
     let details = match before {
         Some((l, sh)) => format!(
             "swapLong {l} → {}, swapShort {sh} → {}, digits {}",
@@ -1408,6 +1434,72 @@ async fn hedge_put(
     drop(store);
     ctx.notify(&["hedgePolicy", "exposure", "listAudit"]);
     Ok(Json(ctx.q(views::hedge_policy).await?))
+}
+
+async fn swap_get(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "settings.view")?;
+    Ok(Json(ctx.q(views::swap_config).await?))
+}
+
+async fn swap_put(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(c): Json<risk::SwapConfig>,
+) -> ApiResult {
+    need(&actor, "settings.edit")?;
+    c.validate().map_err(ApiError::bad)?;
+    let details = format!(
+        "{} at {:02}:00 UTC, weekend {}",
+        if c.enabled { "on" } else { "off" },
+        c.rollover_hour_utc,
+        if c.skip_weekend { "skipped" } else { "charged" }
+    );
+    let mut store = ctx.store.lock().await;
+    ctx.cmd(Command::SetSwapConfig(c)).await?;
+    store.append(&actor, AdminCmd::SwapConfigSaved { details })?;
+    drop(store);
+    ctx.notify(&["getSwapConfig", "listAudit"]);
+    Ok(Json(ctx.q(views::swap_config).await?))
+}
+
+/// Runs today's rollover now (idempotent: a second call the same UTC day is a no-op).
+async fn swap_rollover(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "risk.edit")?;
+    let mut store = ctx.store.lock().await;
+    let events = ctx.cmd(Command::Rollover).await?;
+    let (applied, positions, reason) = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Rollover {
+                applied,
+                positions,
+                reason,
+            } => Some((*applied, *positions, reason.clone())),
+            _ => None,
+        })
+        .unwrap_or((false, 0, "no result".into()));
+    store.append(
+        &actor,
+        AdminCmd::RolloverRun {
+            details: if applied {
+                format!("{positions} positions {reason}")
+            } else {
+                format!("skipped: {reason}")
+            },
+        },
+    )?;
+    drop(store);
+    ctx.notify(&[
+        "getSwapConfig",
+        "listPositions",
+        "listTrades",
+        "statements",
+        "revenue",
+        "listAudit",
+    ]);
+    Ok(Json(
+        json!({ "applied": applied, "positions": positions, "reason": reason }),
+    ))
 }
 
 async fn client_flow(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
@@ -1617,6 +1709,15 @@ async fn statements(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
                         let g = e.group(&a.group)?;
                         let closing = e.balance(a.id).ok()?.minor as i64;
                         let (dep, wd) = flows.get(&a.id).copied().unwrap_or_default();
+                        let (mut commission, mut swap) = (0i128, 0i128);
+                        for d in e.deals().iter().filter(|d| d.account == a.id) {
+                            commission += d.commission.minor;
+                            swap += d.swap;
+                        }
+                        for p in e.positions_of(a.id) {
+                            swap += p.swap_minor;
+                        }
+                        let (commission, swap) = (commission as i64, swap as i64);
                         Some(json!({
                             "login": a.id,
                             "name": format!("Account {}", a.id),
@@ -1624,10 +1725,10 @@ async fn statements(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
                             "opening": 0,
                             "deposits": dep,
                             "withdrawals": wd,
-                            // trading result incl. commission and swap (not split by the engine)
-                            "pnl": closing - dep + wd,
-                            "commission": 0,
-                            "swap": 0,
+                            // trading result net of commission and swap
+                            "pnl": closing - dep + wd - commission - swap,
+                            "commission": commission,
+                            "swap": swap,
                             "closing": closing,
                         }))
                     })
