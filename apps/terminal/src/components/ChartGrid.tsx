@@ -11,6 +11,34 @@ const IND: (keyof Indicators)[] = ['sma', 'ema', 'bollinger', 'rsi', 'volume'];
 export function ChartGrid() {
   const t = useT();
   const layout = useTerminal((s) => s.layout);
+  const hidden = useTerminal((s) => s.hiddenCharts);
+  const charts = useTerminal((s) => s.charts);
+  const restoreChart = useTerminal((s) => s.restoreChart);
+  // Slots still in the grid; the rest sit in the toolbar as chips (minimised) or are gone (closed).
+  const visible = Array.from({ length: layout }, (_, i) => i).filter((i) => !hidden[i]);
+  const minimized = Object.entries(hidden)
+    .filter(([i, how]) => how === 'min' && Number(i) < layout)
+    .map(([i]) => Number(i));
+  const pair = (a: number, b: number) => (
+    <Group orientation="horizontal">
+      <Panel minSize="20"><ChartPanel index={a} /></Panel>
+      <Separator />
+      <Panel minSize="20"><ChartPanel index={b} /></Panel>
+    </Group>
+  );
+  const grid = () => {
+    const [a, b, c, d] = visible;
+    if (a === undefined) return <div className="h-full grid place-items-center text-muted text-[12px]">{t('chart.allHidden')}</div>;
+    if (b === undefined) return <ChartPanel index={a} />;
+    if (c === undefined) return pair(a, b);
+    return (
+      <Group orientation="vertical">
+        <Panel minSize="20">{pair(a, b)}</Panel>
+        <Separator />
+        <Panel minSize="20">{d === undefined ? <ChartPanel index={c} /> : pair(c, d)}</Panel>
+      </Group>
+    );
+  };
   const setLayout = useTerminal((s) => s.setLayout);
   const indicators = useTerminal((s) => s.indicators);
   const toggle = useTerminal((s) => s.toggleIndicator);
@@ -51,6 +79,17 @@ export function ChartGrid() {
               onClick={() => setLayout(l)}
             >
               {l}
+            </button>
+          ))}
+          {minimized.map((i) => (
+            <button
+              key={`min-${i}`}
+              className="h-5 px-1.5 rounded border border-dashed border-line text-[10px] text-muted hover:text-fg"
+              title={t('chart.restore')}
+              onClick={() => restoreChart(i)}
+              data-testid={`chart-restore-${i}`}
+            >
+              ▢ {charts[i]?.symbol} {charts[i]?.timeframe}
             </button>
           ))}
         </div>
@@ -115,35 +154,7 @@ export function ChartGrid() {
           ))}
         </div>
       </div>
-      <div className="flex-1 min-h-0">
-        {layout === 1 && <ChartPanel index={0} />}
-        {layout === 2 && (
-          <Group orientation="horizontal">
-            <Panel minSize="20"><ChartPanel index={0} /></Panel>
-            <Separator />
-            <Panel minSize="20"><ChartPanel index={1} /></Panel>
-          </Group>
-        )}
-        {layout === 4 && (
-          <Group orientation="vertical">
-            <Panel minSize="20">
-              <Group orientation="horizontal">
-                <Panel minSize="20"><ChartPanel index={0} /></Panel>
-                <Separator />
-                <Panel minSize="20"><ChartPanel index={1} /></Panel>
-              </Group>
-            </Panel>
-            <Separator />
-            <Panel minSize="20">
-              <Group orientation="horizontal">
-                <Panel minSize="20"><ChartPanel index={2} /></Panel>
-                <Separator />
-                <Panel minSize="20"><ChartPanel index={3} /></Panel>
-              </Group>
-            </Panel>
-          </Group>
-        )}
-      </div>
+      <div className="flex-1 min-h-0">{grid()}</div>
     </section>
   );
 }
