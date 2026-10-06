@@ -287,9 +287,22 @@ pub struct GroupQuote {
     pub ts_ns: u64,
 }
 
+/// LP depth of a symbol as one group sees it (markup applied to every level).
+/// Quantities are instrument units, best level first. Not journaled: a replay
+/// has no depth until the next LP tick.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupDepth {
+    pub group: String,
+    pub symbol: String,
+    pub bids: Vec<(Fixed, Fixed)>,
+    pub asks: Vec<(Fixed, Fixed)>,
+    pub ts_ns: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CoreEvent {
     Quote(GroupQuote),
+    Depth(GroupDepth),
     Order(OrderView),
     Position(PositionView),
     Account(AccountView),
@@ -299,7 +312,7 @@ pub enum CoreEvent {
 impl CoreEvent {
     pub fn account(&self) -> Option<&str> {
         match self {
-            CoreEvent::Quote(_) => None,
+            CoreEvent::Quote(_) | CoreEvent::Depth(_) => None,
             CoreEvent::Order(o) => Some(&o.account),
             CoreEvent::Position(p) => Some(&p.account),
             CoreEvent::Account(a) => Some(&a.account),

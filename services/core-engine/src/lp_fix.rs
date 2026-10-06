@@ -10,12 +10,15 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use domain::{ExecType, Fixed, Order, OrderType, TimeInForce};
 use fix_gateway::{GatewayEvent, OrderCommand};
 use money::{Price, Qty};
 use oms::{Command, LpOrderRequest, LpRouter};
 use tokio::sync::{broadcast, mpsc};
+
+use crate::api::{CoreEvent, GroupDepth};
 
 use crate::{EngineHandle, LpFeedback};
 
@@ -161,12 +164,81 @@ pub fn to_command(ev: &GatewayEvent, symbols: &SymbolMap, prefix: &str) -> Optio
 
 /// Feeds fix-gateway quotes and executions into the engine until the event
 /// channel closes or the engine stops.
+/// Group markups the bridge applies to LP depth, refreshed from the engine
+/// now and then (markups change rarely; the top of book itself is journaled
+/// through `Command::Quote` and priced by the engine).
+#[derive(Default)]
+struct Markups {
+    /// group -> markup points
+    groups: Vec<(String, i64)>,
+    /// symbol -> point (raw)
+    points: BTreeMap<String, i64>,
+    at: Option<Instant>,
+}
+
+impl Markups {
+    const TTL: Duration = Duration::from_secs(5);
+
+    async fn refresh(&mut self, engine: &EngineHandle) {
+        if self.at.is_some_and(|t| t.elapsed() < Self::TTL) {
+            return;
+        }
+        if let Ok((groups, points)) = engine
+            .read(|e| {
+                let g: Vec<(String, i64)> = e
+                    .groups()
+                    .map(|g| (g.name.clone(), g.markup_points))
+                    .collect();
+                let p: BTreeMap<String, i64> = e
+                    .symbols()
+                    .map(|s| (s.symbol.clone(), s.point().raw()))
+                    .collect();
+                (g, p)
+            })
+            .await
+        {
+            self.groups = groups;
+            self.points = points;
+        }
+        self.at = Some(Instant::now());
+    }
+
+    /// One `GroupDepth` per group for a raw LP book (empty books are skipped).
+    fn depths(&self, symbol: &str, q: &domain::Quote, ts_ns: u64) -> Vec<GroupDepth> {
+        if q.bids.is_empty() && q.asks.is_empty() {
+            return Vec::new();
+        }
+        let point = self.points.get(symbol).copied().unwrap_or(0);
+        self.groups
+            .iter()
+            .map(|(group, pts)| {
+                let m = point * pts;
+                let level = |l: &domain::Level, sign: i64| {
+                    (
+                        Fixed::from_raw(l.price.raw() + sign * m),
+                        Fixed::from_raw(l.qty.raw()),
+                    )
+                };
+                GroupDepth {
+                    group: group.clone(),
+                    symbol: symbol.to_string(),
+                    bids: q.bids.iter().map(|l| level(l, -1)).collect(),
+                    asks: q.asks.iter().map(|l| level(l, 1)).collect(),
+                    ts_ns,
+                }
+            })
+            .collect()
+    }
+}
+
 pub async fn run_bridge(
     engine: EngineHandle,
     mut rx: broadcast::Receiver<GatewayEvent>,
     symbols: Arc<SymbolMap>,
     prefix: String,
+    events: broadcast::Sender<Arc<CoreEvent>>,
 ) {
+    let mut markups = Markups::default();
     loop {
         let ev = match rx.recv().await {
             Ok(ev) => ev,
@@ -179,6 +251,14 @@ pub async fn run_bridge(
         if let Some(cmd) = to_command(&ev, &symbols, &prefix) {
             if engine.command(cmd).await.is_err() {
                 break; // engine stopped
+            }
+            if let GatewayEvent::Quote(q) = &ev {
+                if let Some((sym, _)) = symbols.from_lp(&q.symbol) {
+                    markups.refresh(&engine).await;
+                    for d in markups.depths(sym, q, domain::now_ns()) {
+                        let _ = events.send(Arc::new(CoreEvent::Depth(d)));
+                    }
+                }
             }
         } else if let GatewayEvent::SessionUp { .. } | GatewayEvent::SessionDown { .. } = ev {
             tracing::info!(event = ?ev, "fix-gateway session event");
