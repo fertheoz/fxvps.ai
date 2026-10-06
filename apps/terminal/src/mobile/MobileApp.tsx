@@ -831,6 +831,8 @@ function AccountView() {
   const toggleTheme = useTerminal((s) => s.toggleTheme);
   const lang = useTerminal((s) => s.lang);
   const setLang = useTerminal((s) => s.setLang);
+  const askLine = useTerminal((s) => s.showAskLine);
+  const toggleAsk = useTerminal((s) => s.toggleAskLine);
   const conn = useTerminal((s) => s.connection);
   const latency = useTerminal((s) => s.latencyMs);
   const claims = useSession((s) => s.claims);
@@ -876,6 +878,12 @@ function AccountView() {
           t('top.lang'),
           <button className={`${pill} num`} onClick={() => setLang(lang === 'en' ? 'tr' : 'en')}>
             {lang.toUpperCase()}
+          </button>,
+        )}
+        {row(
+          t('chart.askLine'),
+          <button className={`${pill} ${askLine ? 'bg-accent text-white' : ''}`} onClick={toggleAsk} aria-pressed={askLine} data-testid="m-ask-line">
+            {askLine ? 'ON' : 'OFF'}
           </button>,
         )}
         {row(

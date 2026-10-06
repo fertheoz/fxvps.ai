@@ -78,6 +78,8 @@ export interface TerminalState {
   charts: ChartSlot[];
   activeChart: number;
   indicators: Indicators;
+  /** Draw the ask price as a second line (candles follow the bid). */
+  showAskLine: boolean;
   oneClickVolume: number;
   // UI (transient)
   toolboxTab: ToolboxTab;
@@ -105,6 +107,7 @@ export interface TerminalState {
   setChartTimeframe(tf: Timeframe, index?: number): void;
   setActiveChart(i: number): void;
   toggleIndicator(k: keyof Indicators): void;
+  toggleAskLine(): void;
   setOneClickVolume(v: number): void;
   setToolboxTab(t: ToolboxTab): void;
   openTicket(preset?: Partial<TicketPreset>): void;
@@ -161,6 +164,7 @@ export const useTerminal = create<TerminalState>()(
       charts: defaultCharts,
       activeChart: 0,
       indicators: { sma: false, ema: true, bollinger: false, rsi: false, volume: true },
+      showAskLine: false,
       oneClickVolume: 10,
       toolboxTab: 'positions',
       ticket: null,
@@ -286,6 +290,9 @@ export const useTerminal = create<TerminalState>()(
       setActiveChart(activeChart) {
         set({ activeChart });
       },
+      toggleAskLine() {
+        set({ showAskLine: !get().showAskLine });
+      },
       toggleIndicator(k) {
         set({ indicators: { ...get().indicators, [k]: !get().indicators[k] } });
       },
@@ -335,6 +342,7 @@ export const useTerminal = create<TerminalState>()(
         layout: s.layout,
         charts: s.charts,
         indicators: s.indicators,
+        showAskLine: s.showAskLine,
         oneClickVolume: s.oneClickVolume,
         activeAccountId: s.activeAccountId,
       }),
