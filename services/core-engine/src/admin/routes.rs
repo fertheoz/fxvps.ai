@@ -120,7 +120,7 @@ impl AdminCtx {
     }
 
     /// Credit/KYC view of the admin state (cheap clone for engine queries).
-    async fn view_state(&self) -> AdminState {
+    pub(super) async fn view_state(&self) -> AdminState {
         let st = &self.store.lock().await.state;
         AdminState {
             credit: st.credit.clone(),
