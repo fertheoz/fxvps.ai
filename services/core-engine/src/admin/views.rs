@@ -305,12 +305,11 @@ pub fn weekday_index(name: &str) -> Option<u8> {
 /// Rollover schedule plus when it last ran (`GET /v1/settings/swap`).
 pub fn swap_config(e: &Engine) -> Value {
     let c = e.swap_config();
-    let last = e.last_rollover_day();
     json!({
         "enabled": c.enabled,
         "rolloverHourUtc": c.rollover_hour_utc,
         "skipWeekend": c.skip_weekend,
-        "lastRolloverAt": (last > 0).then(|| iso(last * 86_400_000_000_000)),
+        "lastRolloverAt": e.last_rollover_day().map(|d| iso(d * 86_400_000_000_000)),
     })
 }
 

@@ -227,9 +227,9 @@ impl Engine {
     pub fn swap_config(&self) -> &SwapConfig {
         &self.st.swap
     }
-    /// UTC day (days since epoch) of the last rollover, 0 = never.
-    pub fn last_rollover_day(&self) -> u64 {
-        self.st.last_rollover_day
+    /// UTC day (days since epoch) of the last rollover, `None` = never.
+    pub fn last_rollover_day(&self) -> Option<u64> {
+        self.st.last_rollover_day.checked_sub(1)
     }
     pub fn hedge_policy(&self) -> &HedgePolicy {
         &self.st.hedge
@@ -1917,14 +1917,15 @@ impl Engine {
         if !self.st.swap.enabled {
             return skip(self, "disabled");
         }
-        if day == self.st.last_rollover_day {
+        // stored as day + 1 so a fresh journal (0) never looks "already done"
+        if day + 1 == self.st.last_rollover_day {
             return skip(self, "already applied today");
         }
         let weekday = risk::weekday_utc(self.st.now);
         if self.st.swap.skip_weekend && (weekday == 0 || weekday == 6) {
             return skip(self, "weekend");
         }
-        self.st.last_rollover_day = day;
+        self.st.last_rollover_day = day + 1;
         let ps: Vec<Position> = self.st.positions.values().cloned().collect();
         let mut touched = BTreeSet::new();
         let mut n = 0u32;
