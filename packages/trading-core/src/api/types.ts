@@ -185,11 +185,20 @@ export interface ChartShape {
   b: { time: number; price: number };
 }
 
+/** A saved chart set-up: which indicators are on and their parameters. */
+export interface ChartTemplate {
+  id: string;
+  name: string;
+  indicators: Record<string, boolean>;
+  settings: Record<string, { period?: number; dev?: number; color?: string }>;
+}
+
 /** Per-account chart objects, stored on the server as the account's preferences. */
 export interface ChartObjects {
   lines: ChartLine[];
   alerts: PriceAlert[];
   shapes: ChartShape[];
+  templates?: ChartTemplate[];
 }
 
 export const EMPTY_OBJECTS: ChartObjects = { lines: [], alerts: [], shapes: [] };

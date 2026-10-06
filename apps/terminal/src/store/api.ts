@@ -86,6 +86,7 @@ export function parseObjects(raw: string | null): ChartObjects | null {
       lines: Array.isArray(v.lines) ? v.lines.filter((l) => l && typeof l.symbol === 'string' && typeof l.price === 'number') : [],
       alerts: Array.isArray(v.alerts) ? v.alerts.filter((a) => a && typeof a.symbol === 'string' && typeof a.price === 'number') : [],
       shapes: Array.isArray(v.shapes) ? v.shapes.filter((x) => x && typeof x.symbol === 'string' && x.a && x.b && (x.kind === 'trend' || x.kind === 'rect')) : [],
+      templates: Array.isArray(v.templates) ? v.templates.filter((x) => x && typeof x.name === 'string' && x.indicators && x.settings) : [],
     };
   } catch {
     return null;

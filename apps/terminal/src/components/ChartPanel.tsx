@@ -94,6 +94,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const isActive = useTerminal((s) => s.activeChart === index);
   const theme = useTerminal((s) => s.theme);
   const indicators = useTerminal((s) => s.indicators);
+  const indicatorSettings = useTerminal((s) => s.indicatorSettings);
   const positions = useTerminal(selectPositions);
   const orders = useTerminal(selectOrders);
   const objects = useTerminal((s) => (s.activeAccountId ? s.objects[s.activeAccountId] : undefined));
@@ -187,28 +188,30 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     const bars = barsRef.current;
     const closes = bars.map((b) => b.close);
     const r = indRef.current;
+    const cfg = useTerminal.getState().indicatorSettings;
     const ensure = (key: keyof IndicatorSeries, on: boolean, color: string, pane = 0, style: LineStyle = LineStyle.Solid) => {
       if (on && !r[key]) r[key] = chart.addSeries(LineSeries, { color, lineWidth: 1, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, pane);
+      else if (on) r[key]!.applyOptions({ color });
       if (!on && r[key]) {
         chart.removeSeries(r[key]!);
         delete r[key];
       }
     };
-    ensure('sma', ind.sma, '#f59e0b');
-    ensure('ema', ind.ema, '#8b5cf6');
-    ensure('bbU', ind.bollinger, '#06b6d4', 0, LineStyle.Dashed);
-    ensure('bbM', ind.bollinger, '#06b6d4', 0, LineStyle.Dotted);
-    ensure('bbL', ind.bollinger, '#06b6d4', 0, LineStyle.Dashed);
-    ensure('rsi', ind.rsi, '#ec4899', 1);
-    r.sma?.setData(lineData(bars, sma(closes, 20)));
-    r.ema?.setData(lineData(bars, ema(closes, 50)));
+    ensure('sma', ind.sma, cfg.sma.color);
+    ensure('ema', ind.ema, cfg.ema.color);
+    ensure('bbU', ind.bollinger, cfg.bollinger.color, 0, LineStyle.Dashed);
+    ensure('bbM', ind.bollinger, cfg.bollinger.color, 0, LineStyle.Dotted);
+    ensure('bbL', ind.bollinger, cfg.bollinger.color, 0, LineStyle.Dashed);
+    ensure('rsi', ind.rsi, cfg.rsi.color, 1);
+    r.sma?.setData(lineData(bars, sma(closes, cfg.sma.period)));
+    r.ema?.setData(lineData(bars, ema(closes, cfg.ema.period)));
     if (ind.bollinger) {
-      const bb = bollinger(closes, 20, 2);
+      const bb = bollinger(closes, cfg.bollinger.period, cfg.bollinger.dev);
       r.bbU?.setData(lineData(bars, bb.map((p) => p?.upper ?? null)));
       r.bbM?.setData(lineData(bars, bb.map((p) => p?.middle ?? null)));
       r.bbL?.setData(lineData(bars, bb.map((p) => p?.lower ?? null)));
     }
-    r.rsi?.setData(lineData(bars, rsi(closes, 14)));
+    r.rsi?.setData(lineData(bars, rsi(closes, cfg.rsi.period)));
     if (ind.rsi) {
       const pane = chart.panes()[1];
       pane?.setHeight(90);
@@ -254,7 +257,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   // indicator toggles
   useEffect(() => {
     if (!loading) refreshIndicators(indicators);
-  }, [indicators, loading]);
+  }, [indicators, indicatorSettings, loading]);
 
   // live ticks -> last bar (store already batches per animation frame)
   useEffect(() => {
@@ -271,18 +274,19 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     if (r.sma || r.ema || r.rsi || r.bbM) {
       const closes = bars.slice(-200).map((b) => b.close);
       const lastOf = <T,>(a: T[]) => a[a.length - 1];
+      const cfg = useTerminal.getState().indicatorSettings;
       const time = ts(bar.time);
-      const s = lastOf(sma(closes, 20));
+      const s = lastOf(sma(closes, cfg.sma.period));
       if (r.sma && s != null) r.sma.update({ time, value: s });
-      const e = lastOf(ema(bars.map((b) => b.close), 50));
+      const e = lastOf(ema(bars.map((b) => b.close), cfg.ema.period));
       if (r.ema && e != null) r.ema.update({ time, value: e });
-      const b = lastOf(bollinger(closes, 20, 2));
+      const b = lastOf(bollinger(closes, cfg.bollinger.period, cfg.bollinger.dev));
       if (b) {
         r.bbU?.update({ time, value: b.upper });
         r.bbM?.update({ time, value: b.middle });
         r.bbL?.update({ time, value: b.lower });
       }
-      const rv = lastOf(rsi(closes, 14));
+      const rv = lastOf(rsi(closes, cfg.rsi.period));
       if (r.rsi && rv != null) r.rsi.update({ time, value: rv });
     }
   }, [quote, timeframe, loading]);
