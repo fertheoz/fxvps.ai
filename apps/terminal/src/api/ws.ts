@@ -946,7 +946,8 @@ export class WsTradingApi implements TradingApi {
         const p = decimalToBig(l.price);
         if (!p) return [];
         const q = decimalToBig(l.qty);
-        return [{ price: Number(p.toFixed(digits)), volume: q ? this.qtyToVolume(d.symbol, q) : 0 }];
+        // depth sizes are lots -> centi-lots
+        return [{ price: Number(p.toFixed(digits)), volume: q ? Number(q.times(100).round(0).toFixed(0)) : 0 }];
       });
     const depth: Depth = { symbol: d.symbol, bids: levels(d.bids), asks: levels(d.asks), time: d.tsNs ? nsToMs(d.tsNs) : Date.now() };
     this.depthSeen.add(d.symbol);

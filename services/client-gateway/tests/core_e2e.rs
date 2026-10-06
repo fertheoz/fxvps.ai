@@ -180,6 +180,8 @@ async fn depth_frames_follow_depth_subscription() {
     assert!(best_bid < best_ask, "{d:?}");
     assert!(fx(d.bids[1].price) < best_bid, "bids best first: {d:?}");
     assert!(fx(d.bids[0].qty).is_positive(), "{d:?}");
+    // lots, not LP contracts: the simulator quotes a few hundred lots per level at most
+    assert!(fx(d.bids[0].qty) < Fixed::from_int(10_000), "{d:?}");
 }
 
 #[tokio::test]

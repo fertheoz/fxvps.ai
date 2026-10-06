@@ -127,8 +127,7 @@ message QuoteBatch {
   repeated Quote quotes = 1;
 }
 
-// v1.3: one price level of the LP book; qty in instrument units (contract_size
-// units per lot), like order quantities.
+// v1.3: one price level of the LP book; qty in lots.
 message DepthLevel {
   Decimal price = 1;
   Decimal qty = 2;
