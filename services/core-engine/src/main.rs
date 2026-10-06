@@ -1,8 +1,50 @@
 use core_engine::admin::{self, auth::Authenticator, AdminConfig};
 use core_engine::{spawn, Settings};
 
+/// `core-engine verify|compact [--data-dir DIR]`: offline tools for backups
+/// and deploys (JSON report on stdout; exit 1 when the state is not ok).
+fn offline(cmd: &str, mut args: std::env::Args) -> Result<bool, Box<dyn std::error::Error>> {
+    let mut dir = std::env::var("CORE_DATA_DIR").unwrap_or_else(|_| "./data/core-engine".into());
+    while let Some(a) = args.next() {
+        if a == "--data-dir" {
+            dir = args.next().ok_or("--data-dir needs a value")?;
+        }
+    }
+    let ok = match cmd {
+        "verify" => {
+            let r = core_engine::verify(&dir)?;
+            println!("{}", serde_json::to_string(&r)?);
+            r.ok
+        }
+        "compact" => {
+            let r = core_engine::compact(&dir)?;
+            println!("{}", serde_json::to_string(&r)?);
+            true
+        }
+        _ => unreachable!(),
+    };
+    Ok(ok)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut argv = std::env::args();
+    argv.next();
+    if let Some(cmd) = argv.next() {
+        match cmd.as_str() {
+            "verify" | "compact" => {
+                if !offline(&cmd, argv)? {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            "-h" | "--help" => {
+                println!("usage: core-engine [verify|compact --data-dir DIR]  (no args: admin API server)");
+                return Ok(());
+            }
+            other => return Err(format!("unknown argument {other}").into()),
+        }
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();

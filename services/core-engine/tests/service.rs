@@ -158,3 +158,46 @@ async fn admin_http() {
     assert_eq!(v.as_array().unwrap().len(), 2);
     h.shutdown();
 }
+
+#[test]
+fn verify_and_compact_keep_the_digest() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Settings::new(dir.path());
+    s.snapshot_every = 1_000;
+    let (h, join) = spawn(s.clone()).unwrap();
+    for c in setup_cmds() {
+        h.command_blocking(c).unwrap();
+    }
+    h.shutdown();
+    join.join().unwrap();
+    let before = core_engine::verify(dir.path()).unwrap();
+    assert!(before.ok, "{:?}", before.error);
+    assert!(before.journal_lines >= 8);
+    let c = core_engine::compact(dir.path()).unwrap();
+    assert!(c.archived.is_some());
+    assert_eq!(
+        std::fs::metadata(dir.path().join("journal.jsonl"))
+            .unwrap()
+            .len(),
+        0
+    );
+    let after = core_engine::verify(dir.path()).unwrap();
+    assert!(after.ok);
+    assert_eq!(after.digest, before.digest);
+    assert_eq!(after.seq, before.seq);
+    assert_eq!(after.journal_lines, 0);
+    // the engine keeps working on the compacted directory
+    let (h, join) = spawn(s).unwrap();
+    h.command_blocking(Command::Quote {
+        symbol: "EURUSD".into(),
+        bid: px("1.2"),
+        ask: px("1.2001"),
+    })
+    .unwrap();
+    h.shutdown();
+    join.join().unwrap();
+    let again = core_engine::verify(dir.path()).unwrap();
+    assert!(again.ok);
+    assert!(again.seq > before.seq);
+    assert_ne!(again.digest, before.digest);
+}
