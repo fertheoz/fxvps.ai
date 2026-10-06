@@ -21,6 +21,8 @@ import { bollinger, ema, rsi, sma } from '@fxvps/trading-core';
 import { formatPrice, lotsToVolume, roundPrice, volumeToLots } from '@fxvps/trading-core';
 import { isTauri, openChartWindow } from '../native';
 import { dragProtection, hitLine } from '../lib/chartDrag';
+import { ShapesPrimitive, timeAtX, type ShapeGeometry } from '../lib/chartShapes';
+import type { ChartShape } from '@fxvps/trading-core';
 
 type Line = ISeriesApi<'Line'>;
 
@@ -118,6 +120,11 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const draftEl = useRef<HTMLDivElement>(null);
   /** Pending order being moved after a long press (price = where the line is now). */
   const [edit, setEdit] = useState<{ kind: 'order' | 'line' | 'alert' | 'sl' | 'tp'; id: string; price: number } | null>(null);
+  /** Shapes layer (trend lines, rectangles) and the one being drawn / moved. */
+  const shapesRef = useRef<ShapesPrimitive | null>(null);
+  const [drawing, setDrawing] = useState<ChartShape | null>(null);
+  const [selectedShape, setSelectedShape] = useState<string | null>(null);
+  const shapeDragRef = useRef<{ id: string; lastX: number; lastY: number } | null>(null);
   const showAskLine = useTerminal((s) => s.showAskLine);
   const askLineRef = useRef<IPriceLine | null>(null);
   /** Price of the line being placed with the armed chart tool. */
@@ -142,6 +149,9 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     });
     chartRef.current = chart;
     candleRef.current = chart.addSeries(CandlestickSeries, { borderVisible: false });
+    const shapes = new ShapesPrimitive();
+    candleRef.current.attachPrimitive(shapes);
+    shapesRef.current = shapes;
     return () => {
       chart.remove();
       chartRef.current = null;
@@ -377,6 +387,97 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     e.currentTarget.style.cursor = lineAt(e.clientY) ? 'ns-resize' : '';
   };
 
+  // Shapes layer: the account's trend lines / rectangles of this symbol plus the one being drawn.
+  const shapeGeometry = (): ShapeGeometry => {
+    const bars = barsRef.current;
+    const last = bars[bars.length - 1];
+    return { lastTime: last?.time ?? 0, lastIndex: Math.max(0, bars.length - 1), tfSeconds: timeframe ? TIMEFRAME_SECONDS[timeframe] : 0 };
+  };
+  useEffect(() => {
+    const layer = shapesRef.current;
+    if (!layer || !spec) return;
+    layer.setTheme(cssVar('--accent'));
+    const list = (objects?.shapes ?? []).filter((x) => x.symbol === spec.name);
+    layer.update(drawing ? [...list, drawing] : list, drawing?.id ?? selectedShape, shapeGeometry());
+  });
+  const drawTool = chartTool === 'trend' || chartTool === 'rect';
+  /** Point (time s, price) under a pointer, projected beyond the last bar when needed. */
+  const pointAt = (e: { clientX: number; clientY: number }) => {
+    const chart = chartRef.current;
+    const series = candleRef.current;
+    const el = host.current;
+    if (!chart || !series || !el || !spec) return null;
+    const r = el.getBoundingClientRect();
+    const time = timeAtX(chart, shapeGeometry(), e.clientX - r.left);
+    const price = series.coordinateToPrice(e.clientY - r.top);
+    return time === null || price === null ? null : { time: Math.round(time), price: roundPrice(price, spec.digits) };
+  };
+  const shapeDown = (e: React.PointerEvent<HTMLDivElement>): boolean => {
+    if (!drawTool || !isActive || !spec || chartTool === null) return false;
+    const p = pointAt(e);
+    if (!p) return true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDrawing({ id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, symbol: spec.name, kind: chartTool as 'trend' | 'rect', a: p, b: p });
+    return true;
+  };
+  const shapeMove = (e: React.PointerEvent<HTMLDivElement>): boolean => {
+    if (drawing) {
+      const p = pointAt(e);
+      if (p) setDrawing({ ...drawing, b: p });
+      return true;
+    }
+    const d = shapeDragRef.current;
+    if (d && objects && activeAccountId) {
+      // Move the whole shape by the pointer delta (time and price).
+      const chart = chartRef.current;
+      const series = candleRef.current;
+      const el = host.current;
+      if (!chart || !series || !el) return true;
+      const r = el.getBoundingClientRect();
+      const g = shapeGeometry();
+      const t0 = timeAtX(chart, g, d.lastX - r.left);
+      const t1 = timeAtX(chart, g, e.clientX - r.left);
+      const p0 = series.coordinateToPrice(d.lastY - r.top);
+      const p1 = series.coordinateToPrice(e.clientY - r.top);
+      if (t0 === null || t1 === null || p0 === null || p1 === null) return true;
+      const dt = Math.round(t1 - t0);
+      const dp = p1 - p0;
+      shapeDragRef.current = { ...d, lastX: e.clientX, lastY: e.clientY };
+      setObjects(
+        activeAccountId,
+        { ...objects, shapes: objects.shapes.map((x) => (x.id === d.id ? { ...x, a: { time: x.a.time + dt, price: x.a.price + dp }, b: { time: x.b.time + dt, price: x.b.price + dp } } : x)) },
+        false,
+      );
+      return true;
+    }
+    return false;
+  };
+  const shapeUp = (): boolean => {
+    if (drawing) {
+      const s = drawing;
+      setDrawing(null);
+      setChartTool(null);
+      if (activeAccountId && (s.a.time !== s.b.time || s.a.price !== s.b.price)) {
+        const cur = objects ?? { lines: [], alerts: [], shapes: [] };
+        setObjects(activeAccountId, { ...cur, shapes: [...(cur.shapes ?? []), s] });
+        setSelectedShape(s.id);
+      }
+      return true;
+    }
+    if (shapeDragRef.current) {
+      shapeDragRef.current = null;
+      if (activeAccountId && objects) setObjects(activeAccountId, objects); // persist the moved shape
+      return true;
+    }
+    return false;
+  };
+  const shapeAt = (e: { clientX: number; clientY: number }) => {
+    const el = host.current;
+    if (!el) return undefined;
+    const r = el.getBoundingClientRect();
+    return shapesRef.current?.shapeAt(e.clientX - r.left, e.clientY - r.top);
+  };
+
   // Ask line (the candles and the last-price marker follow the bid).
   useEffect(() => {
     const series = candleRef.current;
@@ -395,7 +496,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const editObject = edit && (edit.kind === 'line' || edit.kind === 'alert') ? (edit.kind === 'line' ? objects?.lines : objects?.alerts)?.find((x) => x.id === edit.id) : undefined;
   const editPosition = edit && (edit.kind === 'sl' || edit.kind === 'tp') ? positions.find((p) => p.id === edit.id) : undefined;
   // An armed tool starts its line at the market (toolPrice follows the drag).
-  const toolArmed = !!chartTool && isActive && !!spec && !!quote;
+  const toolArmed = (chartTool === 'hline' || chartTool === 'alert') && isActive && !!spec && !!quote;
   const toolLinePrice = toolArmed ? (toolPrice ?? roundPrice(quote!.bid, spec!.digits)) : null;
   let line: DraftLine | undefined = draft;
   if (edit && spec && (editOrder || editObject || editPosition)) {
@@ -423,7 +524,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   /** Confirms the armed tool: the line becomes a stored object of the active account. */
   const placeTool = () => {
     if (!chartTool || !spec || toolLinePrice === null || !activeAccountId || !quote) return;
-    const cur = objects ?? { lines: [], alerts: [] };
+    const cur = objects ?? { lines: [], alerts: [], shapes: [] };
     const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     const next =
       chartTool === 'hline'
@@ -523,15 +624,32 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     if (l) return { kind: 'line', id: l.id, price: l.price };
     return undefined;
   };
-  /** Double-click (desktop) picks a line up. */
+  /** Double-click (desktop) picks a line up or selects a shape. */
   const pickDouble = (e: React.MouseEvent<HTMLDivElement>) => {
     const hit = lineObjectAt(e.clientY);
-    if (hit) setEdit(hit);
+    if (hit) return setEdit(hit);
+    setSelectedShape(shapeAt(e)?.id ?? null);
   };
-  /** Long press on a line picks it up (touch and mouse). */
+  /** Long press on a line or shape picks it up (touch and mouse). */
   const pressStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (shapeDown(e)) return;
     const hit = lineObjectAt(e.clientY);
-    if (!hit) return;
+    if (!hit) {
+      const shape = shapeAt(e);
+      if (!shape || edit || draft) {
+        setSelectedShape(null);
+        return;
+      }
+      const timer = setTimeout(() => {
+        pressRef.current = null;
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate(15);
+        setSelectedShape(shape.id);
+        shapeDragRef.current = { id: shape.id, lastX: e.clientX, lastY: e.clientY };
+        chartRef.current?.applyOptions({ handleScroll: false, handleScale: false });
+      }, PRESS_MS);
+      pressRef.current = { timer, x: e.clientX, y: e.clientY };
+      return;
+    }
     const timer = setTimeout(() => {
       pressRef.current = null;
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate(15);
@@ -540,10 +658,15 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     pressRef.current = { timer, x: e.clientX, y: e.clientY };
   };
   const pressMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (shapeMove(e)) return;
     const p = pressRef.current;
     if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > PRESS_MOVE_PX) pressEnd();
   };
   const pressEnd = () => {
+    if (shapeUp()) {
+      chartRef.current?.applyOptions({ handleScroll: true, handleScale: true });
+      return;
+    }
     if (pressRef.current) clearTimeout(pressRef.current.timer);
     pressRef.current = null;
   };
@@ -604,7 +727,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       <div className="relative flex-1 min-h-0">
         <div
           ref={host}
-          className="absolute inset-0"
+          className={`absolute inset-0 ${drawTool && isActive ? 'touch-none cursor-crosshair' : ''}`}
           onMouseDownCapture={onPointerDown}
           onMouseMove={onHover}
           onDoubleClick={pickDouble}
@@ -615,6 +738,11 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
           data-testid={`chart-canvas-${index}`}
         />
         {loading && <div className="absolute inset-0 grid place-items-center text-muted">{t('chart.loading')}</div>}
+        {drawTool && isActive && !drawing && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-3 h-8 rounded-full bg-accent text-white text-[12px] font-medium grid place-items-center shadow-lg pointer-events-none" data-testid={`chart-draw-hint-${index}`}>
+            {chartTool === 'trend' ? t('obj.trend') : t('obj.rect')} · {t('obj.drawHint')}
+          </div>
+        )}
         {line && (
           <div
             ref={draftEl}

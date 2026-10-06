@@ -176,13 +176,23 @@ export interface PriceAlert {
   createdAt: number;
 }
 
+/** A trend line or rectangle between two (time, price) points; times in UTC seconds. */
+export interface ChartShape {
+  id: string;
+  symbol: string;
+  kind: 'trend' | 'rect';
+  a: { time: number; price: number };
+  b: { time: number; price: number };
+}
+
 /** Per-account chart objects, stored on the server as the account's preferences. */
 export interface ChartObjects {
   lines: ChartLine[];
   alerts: PriceAlert[];
+  shapes: ChartShape[];
 }
 
-export const EMPTY_OBJECTS: ChartObjects = { lines: [], alerts: [] };
+export const EMPTY_OBJECTS: ChartObjects = { lines: [], alerts: [], shapes: [] };
 
 /** A finished order (order history). */
 export interface OrderHistoryEntry {
