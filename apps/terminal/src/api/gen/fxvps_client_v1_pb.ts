@@ -520,8 +520,7 @@ export const QuoteBatchSchema: GenMessage<QuoteBatch> = /*@__PURE__*/
   messageDesc(file_fxvps_client_v1, 9);
 
 /**
- * v1.3: one price level of the LP book; qty in instrument units (contract_size
- * units per lot), like order quantities.
+ * v1.3: one price level of the LP book; qty in lots.
  *
  * @generated from message fxvps.client.v1.DepthLevel
  */

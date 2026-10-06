@@ -174,8 +174,9 @@ struct Markups {
     /// symbol -> point (raw)
     points: BTreeMap<String, i64>,
     at: Option<Instant>,
-    /// Symbols whose first book was logged (one line each, for field diagnosis).
-    logged: std::collections::BTreeSet<String>,
+    /// Level count last logged per symbol: one line per change (LMAX accounts may
+    /// be top-of-book only; this shows what the feed actually delivers).
+    logged: BTreeMap<String, usize>,
 }
 
 impl Markups {
@@ -206,7 +207,14 @@ impl Markups {
     }
 
     /// One `GroupDepth` per group for a raw LP book (empty books are skipped).
-    fn depths(&self, symbol: &str, q: &domain::Quote, ts_ns: u64) -> Vec<GroupDepth> {
+    /// LP sizes arrive in LP contracts; they go out in lots (`contracts_per_lot`).
+    fn depths(
+        &self,
+        symbol: &str,
+        contracts_per_lot: i64,
+        q: &domain::Quote,
+        ts_ns: u64,
+    ) -> Vec<GroupDepth> {
         if q.bids.is_empty() && q.asks.is_empty() {
             return Vec::new();
         }
@@ -218,7 +226,7 @@ impl Markups {
                 let level = |l: &domain::Level, sign: i64| {
                     (
                         Fixed::from_raw(l.price.raw() + sign * m),
-                        Fixed::from_raw(l.qty.raw()),
+                        Fixed::from_raw(units_to_lots(l.qty, contracts_per_lot).raw()),
                     )
                 };
                 GroupDepth {
@@ -255,17 +263,19 @@ pub async fn run_bridge(
                 break; // engine stopped
             }
             if let GatewayEvent::Quote(q) = &ev {
-                if let Some((sym, _)) = symbols.from_lp(&q.symbol) {
+                if let Some((sym, cs)) = symbols.from_lp(&q.symbol) {
                     markups.refresh(&engine).await;
-                    let depths = markups.depths(sym, q, domain::now_ns());
-                    if markups.logged.insert(sym.to_string()) {
+                    let depths = markups.depths(sym, cs, q, domain::now_ns());
+                    let levels = q.bids.len().max(q.asks.len());
+                    if markups.logged.get(sym) != Some(&levels) {
+                        markups.logged.insert(sym.to_string(), levels);
                         tracing::info!(
                             symbol = sym,
                             bids = q.bids.len(),
                             asks = q.asks.len(),
-                            top_bid_qty = q.bids.first().map_or(0, |l| l.qty.raw()),
+                            top_bid_lots = ?units_to_lots(q.bids.first().map_or(Fixed::ZERO, |l| l.qty), cs),
                             groups = depths.len(),
-                            "first lp book"
+                            "lp book levels"
                         );
                     }
                     for d in depths {

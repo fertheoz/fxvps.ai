@@ -288,7 +288,7 @@ pub struct GroupQuote {
 }
 
 /// LP depth of a symbol as one group sees it (markup applied to every level).
-/// Quantities are instrument units, best level first. Not journaled: a replay
+/// Quantities are lots, best level first. Not journaled: a replay
 /// has no depth until the next LP tick.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupDepth {
