@@ -35,6 +35,8 @@ export default function RulesPage() {
   const toast = useToast();
   const rules = useApiQuery("listRules", [], { live: 10000 });
   const dry = useApiQuery("rulesDryRun", [], { live: 10000 });
+  const versions = useApiQuery("ruleVersions", [], { live: 15000 });
+  const restore = useApiMutation((id: string) => api().restoreRuleVersion(id, actor), () => toast(t("rules.restored")));
   const [draft, setDraft] = React.useState<RoutingRule[] | null>(null);
   const [editing, setEditing] = React.useState<RoutingRule | null>(null);
   const current = draft ?? rules.data ?? [];
@@ -115,6 +117,19 @@ export default function RulesPage() {
             );
           })}
         </div>
+        <Card data-testid="rule-versions">
+          <CardHeader><CardTitle>{t("rules.versions")}</CardTitle></CardHeader>
+          <CardContent className="text-sm">
+            <p className="mb-2 text-xs text-muted-foreground">{t("rules.versionsHint")}</p>
+            {(versions.data ?? []).length === 0 && <p className="text-muted-foreground">—</p>}
+            {(versions.data ?? []).slice(0, 10).map((v) => (
+              <div key={v.id} className="flex items-center justify-between gap-2 border-t border-border/60 py-1 first:border-0">
+                <span className="tabular-nums">{new Date(v.at).toLocaleString()} · {v.actor} · {v.count}</span>
+                {actor.can("groups.edit") && <Button size="sm" variant="outline" onClick={() => restore.mutate(v.id)} disabled={restore.isPending}>{t("rules.restore")}</Button>}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader><CardTitle>{t("rules.dryRun")}</CardTitle></CardHeader>
           <CardContent className="text-sm">

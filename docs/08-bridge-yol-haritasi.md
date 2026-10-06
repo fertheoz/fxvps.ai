@@ -186,7 +186,7 @@ eşik üstünde çift onay; reddet; çekmeyi "ödendi" işaretle), kartta KYC
 belgeleri (aç) ve not, Ayarlar'da yatırma talimatları. **IB**: hesaba IB payı ve
 IB bağlantısı, `GET /v1/reports/ib` + Raporlar sekmesi + CSV.
 
-### Etap 13 — Operasyon ayarları ve otomasyon
+### Etap 13 — Operasyon ayarları ve otomasyon ✅ (haber takvimi kaynağı hariç)
 Sabitlerin hepsi ayara dönsün: (a) **uyarı eşikleri ve kanalları** (Telegram
 bot, e-posta, webhook; sessiz saatler), (b) **piyasa saatleri / tatil
 takvimi**: sembol seansları dışında emir reddi, haftasonu swap ve rollover
@@ -196,6 +196,21 @@ oranı, gecikme enjeksiyonu (simülatör zaten kalıcı), (d) **kural motoru
 sürümleme**: kural setleri etiketli, geri alma, "dry-run'ı geçmiş 7 güne
 uygula" karşılaştırması, (e) **günlük operasyon raporu** (Telegram'a özet:
 hacim, gelir, uyarılar, LP sağlığı).
+
+Yapılan: **uyarı eşikleri ve kanalları** ayarda (`/v1/settings/alerts`: LP düşük
+süresi, dolum tabanı, gecikme tabanı/katı, webhook, Telegram bot+chat, sessiz
+saatler, günlük rapor saati; jeton yalnız-yaz); uyarı motoru ayarları her turda
+okur, **Telegram** gönderir, **günlük operasyon raporu** yollar. **Takvim**:
+sembol başına haftalık UTC seanslar (`SymbolSpec.sessions`, `enabled`) ve
+küresel tatiller (`Command::SetCalendar`, `/v1/settings/calendar`) — kapalıyken
+yeni emir reddi (kapatma serbest), tatilde rollover yok; konsolda sembol
+seans düzenleyici + Ayarlar'da tatil listesi. **LP simülatörü senaryo paneli**:
+simülatörde kontrol HTTP (`control_listen`, loopback 9882): `/state`, `/shock`
+(% hareket), `/scenario` (ret %, gecikme ms) → admin `/v1/lp/sim/*` → LP
+sayfasında kart. **Kural sürümleme**: her kayıt tam tabloyu saklar
+(`rule_versions`, son 50), `GET /v1/rules/versions`, `POST …/restore`; Kurallar
+sayfasında "Kayıtlı sürümler". Haber takvimi kaynağı bağlanınca toksisite
+"haber anı" ölçütü eklenecek.
 
 ### Etap 14 — Performans, ölçek ve çoklu kiracı
 Birden fazla marka/broker aynı çekirdekte: (a) **kiracı (tenant) ayrımı**:

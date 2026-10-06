@@ -692,8 +692,8 @@ pub fn symbol(s: &SymbolSpec) -> Value {
         "swapShort": price_f(s.swap_short),
         "swapType": match s.swap_mode { risk::SwapMode::Money => "money", risk::SwapMode::Points => "points" },
         "tripleSwapDay": weekday_name(s.triple_swap_day),
-        "tradeSessions": [],
-        "enabled": true,
+        "tradeSessions": s.sessions.iter().map(|x| json!({ "day": weekday_name(x.day), "open": format!("{:02}:{:02}", x.open_min / 60, x.open_min % 60), "close": format!("{:02}:{:02}", x.close_min / 60, x.close_min % 60) })).collect::<Vec<_>>(),
+        "enabled": s.enabled,
         "lp": "LP",
     })
 }

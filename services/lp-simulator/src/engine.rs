@@ -106,7 +106,7 @@ impl Engine {
         }
     }
 
-    fn reject(&mut self, nos: &NewOrderSingle, reason: u64, text: &str) -> Vec<Body> {
+    pub fn reject(&mut self, nos: &NewOrderSingle, reason: u64, text: &str) -> Vec<Body> {
         let mut er = self.er(
             "NONE",
             nos,

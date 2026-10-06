@@ -72,6 +72,8 @@ services:
       FIX_LP_FILES: /etc/fxvps/lp-sim-gateway.json
       # Backup drill status (yedek.sh) watched by the alert engine; journal auto-compaction.
       CORE_BACKUP_STATUS_FILE: /var/lib/fxvps-yedek/yedek.durum
+      # LP simulator scenario control (console LP page)
+      CORE_LP_SIM_URL: http://127.0.0.1:9882
       CORE_JOURNAL_COMPACT_MB: "256"
       FIX_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN:?set FIX_ADMIN_TOKEN in .env}
       FIX_STATUS_ADDR: 127.0.0.1:9890

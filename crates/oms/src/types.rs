@@ -4,7 +4,7 @@ use ledger::AccountId;
 use money::{Money, Price, Qty};
 pub use risk::{
     FlowStats, GroupConfig, HedgeMode, HedgePolicy, MarginMode, PartialFill, Routing, RoutingRule,
-    Side, SwapConfig, SwapMode, SymbolSpec,
+    Side, SwapConfig, SwapMode, SymbolSpec, TradingCalendar, TradingSession,
 };
 use serde::{Deserialize, Serialize};
 
@@ -404,6 +404,8 @@ pub enum Command {
     SetHedge(HedgePolicy),
     /// Rollover schedule (stage 8).
     SetSwapConfig(SwapConfig),
+    /// Holiday calendar (stage 13).
+    SetCalendar(TradingCalendar),
     /// Sends aggregated A-book orders (when aggregation is enabled).
     FlushLp,
     /// Daily rollover: charge/credit swaps.

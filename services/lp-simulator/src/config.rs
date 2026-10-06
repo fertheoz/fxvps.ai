@@ -5,6 +5,9 @@ use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct SimConfig {
+    /// Scenario control HTTP (`GET /state`, `POST /shock`, `POST /scenario`); loopback only. None = off.
+    #[serde(default)]
+    pub control_listen: Option<String>,
     #[serde(default = "default_tick")]
     pub tick_interval_ms: u64,
     #[serde(default = "default_depth")]
@@ -112,6 +115,7 @@ impl SimConfig {
             depth: 3,
             seed: Some(7),
             security_id_source: "8".into(),
+            control_listen: None,
             md: ep("LMXBDM", "FXVPS-MD"),
             trade: ep("LMXBD", "FXVPS-TRD"),
             instruments: vec![SimInstrument {

@@ -6,6 +6,8 @@
 # to the start (revert_ticks), so the simulated LP stays near the real one.
 
 tick_interval_ms = 250
+# Scenario control (console: LP → Simulator scenarios), loopback only.
+control_listen = "127.0.0.1:9882"
 depth = 5
 seed = 2026
 security_id_source = "8"

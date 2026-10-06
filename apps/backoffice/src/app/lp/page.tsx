@@ -53,6 +53,7 @@ export default function LpPage() {
       </Card>
       {actor.can("lp.view") && <AggregationCard />}
       {actor.can("reports.view") && <LpPerformanceCard />}
+      {actor.can("lp.view") && <SimulatorCard />}
       {actor.can("lp.view") && <LpConfigCard />}
     </div>
   );
@@ -324,6 +325,44 @@ function LpPerformanceCard() {
             </table>
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Stage 13: fault injection on the SIM LP (price shock, reject rate, latency). */
+function SimulatorCard() {
+  const t = useT();
+  const actor = useActor();
+  const toast = useToast();
+  const mfaOk = useMfaOk();
+  const q = useApiQuery("simState", [], { live: 10000 });
+  const editable = actor.can("lp.manage") && mfaOk;
+  const [symbol, setSymbol] = React.useState("EUR/USD");
+  const [pct, setPct] = React.useState(-1);
+  const [reject, setReject] = React.useState<number | null>(null);
+  const [latency, setLatency] = React.useState<number | null>(null);
+  const shock = useApiMutation((v: { symbol: string; pct: number }) => api().simShock(v.symbol, v.pct, actor), () => toast(t("lp.simShocked")));
+  const scenario = useApiMutation((v: { rejectPct: number; latencyMs: number }) => api().simScenario(v, actor), () => { toast(t("lp.simApplied")); setReject(null); setLatency(null); });
+  if (q.error) return <Card className="mt-4 p-4 text-sm text-muted-foreground">{t("lp.simNone")}</Card>;
+  const cur = q.data?.scenario;
+  return (
+    <Card className="mt-4" data-testid="lp-sim">
+      <CardHeader><CardTitle>{t("lp.sim")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-xs text-muted-foreground">{t("lp.simHint")}</p>
+        <div className="flex flex-wrap items-end gap-2">
+          <TextField label={t("positions.symbol")} value={symbol} onChange={setSymbol} disabled={!editable} />
+          <NumField label={t("lp.simPct")} value={pct} onChange={setPct} step={0.5} disabled={!editable} />
+          <Button variant="outline" onClick={() => shock.mutate({ symbol, pct })} disabled={!editable || shock.isPending} data-testid="sim-shock">{t("lp.simShock")}</Button>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <NumField label={t("lp.simReject")} value={reject ?? cur?.rejectPct ?? 0} onChange={(v) => setReject(Math.min(100, Math.max(0, Math.round(v))))} step={5} disabled={!editable} />
+          <NumField label={t("lp.simLatency")} value={latency ?? cur?.latencyMs ?? 0} onChange={(v) => setLatency(Math.min(30000, Math.max(0, Math.round(v))))} step={100} disabled={!editable} />
+          <Button onClick={() => scenario.mutate({ rejectPct: reject ?? cur?.rejectPct ?? 0, latencyMs: latency ?? cur?.latencyMs ?? 0 })} disabled={!editable || scenario.isPending} data-testid="sim-apply">{t("lp.simApply")}</Button>
+          {cur && <span className="text-xs text-muted-foreground">{t("lp.simReject")} {cur.rejectPct} · {t("lp.simLatency")} {cur.latencyMs}</span>}
+        </div>
+        {q.data && <div className="text-xs text-muted-foreground">{q.data.instruments.map((i) => `${i.securityId}: ${i.mid ?? "—"}`).join(" · ")}</div>}
       </CardContent>
     </Card>
   );

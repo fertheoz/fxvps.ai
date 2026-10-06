@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
@@ -28,6 +28,10 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     latency > 0 ? new Promise((res) => setTimeout(() => res(clone(v)), latency * (0.5 + rnd()))) : Promise.resolve(clone(v));
 
   let lpConfig: LpConfig | null = null;
+  let alertSettings: AlertSettings = { lpDownGraceS: 60, fillRateMinOrders: 10, fillRateFloorPct: 90, latencyFloorMs: 500, latencyMultiplier: 3, webhookUrl: "", telegramToken: "", telegramTokenSet: false, telegramChatId: "", quietHoursUtc: null, dailyReportHourUtc: 7 };
+  let calendar: TradingCalendar = { holidays: ["2026-12-25", "2027-01-01"] };
+  const ruleVersions: RuleVersionMeta[] = [{ id: "rv12", at: new Date(Date.now() - 864e5).toISOString(), actor: "admin", count: 2 }];
+  let sim = { rejectPct: 0, latencyMs: 0 };
   const funding: FundingRequest[] = [
     { id: "fr-1", account: s.clients[0]?.login ?? 1001, clientName: s.clients[0]?.name, kind: "deposit", method: "usdt_trc20", amount: 500_00, currency: "USD", details: "tx 0x9a…c1", requestedBy: "client", requestedAt: Date.now() * 1e6 - 2e12, status: "requested", decidedBy: null, decidedAt: null, note: null, opId: null },
     { id: "fr-2", account: s.clients[1]?.login ?? 1002, clientName: s.clients[1]?.name, kind: "withdraw", method: "bank", amount: 1200_00, currency: "USD", details: "TR12 0006 … 55", requestedBy: "client", requestedAt: Date.now() * 1e6 - 9e12, status: "approved", decidedBy: "dealer", decidedAt: Date.now() * 1e6 - 8e12, note: null, opId: "op-77" },
@@ -369,6 +373,15 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       rows.forEach((r) => { r.volumeSharePct = tot ? (r.lots / tot) * 100 : 0; });
       return delay({ from: new Date(Date.now() - 30 * 864e5).toISOString(), to: null, rows });
     },
+    async getAlertSettings() { return delay(alertSettings); },
+    async saveAlertSettings(s2, actor) { guard(actor, "settings.edit"); alertSettings = { ...s2, telegramToken: "", telegramTokenSet: !!s2.telegramToken || alertSettings.telegramTokenSet }; audit(actor, "settings.alerts", "alerts", "updated"); return delay(alertSettings); },
+    async getCalendar() { return delay(calendar); },
+    async saveCalendar(c, actor) { guard(actor, "settings.edit"); calendar = { holidays: [...c.holidays].sort() }; audit(actor, "settings.calendar", "calendar", `${calendar.holidays.length} holidays`); return delay(calendar); },
+    async ruleVersions() { return delay(ruleVersions); },
+    async restoreRuleVersion(id, actor) { guard(actor, "groups.edit"); const v = ruleVersions.find((x) => x.id === id); if (!v) throw new Error("not found"); ruleVersions.unshift({ id: `rv${Date.now()}`, at: new Date().toISOString(), actor: actor.name, count: mockRules.length }); audit(actor, "rules.update", "routing", `restored ${id}`); return delay(mockRules); },
+    async simState() { return delay({ scenario: sim, instruments: [{ securityId: "4001", mid: "1.12485" }, { securityId: "4002", mid: "1.32640" }] }); },
+    async simShock(symbol, pct, actor) { guard(actor, "lp.manage"); audit(actor, "lp.sim", symbol, `shock ${pct}%`); return delay({ symbol, pct }); },
+    async simScenario(s2, actor) { guard(actor, "lp.manage"); sim = s2; audit(actor, "lp.sim", "scenario", JSON.stringify(s2)); return delay(sim); },
     async auditChain() { return delay({ count: s.audit.length, chained: s.audit.length, verified: true, headHash: "9f2a…demo", brokenAt: null, lastAt: s.audit[0]?.at ?? null }); },
     async setKyc(id, kyc, actor) {
       guard(actor, "clients.edit");

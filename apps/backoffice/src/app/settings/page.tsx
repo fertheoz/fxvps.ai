@@ -4,7 +4,7 @@ import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader } from "@/
 import { NumField, SelectField, TextField, useZodForm } from "@/components/form";
 import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
-import type { SwapConfig } from "@/lib/api";
+import type { AlertSettings, SwapConfig } from "@/lib/api";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import { Book, Settings } from "@/lib/schemas";
 import { CURRENCY_MINOR_DIGITS } from "@/lib/money";
@@ -21,6 +21,8 @@ export default function SettingsPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         {data ? <SettingsForm initial={data} /> : <Card className="p-4">{t("common.loading")}</Card>}
         <SwapCard />
+        <AlertsCard />
+        <CalendarCard />
         <Card>
           <CardHeader><CardTitle>{t("settings.appearance")}</CardTitle></CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-2">
@@ -95,6 +97,68 @@ function SwapCard() {
             {actor.can("risk.edit") && <Button variant="outline" onClick={() => run.mutate(undefined)} disabled={run.isPending} data-testid="swap-run">{t("settings.runRollover")}</Button>}
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Stage 13: alert thresholds and channels. */
+function AlertsCard() {
+  const t = useT();
+  const actor = useActor();
+  const toast = useToast();
+  const mfaOk = useMfaOk();
+  const q = useApiQuery("getAlertSettings");
+  const editable = actor.can("settings.edit") && mfaOk;
+  const [draft, setDraft] = React.useState<AlertSettings | null>(null);
+  const cfg = draft ?? q.data;
+  const save = useApiMutation((s: AlertSettings) => api().saveAlertSettings(s, actor), () => { toast(t("common.saved")); setDraft(null); });
+  if (!cfg) return <Card className="p-4">{t("common.loading")}</Card>;
+  const set = <K extends keyof AlertSettings>(k: K, v: AlertSettings[K]) => setDraft({ ...cfg, [k]: v });
+  const quietFrom = cfg.quietHoursUtc ? cfg.quietHoursUtc[0] : -1;
+  return (
+    <Card data-testid="alert-settings">
+      <CardHeader><CardTitle>{t("settings.alerts")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-3 sm:grid-cols-2">
+        <p className="text-xs text-muted-foreground sm:col-span-2">{t("settings.alertsHint")}</p>
+        <NumField label={t("settings.lpDownGrace")} value={cfg.lpDownGraceS} onChange={(v) => set("lpDownGraceS", Math.max(0, Math.round(v)))} step={10} disabled={!editable} />
+        <NumField label={t("settings.fillRateMinOrders")} value={cfg.fillRateMinOrders} onChange={(v) => set("fillRateMinOrders", Math.max(1, Math.round(v)))} step={1} disabled={!editable} />
+        <NumField label={t("settings.fillRateFloor")} value={cfg.fillRateFloorPct} onChange={(v) => set("fillRateFloorPct", Math.min(100, Math.max(0, Math.round(v))))} step={1} disabled={!editable} />
+        <NumField label={t("settings.latencyFloor")} value={cfg.latencyFloorMs} onChange={(v) => set("latencyFloorMs", Math.max(0, Math.round(v)))} step={50} disabled={!editable} />
+        <NumField label={t("settings.latencyMult")} value={cfg.latencyMultiplier} onChange={(v) => set("latencyMultiplier", Math.max(1, Math.round(v)))} step={1} disabled={!editable} />
+        <TextField label={t("settings.webhook")} value={cfg.webhookUrl} onChange={(v) => set("webhookUrl", v.trim())} disabled={!editable} />
+        <label className="grid gap-1 text-sm">{t("settings.telegramToken")}
+          <input type="password" autoComplete="new-password" className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" value={cfg.telegramToken} placeholder={cfg.telegramTokenSet ? t("settings.telegramTokenSet") : ""} onChange={(e) => set("telegramToken", e.target.value.trim())} disabled={!editable} />
+        </label>
+        <TextField label={t("settings.telegramChat")} value={cfg.telegramChatId} onChange={(v) => set("telegramChatId", v.trim())} disabled={!editable} />
+        <NumField label={t("settings.quietFrom")} value={quietFrom} onChange={(v) => set("quietHoursUtc", v < 0 ? null : [Math.min(23, Math.round(v)), cfg.quietHoursUtc?.[1] ?? 6])} step={1} disabled={!editable} />
+        <NumField label={t("settings.quietTo")} value={cfg.quietHoursUtc ? cfg.quietHoursUtc[1] : 6} onChange={(v) => set("quietHoursUtc", cfg.quietHoursUtc ? [cfg.quietHoursUtc[0], Math.min(24, Math.max(0, Math.round(v)))] : null)} step={1} disabled={!editable || !cfg.quietHoursUtc} />
+        <NumField label={t("settings.dailyReport")} value={cfg.dailyReportHourUtc ?? -1} onChange={(v) => set("dailyReportHourUtc", v < 0 ? null : Math.min(23, Math.round(v)))} step={1} disabled={!editable} />
+        {editable && <div className="sm:col-span-2"><Button onClick={() => save.mutate(cfg)} disabled={save.isPending || !draft} data-testid="alerts-save">{t("common.save")}</Button></div>}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Stage 13: holiday calendar. */
+function CalendarCard() {
+  const t = useT();
+  const actor = useActor();
+  const toast = useToast();
+  const mfaOk = useMfaOk();
+  const q = useApiQuery("getCalendar");
+  const editable = actor.can("settings.edit") && mfaOk;
+  const [text, setText] = React.useState<string | null>(null);
+  const save = useApiMutation((holidays: string[]) => api().saveCalendar({ holidays }, actor), () => { toast(t("common.saved")); setText(null); });
+  if (!q.data) return <Card className="p-4">{t("common.loading")}</Card>;
+  const value = text ?? q.data.holidays.join("\n");
+  return (
+    <Card data-testid="calendar-settings">
+      <CardHeader><CardTitle>{t("settings.calendar")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-xs text-muted-foreground">{t("settings.calendarHint")}</p>
+        <textarea className="min-h-28 rounded-md border border-border bg-background p-2 font-mono text-xs text-foreground" value={value} onChange={(e) => setText(e.target.value)} disabled={!editable} placeholder="2026-12-25" />
+        {editable && <div><Button onClick={() => save.mutate(value.split(/\s+/).map((x) => x.trim()).filter(Boolean))} disabled={save.isPending || text === null} data-testid="calendar-save">{t("common.save")}</Button></div>}
       </CardContent>
     </Card>
   );

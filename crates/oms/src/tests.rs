@@ -1342,3 +1342,53 @@ fn toxicity_feeds_rules_and_profile() {
     h.market(1, "o9", Side::Buy, "0.1");
     assert_eq!(h.router.take().len(), 1, "toxic flow now routed to the LP");
 }
+
+#[test]
+fn market_hours_and_holidays_reject_new_orders_only() {
+    use risk::{TradingCalendar, TradingSession};
+    let mut h = b();
+    h.account(1, "b", "100000");
+    // open a position while the market is open (no sessions yet)
+    let id = h.market(1, "o1", Side::Buy, "0.1");
+    assert_eq!(h.e.order(id).unwrap().status, OrderStatus::Filled);
+    // 1970-01-01 is a Thursday; sessions only on Friday -> closed now
+    let mut eu = h.e.symbol_spec("EURUSD").unwrap().clone();
+    eu.sessions = vec![TradingSession {
+        day: 5,
+        open_min: 0,
+        close_min: 1440,
+    }];
+    h.cmd(Command::AddSymbol(eu));
+    let id2 = h.market(1, "o2", Side::Buy, "0.1");
+    assert_eq!(h.e.order(id2).unwrap().status, OrderStatus::Rejected);
+    assert!(h
+        .e
+        .order(id2)
+        .unwrap()
+        .reject_reason
+        .as_deref()
+        .unwrap_or("")
+        .contains("closed"));
+    // closing the open position is still allowed
+    let pid = h.pos(1)[0].id;
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: pid,
+        volume: None,
+        client_order_id: "c1".into(),
+    });
+    assert!(h.pos(1).is_empty());
+    // holiday blocks new orders even with open sessions
+    let mut eu = h.e.symbol_spec("EURUSD").unwrap().clone();
+    eu.sessions.clear();
+    h.cmd(Command::AddSymbol(eu));
+    h.cmd(Command::SetCalendar(TradingCalendar {
+        holidays: vec!["1970-01-01".into()],
+    }));
+    let id3 = h.market(1, "o3", Side::Buy, "0.1");
+    assert_eq!(h.e.order(id3).unwrap().status, OrderStatus::Rejected);
+    let ev = h.cmd(Command::Rollover);
+    assert!(ev
+        .iter()
+        .any(|e| matches!(e, Event::Rollover { applied: false, .. })));
+}
