@@ -6,6 +6,7 @@ import { bulkTargets, selectActiveAccount, selectHistory, selectOrders, selectPo
 import { closePrice, distanceToPips, formatMoney, formatPrice, lotsToVolume, pipsToDistance, positionProfit, volumeToLots } from '@fxvps/trading-core';
 import { formatTimeShort as formatTime, parseDecimal } from '@fxvps/trading-core';
 import { VirtualTable } from './VirtualTable';
+import { Modal } from './Dialogs';
 
 const TABS: ToolboxTab[] = ['positions', 'orders', 'history', 'journal'];
 const POS_COLS = '48px 104px 60px 36px 44px 68px 68px 68px 40px 68px 48px 72px minmax(250px,1fr)';
@@ -19,6 +20,29 @@ function Pnl({ v }: { v: number }) {
 
 const sideCls = (s: string) => (s === 'buy' ? 'text-up' : 'text-down');
 
+type QuickField = 'sl' | 'tp' | 'trail';
+
+/** One click on an empty "—" (or a value) opens an input right there: Enter saves, Esc cancels. */
+function QuickCell({ value, placeholder, onSave, onCancel, testId }: { value: string; placeholder: string; onSave: (v: string) => void; onCancel: () => void; testId: string }) {
+  const [v, setV] = useState(value);
+  return (
+    <input
+      autoFocus
+      className="num w-full bg-panel-2 border border-accent rounded px-1"
+      value={v}
+      placeholder={placeholder}
+      onChange={(e) => setV(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') onSave(v);
+        else if (e.key === 'Escape') onCancel();
+      }}
+      onBlur={onCancel}
+      aria-label={placeholder}
+      data-testid={testId}
+    />
+  );
+}
+
 const PositionRow = memo(function PositionRow({ p }: { p: Position }) {
   const t = useT();
   const spec = useTerminal((s) => s.symbols[p.symbol]);
@@ -27,6 +51,7 @@ const PositionRow = memo(function PositionRow({ p }: { p: Position }) {
   const toast = useTerminal((s) => s.toast);
   const rates = useRates();
   const [edit, setEdit] = useState(false);
+  const [quick, setQuick] = useState<QuickField | null>(null);
   const [sl, setSl] = useState(p.sl !== undefined ? String(p.sl) : '');
   const [tp, setTp] = useState(p.tp !== undefined ? String(p.tp) : '');
   const [trail, setTrail] = useState('');
@@ -53,7 +78,32 @@ const PositionRow = memo(function PositionRow({ p }: { p: Position }) {
     if (r.ok) setEdit(false);
     else toast('error', t('toast.rejected', { error: r.error }));
   };
+  // Quick edit of one field; the other two keep their current values.
+  const quickSave = async (field: QuickField, raw: string) => {
+    const v = parseDecimal(raw);
+    const nsl = field === 'sl' ? v : p.sl;
+    const ntp = field === 'tp' ? v : p.tp;
+    const ntr = field === 'trail' ? (v ? pipsToDistance(v, spec) : undefined) : p.trailing;
+    const r = await getApi().modifyPosition(account.id, p.id, nsl, ntp, ntr);
+    if (r.ok) toast('ok', t('tb.quickSaved', { id: p.id }));
+    else toast('error', t('toast.rejected', { error: r.error }));
+    setQuick(null);
+  };
   const inp = 'num w-full bg-panel-2 border border-line rounded px-1';
+  const cell = (field: QuickField, shown: string, current: string, testId: string, muted = false) =>
+    quick === field ? (
+      <QuickCell value={current} placeholder={t(field === 'sl' ? 'tb.sl' : field === 'tp' ? 'tb.tp' : 'tb.trailing')} onSave={(v) => void quickSave(field, v)} onCancel={() => setQuick(null)} testId={`${testId}-quick-${p.id}`} />
+    ) : (
+      <button
+        type="button"
+        className={`num text-left rounded px-0.5 hover:bg-panel-2 hover:ring-1 hover:ring-line ${muted ? 'text-muted' : ''}`}
+        title={t('tb.quickHint')}
+        onClick={() => setQuick(field)}
+        data-testid={`${testId}-${p.id}`}
+      >
+        {shown}
+      </button>
+    );
   return (
     <>
       <span className="num">{p.id}</span>
@@ -70,9 +120,9 @@ const PositionRow = memo(function PositionRow({ p }: { p: Position }) {
         </>
       ) : (
         <>
-          <span className="num" data-testid={`sl-${p.id}`}>{p.sl !== undefined ? formatPrice(p.sl, spec.digits) : '—'}</span>
-          <span className="num" data-testid={`tp-${p.id}`}>{p.tp !== undefined ? formatPrice(p.tp, spec.digits) : '—'}</span>
-          <span className="num text-muted">{p.trailing !== undefined ? distanceToPips(p.trailing, spec) : '—'}</span>
+          {cell('sl', p.sl !== undefined ? formatPrice(p.sl, spec.digits) : '—', p.sl !== undefined ? String(p.sl) : '', 'sl')}
+          {cell('tp', p.tp !== undefined ? formatPrice(p.tp, spec.digits) : '—', p.tp !== undefined ? String(p.tp) : '', 'tp')}
+          {cell('trail', p.trailing !== undefined ? String(distanceToPips(p.trailing, spec)) : '—', p.trailing !== undefined ? String(distanceToPips(p.trailing, spec)) : '', 'trail', true)}
         </>
       )}
       <span className="num">{formatPrice(closePrice(p.side, q), spec.digits)}</span>
@@ -106,16 +156,128 @@ const PositionRow = memo(function PositionRow({ p }: { p: Position }) {
   );
 });
 
+/** Detail card of one open position (row click): live P&L, protection, sizing, exits. */
+function PositionCard({ id, onClose }: { id: string; onClose: () => void }) {
+  const t = useT();
+  const p = useTerminal((s) => s.positions.find((x) => x.id === id));
+  const spec = useTerminal((s) => (p ? s.symbols[p.symbol] : undefined));
+  const q = useTerminal((s) => (p ? s.quotes[p.symbol] : undefined));
+  const account = useTerminal(selectActiveAccount);
+  const toast = useTerminal((s) => s.toast);
+  const openChart = useTerminal((s) => s.openChart);
+  const openTicket = useTerminal((s) => s.openTicket);
+  const rates = useRates();
+  const [sl, setSl] = useState(p?.sl !== undefined ? String(p.sl) : '');
+  const [tp, setTp] = useState(p?.tp !== undefined ? String(p.tp) : '');
+  const [trail, setTrail] = useState(p?.trailing !== undefined && spec ? String(distanceToPips(p.trailing, spec)) : '');
+  const [lots, setLots] = useState(p ? volumeToLots(Math.max(spec?.volumeStep ?? 1, Math.floor(p.volume / 2))) : '');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!p) onClose(); // closed meanwhile
+  }, [p, onClose]);
+  if (!p || !spec || !q || !account) return null;
+  let profit = 0;
+  try {
+    profit = positionProfit(p, spec, q, account.currency, rates);
+  } catch {
+    /* no rate yet */
+  }
+  const cur = closePrice(p.side, q);
+  const pips = distanceToPips(Math.abs(cur - p.openPrice), spec) * (cur >= p.openPrice ? (p.side === 'buy' ? 1 : -1) : p.side === 'buy' ? -1 : 1);
+  const run = async (f: () => Promise<{ ok: boolean; error?: string; price?: number }>, okMsg?: string) => {
+    setBusy(true);
+    try {
+      const r = await f();
+      if (r.ok) toast('ok', okMsg ?? t('toast.closed', { id: p.id, price: r.price ?? '' }));
+      else toast('error', t('toast.rejected', { error: r.error ?? '' }));
+      return r.ok;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const api = getApi();
+  const modify = (nsl?: number, ntp?: number, ntr?: number) => run(() => api.modifyPosition(account.id, p.id, nsl, ntp, ntr), t('tb.quickSaved', { id: p.id }));
+  const saveProtection = () => {
+    const tr = parseDecimal(trail);
+    void modify(parseDecimal(sl), parseDecimal(tp), tr ? pipsToDistance(tr, spec) : undefined);
+  };
+  const breakEven = () => {
+    setSl(String(p.openPrice));
+    void modify(p.openPrice, p.tp, p.trailing);
+  };
+  const closePart = (fraction?: number) => {
+    const v = fraction ? Math.max(spec.volumeStep, Math.round((p.volume * fraction) / spec.volumeStep) * spec.volumeStep) : lotsToVolume(lots);
+    if (v) void run(() => api.closePosition(account.id, p.id, Math.min(v, p.volume)));
+  };
+  const reverse = async () => {
+    const ok = await run(() => api.closePosition(account.id, p.id));
+    if (ok) await run(() => api.placeOrder({ accountId: account.id, symbol: p.symbol, side: p.side === 'buy' ? 'sell' : 'buy', type: 'market', volume: p.volume }), t('tb.reversed', { id: p.id }));
+    onClose();
+  };
+  const row = 'flex items-center justify-between gap-3';
+  const inp = 'num w-28 bg-panel-2 border border-line rounded px-1.5 h-7';
+  const btn = 'px-2 h-7 rounded border border-line hover:bg-hover disabled:opacity-40';
+  return (
+    <Modal title={t('tb.detail', { id: p.id })} onClose={onClose} width="w-[520px]">
+      <div className="p-3 grid gap-3 text-[12px]" data-testid={`position-card-${p.id}`}>
+        <div className="grid grid-cols-3 gap-2">
+          <div><div className="text-muted text-[10px] uppercase">{t('tb.symbol')}</div><div className="font-medium">{p.symbol} <span className={sideCls(p.side)}>{p.side}</span> {volumeToLots(p.volume)}</div></div>
+          <div><div className="text-muted text-[10px] uppercase">{t('tb.openPrice')} → {t('tb.current')}</div><div className="num">{formatPrice(p.openPrice, spec.digits)} → {formatPrice(cur, spec.digits)} <span className={pips >= 0 ? 'text-up' : 'text-down'}>({pips >= 0 ? '+' : ''}{pips.toFixed(1)} pip)</span></div></div>
+          <div><div className="text-muted text-[10px] uppercase">{t('tb.profit')}</div><div className="num text-[14px]"><Pnl v={profit} /> <span className="text-muted text-[11px]">{t('tb.commission')} {formatMoney(p.commission)} · swap {formatMoney(p.swap)}</span></div></div>
+        </div>
+        <div className="text-muted text-[11px]">{t('tb.time')}: {formatTime(p.openTime)} · {t('tb.id')} {p.id}</div>
+
+        <div className="border-t border-line pt-2 grid gap-2">
+          <div className="text-[10px] uppercase text-muted">{t('tb.protection')}</div>
+          <div className={row}>
+            <label className="flex items-center gap-2">{t('tb.sl')} <input className={inp} value={sl} onChange={(e) => setSl(e.target.value)} data-testid="card-sl" /></label>
+            <label className="flex items-center gap-2">{t('tb.tp')} <input className={inp} value={tp} onChange={(e) => setTp(e.target.value)} data-testid="card-tp" /></label>
+            <label className="flex items-center gap-2">{t('tb.trailing')} <input className={`${inp} w-16`} value={trail} onChange={(e) => setTrail(e.target.value)} placeholder="pip" /></label>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <button className="px-2 h-7 rounded bg-accent text-white disabled:opacity-40" disabled={busy} onClick={saveProtection} data-testid="card-save">{t('tb.save')}</button>
+            <button className={btn} disabled={busy} onClick={breakEven} data-testid="card-breakeven">{t('tb.breakEven')}</button>
+            <button className={btn} disabled={busy} onClick={() => { setSl(''); setTp(''); setTrail(''); void modify(undefined, undefined, undefined); }}>{t('tb.clearProtection')}</button>
+          </div>
+        </div>
+
+        <div className="border-t border-line pt-2 grid gap-2">
+          <div className="text-[10px] uppercase text-muted">{t('tb.exits')}</div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <input className={`${inp} w-20`} value={lots} onChange={(e) => setLots(e.target.value)} aria-label={t('tb.closePartial')} data-testid="card-lots" />
+            <button className={btn} disabled={busy} onClick={() => closePart()} data-testid="card-partial">{t('tb.closePartial')}</button>
+            {[0.25, 0.5, 0.75].map((f) => (
+              <button key={f} className={btn} disabled={busy} onClick={() => closePart(f)}>{Math.round(f * 100)}%</button>
+            ))}
+            <button className="px-2 h-7 rounded bg-down/90 text-white disabled:opacity-40 ml-auto" disabled={busy} onClick={() => void run(() => api.closePosition(account.id, p.id)).then(onClose)} data-testid="card-close">{t('tb.close')}</button>
+            <button className={btn} disabled={busy} onClick={() => void reverse()} title={t('tb.reverseHint')} data-testid="card-reverse">{t('tb.reverse')}</button>
+          </div>
+        </div>
+
+        <div className="border-t border-line pt-2 flex flex-wrap gap-1.5">
+          <button className={btn} onClick={() => { openChart(p.symbol); onClose(); }}>{t('tb.openChart')}</button>
+          <button className={btn} onClick={() => { openTicket({ symbol: p.symbol, side: p.side }); onClose(); }}>{t('tb.newOrder')}</button>
+          <button className={btn} onClick={() => { openTicket({ symbol: p.symbol, side: p.side === 'buy' ? 'sell' : 'buy' }); onClose(); }}>{t('tb.hedgeOrder')}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function Positions() {
   const t = useT();
   const positions = useTerminal(selectPositions);
+  const [detail, setDetail] = useState<string | null>(null);
   return (
+    <>
+    {detail && <PositionCard id={detail} onClose={() => setDetail(null)} />}
     <VirtualTable
       testId="positions-table"
       columns={POS_COLS}
       rows={positions}
       rowKey={(p) => p.id}
       renderRow={(p) => <PositionRow p={p} />}
+      onRowClick={(p) => setDetail(p.id)}
       empty={t('tb.empty')}
       header={
         <>
@@ -125,6 +287,7 @@ function Positions() {
         </>
       }
     />
+    </>
   );
 }
 
