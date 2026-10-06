@@ -83,6 +83,10 @@ pub struct NewOrder {
     pub oco_group: Option<u64>,
     /// Expiry timestamp (ns) for pending orders.
     pub expire_at: Option<u64>,
+    /// Market orders: client slippage tolerance in points (MT5 deviation);
+    /// the tighter of this and the group cap / circuit breaker applies.
+    #[serde(default)]
+    pub max_deviation_points: Option<i64>,
 }
 
 impl NewOrder {
@@ -108,6 +112,7 @@ impl NewOrder {
             trailing_points: None,
             oco_group: None,
             expire_at: None,
+            max_deviation_points: None,
         }
     }
 }

@@ -344,6 +344,11 @@ message PlaceOrder {
   uint64 oco_group = 13;
   // Expiry of a pending order (ns since epoch; implies GTD; 0 = none).
   uint64 expire_at_ns = 14;
+  // Added in v1.3.
+  // Market orders: max slippage in points from the price at execution
+  // (MT5 "deviation"); the part that cannot fill inside it is not filled.
+  // 0 = server default.
+  uint32 max_deviation_points = 15;
 }
 
 message CancelOrder {

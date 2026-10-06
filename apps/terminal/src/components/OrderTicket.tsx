@@ -51,6 +51,9 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus, variant = 
   const [slText, setSlText] = useState('');
   const [tpText, setTpText] = useState('');
   const [expiryText, setExpiryText] = useState('');
+  const deviationPips = useTerminal((s) => s.maxDeviationPips);
+  const setDeviationPips = useTerminal((s) => s.setMaxDeviationPips);
+  const [deviationText, setDeviationText] = useState(deviationPips > 0 ? String(deviationPips) : '');
   const [trailText, setTrailText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [touched, setTouched] = useState(false);
@@ -143,6 +146,7 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus, variant = 
         tp: input.tp,
         trailing: trailPips !== undefined && trailPips > 0 ? pipsToDistance(trailPips, spec) : undefined,
         expiry: input.expiry,
+        maxDeviation: type === 'market' && deviationPips > 0 ? pipsToDistance(deviationPips, spec) : undefined,
       });
       if (r.ok) {
         toast(
@@ -306,6 +310,24 @@ export function OrderTicket({ preset, followChart, onDone, autoFocus, variant = 
           data-testid="ticket-trailing"
         />
       </label>
+
+      {type === 'market' && (
+        <label title={t('ticket.deviationHint')}>
+          <span className={label}>{t('ticket.deviation')}</span>
+          <input
+            className={field}
+            value={deviationText}
+            onChange={(e) => {
+              setDeviationText(e.target.value);
+              setDeviationPips(Number(e.target.value.replace(',', '.')));
+            }}
+            inputMode="decimal"
+            placeholder={t('ticket.deviationOff')}
+            aria-label={t('ticket.deviation')}
+            data-testid="ticket-deviation"
+          />
+        </label>
+      )}
 
       {type !== 'market' && (
         <label>

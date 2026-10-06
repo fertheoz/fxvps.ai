@@ -241,6 +241,8 @@ export interface OrderRequest {
   /** One-cancels-other group (pending orders). */
   ocoGroup?: number;
   expiry?: number;
+  /** Market orders: max slippage (price units) from the price at execution; undefined = server default. */
+  maxDeviation?: number;
   /** Client-generated id for idempotency. */
   clientId?: string;
 }

@@ -569,6 +569,8 @@ async fn handle(
                     trailing_distance: fixed(p.trailing_distance, "trailing_distance")?,
                     oco_group: (p.oco_group != 0).then_some(p.oco_group),
                     expire_at_ns: (p.expire_at_ns != 0).then_some(p.expire_at_ns),
+                    max_deviation_points: (p.max_deviation_points != 0)
+                        .then_some(p.max_deviation_points),
                 })
             });
             let r = match r {

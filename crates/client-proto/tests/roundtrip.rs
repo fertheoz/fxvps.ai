@@ -152,6 +152,7 @@ fn samples() -> Vec<Envelope> {
             trailing_distance: d("0.0015"),
             oco_group: 4,
             expire_at_ns: 1_700_000_000_000_000_000,
+            max_deviation_points: 30,
         }),
         Body::CancelOrder(CancelOrder {
             request_id: "o2".into(),
