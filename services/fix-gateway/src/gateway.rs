@@ -134,6 +134,9 @@ impl GatewayHandle {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionStatus {
     pub kind: SessionKind,
+    /// `GatewayConfig.lp` of the owning gateway (empty in older status files).
+    #[serde(default)]
+    pub lp: String,
     pub sender_comp_id: String,
     pub target_comp_id: String,
     pub logged_on: bool,
@@ -217,6 +220,7 @@ pub fn start(cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
         .into_iter()
         .map(|(kind, ep)| SessionStatus {
             kind,
+            lp: cfg.lp.clone(),
             sender_comp_id: ep.sender_comp_id.clone(),
             target_comp_id: ep.target_comp_id.clone(),
             logged_on: false,
@@ -626,6 +630,7 @@ mod status_tests {
             .into_iter()
             .map(|kind| SessionStatus {
                 kind,
+                lp: "T".into(),
                 sender_comp_id: "S".into(),
                 target_comp_id: "T".into(),
                 logged_on: false,

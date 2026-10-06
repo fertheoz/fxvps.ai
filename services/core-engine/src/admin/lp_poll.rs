@@ -69,6 +69,7 @@ mod tests {
     fn row(up: bool) -> SessionStatus {
         SessionStatus {
             kind: SessionKind::Trading,
+            lp: "T".into(),
             sender_comp_id: "S".into(),
             target_comp_id: "T".into(),
             logged_on: up,

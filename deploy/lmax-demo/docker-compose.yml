@@ -47,8 +47,20 @@ services:
     restart: unless-stopped
     logging: *logs
 
-  # client-gateway with core-engine + fix-gateway in one process (one LMAX
-  # session per CompID): client WebSocket, back office admin API, LP config.
+  # Second LP (permanent): the in-house LP simulator, aggregated with LMAX by
+  # the trading service (stage 6). Loopback FIX on 9880 (MD) / 9881 (trading).
+  lp-simulator:
+    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-lp-simulator:${FIXVPS_TAG:-latest}
+    network_mode: host
+    command: ["/app/config/lp-sim.toml"]
+    volumes: ["./lp-sim.toml:/app/config/lp-sim.toml:ro"]
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+    restart: unless-stopped
+    logging: *logs
+
+  # client-gateway with core-engine + fix-gateway in one process (one FIX
+  # gateway per LP, aggregated): client WebSocket, back office admin API, LP config.
   trading:
     image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-client-gateway:${FIXVPS_TAG:-latest}
     network_mode: host
@@ -56,6 +68,8 @@ services:
     environment:
       # LP settings (entered in the console, file mode 0600); a change restarts this service.
       FIX_CONFIG_FILE: /var/lib/fix-gateway/lp.json
+      # Further LPs aggregated with the primary (comma separated gateway configs).
+      FIX_LP_FILES: /etc/fxvps/lp-sim-gateway.json
       FIX_ADMIN_TOKEN: ${FIX_ADMIN_TOKEN:?set FIX_ADMIN_TOKEN in .env}
       FIX_STATUS_ADDR: 127.0.0.1:9890
       # Back office admin API: identity tokens, admin role + 2FA for changes.
@@ -71,8 +85,11 @@ services:
       FXVPS_ALLOWED_ORIGINS: https://trade.fxvps.ai
       RUST_LOG: ${RUST_LOG:-info}
     # chown 65532:65532 fix-store core-data
-    volumes: ["./fix-store:/var/lib/fix-gateway", "./core-data:/var/lib/core-engine"]
-    depends_on: [identity]
+    volumes:
+      - "./fix-store:/var/lib/fix-gateway"
+      - "./core-data:/var/lib/core-engine"
+      - "./lp-sim-gateway.json:/etc/fxvps/lp-sim-gateway.json:ro"
+    depends_on: [identity, lp-simulator]
     restart: unless-stopped
     logging: *logs
 

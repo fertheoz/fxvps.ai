@@ -33,6 +33,7 @@ use std::thread::JoinHandle;
 use tokio::sync::oneshot;
 
 pub mod api;
+pub mod lp_agg;
 pub mod lp_fix;
 pub mod output;
 pub mod stack;

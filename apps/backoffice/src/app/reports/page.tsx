@@ -75,6 +75,7 @@ export default function ReportsPage() {
 
   const lpCols = [
     lc.accessor("createdAt", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
+    lc.accessor("lp", { header: "LP", cell: (c) => c.getValue() ?? "—" }),
     lc.accessor("symbol", { header: t("positions.symbol") }),
     lc.accessor("side", { header: t("positions.side"), cell: (c) => <SideBadge side={c.getValue()} /> }),
     lc.accessor("lots", { header: t("positions.lots") }),

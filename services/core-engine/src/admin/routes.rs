@@ -54,6 +54,8 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/lp/sessions", get(lp_sessions))
         .route("/v1/lp/config", get(lp_config_get).put(lp_config_put))
         .route("/v1/lp/sessions/{id}/reconnect", post(lp_reconnect))
+        .route("/v1/lp/aggregation", get(lp_agg_get).put(lp_agg_put))
+        .route("/v1/reports/lp", get(lp_report))
         .route("/v1/reports/trades", get(trades))
         .route("/v1/reports/statements", get(statements))
         .route("/v1/reports/lp-executions", get(lp_executions))
@@ -1477,6 +1479,53 @@ async fn lp_config_put(
 async fn lp_reconnect(actor: Actor, Path(_id): Path<String>) -> ApiResult {
     need(&actor, "lp.reconnect")?;
     Err(ApiError::not_found("unknown LP session"))
+}
+
+fn aggregator(ctx: &AdminCtx) -> Result<&std::sync::Arc<crate::lp_agg::Aggregator>, ApiError> {
+    ctx.agg
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no LP aggregation here (no in-process LP stack)"))
+}
+
+fn lp_sessions_snapshot(ctx: &AdminCtx) -> Vec<fix_gateway::SessionStatus> {
+    ctx.lp_status
+        .as_ref()
+        .and_then(|s| s.read().ok().map(|t| t.clone()))
+        .unwrap_or_default()
+}
+
+async fn lp_agg_get(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "lp.view")?;
+    let agg = aggregator(&ctx)?;
+    Ok(Json(views::lp_aggregation(
+        agg,
+        &lp_sessions_snapshot(&ctx),
+    )))
+}
+
+async fn lp_agg_put(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(cfg): Json<crate::lp_agg::AggConfig>,
+) -> ApiResult {
+    need(&actor, "lp.manage")?;
+    cfg.validate().map_err(ApiError::bad)?;
+    let agg = aggregator(&ctx)?;
+    agg.set_config(cfg.clone());
+    ctx.store
+        .lock()
+        .await
+        .append(&actor, AdminCmd::AggregationSaved { cfg })?;
+    ctx.notify(&["getLpAggregation", "listAudit"]);
+    Ok(Json(views::lp_aggregation(
+        agg,
+        &lp_sessions_snapshot(&ctx),
+    )))
+}
+
+async fn lp_report(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "reports.view")?;
+    Ok(Json(ctx.q(views::lp_report).await?))
 }
 
 // ---------------------------------------------------------------------------

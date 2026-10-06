@@ -19,6 +19,7 @@ use oms::{Command, LpOrderRequest, LpRouter};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::api::{CoreEvent, GroupDepth};
+use crate::lp_agg::{Aggregator, LpBook};
 
 use crate::{EngineHandle, LpFeedback};
 
@@ -94,26 +95,118 @@ impl LpRouter for FixLpRouter {
         let Some((lp_symbol, cs)) = self.symbols.to_lp(&req.symbol) else {
             return self.reject(req.lp_order_id, format!("no LP mapping for {}", req.symbol));
         };
-        let order = Order {
-            cl_ord_id: format!("{}{}", self.prefix, req.lp_order_id),
-            symbol: lp_symbol.to_string(),
-            side: req.side.into(),
-            qty: lots_to_units(req.volume, cs),
-            ord_type: if req.limit.is_some() {
-                OrderType::Limit
-            } else {
-                OrderType::Market
-            },
-            limit_price: req.limit.map(Fixed::from),
-            tif: if req.all_or_none {
-                TimeInForce::FillOrKill
-            } else {
-                TimeInForce::ImmediateOrCancel
-            },
-        };
+        let order = lp_order(req, lp_symbol, cs, &self.prefix);
         if let Err(e) = self.orders.try_send(OrderCommand::Submit(order)) {
             self.reject(req.lp_order_id, format!("LP gateway unavailable: {e}"));
         }
+    }
+}
+
+/// Builds the LP-side order of an omnibus request (lots -> LP quantity,
+/// core -> LP symbol, IOC or FOK).
+fn lp_order(req: &LpOrderRequest, lp_symbol: &str, cs: i64, prefix: &str) -> Order {
+    Order {
+        cl_ord_id: format!("{prefix}{}", req.lp_order_id),
+        symbol: lp_symbol.to_string(),
+        side: req.side.into(),
+        qty: lots_to_units(req.volume, cs),
+        ord_type: if req.limit.is_some() {
+            OrderType::Limit
+        } else {
+            OrderType::Market
+        },
+        limit_price: req.limit.map(Fixed::from),
+        tif: if req.all_or_none {
+            TimeInForce::FillOrKill
+        } else {
+            TimeInForce::ImmediateOrCancel
+        },
+    }
+}
+
+/// One LP's order channel as seen by [`AggLpRouter`].
+pub struct LpLink {
+    pub name: String,
+    pub orders: mpsc::Sender<OrderCommand>,
+    pub symbols: Arc<SymbolMap>,
+}
+
+/// Multi-LP router (stage 6): asks the [`Aggregator`] for the candidate LPs
+/// of an order (policy + mode), sends to the first whose gateway accepts the
+/// command and journals the choice as `Command::LpRouted`. Fails over to the
+/// next candidate when a gateway channel is closed or full; rejects when
+/// nobody is eligible.
+pub struct AggLpRouter {
+    links: Vec<LpLink>,
+    agg: Arc<Aggregator>,
+    feedback: LpFeedback,
+    prefix: String,
+}
+
+impl AggLpRouter {
+    pub fn new(
+        links: Vec<LpLink>,
+        agg: Arc<Aggregator>,
+        feedback: LpFeedback,
+        prefix: impl Into<String>,
+    ) -> AggLpRouter {
+        AggLpRouter {
+            links,
+            agg,
+            feedback,
+            prefix: prefix.into(),
+        }
+    }
+
+    fn push(&self, cmd: Command) {
+        if let Ok(mut fb) = self.feedback.lock() {
+            fb.push_back(cmd);
+        }
+    }
+}
+
+impl LpRouter for AggLpRouter {
+    fn send(&mut self, req: &LpOrderRequest) {
+        let cands = self.agg.choose(&req.symbol, req.side, req.volume);
+        if cands.is_empty() {
+            tracing::warn!(lp_order_id = req.lp_order_id, symbol = %req.symbol, "no eligible LP");
+            return self.push(Command::LpReject {
+                lp_order_id: req.lp_order_id,
+                reason: format!("no eligible LP for {}", req.symbol),
+            });
+        }
+        let mut last = String::new();
+        for lp in &cands {
+            let Some(link) = self.links.iter().find(|l| &l.name == lp) else {
+                continue;
+            };
+            let Some((lp_symbol, cs)) = link.symbols.to_lp(&req.symbol) else {
+                last = format!("{lp}: no LP mapping for {}", req.symbol);
+                continue;
+            };
+            let order = lp_order(req, lp_symbol, cs, &self.prefix);
+            match link.orders.try_send(OrderCommand::Submit(order)) {
+                Ok(()) => {
+                    return self.push(Command::LpRouted {
+                        lp_order_id: req.lp_order_id,
+                        lp: lp.clone(),
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(lp, lp_order_id = req.lp_order_id, error = %e, "LP gateway unavailable, failing over");
+                    last = format!("{lp}: LP gateway unavailable: {e}");
+                }
+            }
+        }
+        tracing::warn!(lp_order_id = req.lp_order_id, %last, "LP order not sent");
+        self.push(Command::LpReject {
+            lp_order_id: req.lp_order_id,
+            reason: if last.is_empty() {
+                "no LP link".into()
+            } else {
+                last
+            },
+        });
     }
 }
 
@@ -207,16 +300,10 @@ impl Markups {
         self.at = Some(Instant::now());
     }
 
-    /// One `GroupDepth` per group for a raw LP book (empty books are skipped).
-    /// LP sizes arrive in LP contracts; they go out in lots (`contracts_per_lot`).
-    fn depths(
-        &self,
-        symbol: &str,
-        contracts_per_lot: i64,
-        q: &domain::Quote,
-        ts_ns: u64,
-    ) -> Vec<GroupDepth> {
-        if q.bids.is_empty() && q.asks.is_empty() {
+    /// One `GroupDepth` per group for an aggregated book (prices in core
+    /// units, sizes in lots; empty books are skipped).
+    fn depths(&self, symbol: &str, book: &LpBook, ts_ns: u64) -> Vec<GroupDepth> {
+        if book.bids.is_empty() && book.asks.is_empty() {
             return Vec::new();
         }
         let point = self.points.get(symbol).copied().unwrap_or(0);
@@ -225,17 +312,14 @@ impl Markups {
             .map(|g| {
                 let m_bid = point * g.markup_points_for(symbol, risk::Side::Sell);
                 let m_ask = point * g.markup_points_for(symbol, risk::Side::Buy);
-                let level = |l: &domain::Level, m: i64| {
-                    (
-                        Fixed::from_raw(l.price.raw() + m),
-                        Fixed::from_raw(units_to_lots(l.qty, contracts_per_lot).raw()),
-                    )
+                let level = |l: &(Price, Qty), m: i64| {
+                    (Fixed::from_raw(l.0.raw() + m), Fixed::from_raw(l.1.raw()))
                 };
                 GroupDepth {
                     group: g.name.clone(),
                     symbol: symbol.to_string(),
-                    bids: q.bids.iter().map(|l| level(l, -m_bid)).collect(),
-                    asks: q.asks.iter().map(|l| level(l, m_ask)).collect(),
+                    bids: book.bids.iter().map(|l| level(l, -m_bid)).collect(),
+                    asks: book.asks.iter().map(|l| level(l, m_ask)).collect(),
                     ts_ns,
                 }
             })
@@ -243,50 +327,72 @@ impl Markups {
     }
 }
 
+/// Feeds one LP's fix-gateway events into the aggregator and the engine
+/// until the event channel closes or the engine stops: quotes update the
+/// aggregated book (journaled as `Command::Quote` when the best bid/ask
+/// changes) and the merged depth goes to clients; executions become
+/// `Command::LpFill` / `Command::LpReject`.
 pub async fn run_bridge(
     engine: EngineHandle,
     mut rx: broadcast::Receiver<GatewayEvent>,
     symbols: Arc<SymbolMap>,
     prefix: String,
     events: broadcast::Sender<Arc<CoreEvent>>,
+    lp: String,
+    agg: Arc<Aggregator>,
 ) {
     let mut markups = Markups::default();
     loop {
         let ev = match rx.recv().await {
             Ok(ev) => ev,
             Err(broadcast::error::RecvError::Lagged(n)) => {
-                tracing::warn!(skipped = n, "core bridge lagged behind fix-gateway");
+                tracing::warn!(lp, skipped = n, "core bridge lagged behind fix-gateway");
                 continue;
             }
             Err(broadcast::error::RecvError::Closed) => break,
         };
-        if let Some(cmd) = to_command(&ev, &symbols, &prefix) {
+        if let GatewayEvent::Quote(q) = &ev {
+            let Some((sym, cs)) = symbols.from_lp(&q.symbol) else {
+                continue;
+            };
+            let lots = |l: &domain::Level| (Price::from(l.price), units_to_lots(l.qty, cs));
+            let book = LpBook {
+                bids: q.bids.iter().map(lots).collect(),
+                asks: q.asks.iter().map(lots).collect(),
+                ts_ns: q.ts_recv_ns,
+            };
+            if let Some((bid, ask)) = agg.update(&lp, sym, book) {
+                let cmd = Command::Quote {
+                    symbol: sym.to_string(),
+                    bid,
+                    ask,
+                };
+                if engine.command(cmd).await.is_err() {
+                    break; // engine stopped
+                }
+            }
+            let levels = q.bids.len().max(q.asks.len());
+            if markups.logged.get(sym) != Some(&levels) {
+                markups.logged.insert(sym.to_string(), levels);
+                tracing::info!(
+                    lp,
+                    symbol = sym,
+                    bids = q.bids.len(),
+                    asks = q.asks.len(),
+                    top_bid_lots = ?units_to_lots(q.bids.first().map_or(Fixed::ZERO, |l| l.qty), cs),
+                    "lp book levels"
+                );
+            }
+            markups.refresh(&engine).await;
+            for d in markups.depths(sym, &agg.merged(sym), domain::now_ns()) {
+                let _ = events.send(Arc::new(CoreEvent::Depth(d)));
+            }
+        } else if let Some(cmd) = to_command(&ev, &symbols, &prefix) {
             if engine.command(cmd).await.is_err() {
                 break; // engine stopped
             }
-            if let GatewayEvent::Quote(q) = &ev {
-                if let Some((sym, cs)) = symbols.from_lp(&q.symbol) {
-                    markups.refresh(&engine).await;
-                    let depths = markups.depths(sym, cs, q, domain::now_ns());
-                    let levels = q.bids.len().max(q.asks.len());
-                    if markups.logged.get(sym) != Some(&levels) {
-                        markups.logged.insert(sym.to_string(), levels);
-                        tracing::info!(
-                            symbol = sym,
-                            bids = q.bids.len(),
-                            asks = q.asks.len(),
-                            top_bid_lots = ?units_to_lots(q.bids.first().map_or(Fixed::ZERO, |l| l.qty), cs),
-                            groups = depths.len(),
-                            "lp book levels"
-                        );
-                    }
-                    for d in depths {
-                        let _ = events.send(Arc::new(CoreEvent::Depth(d)));
-                    }
-                }
-            }
         } else if let GatewayEvent::SessionUp { .. } | GatewayEvent::SessionDown { .. } = ev {
-            tracing::info!(event = ?ev, "fix-gateway session event");
+            tracing::info!(lp, event = ?ev, "fix-gateway session event");
         }
     }
 }
@@ -345,6 +451,54 @@ mod tests {
             fb.lock().unwrap().pop_front(),
             Some(Command::LpReject { lp_order_id: 8, .. })
         ));
+    }
+
+    #[test]
+    fn agg_router_fails_over_and_journals_lp() {
+        let (tx_a, rx_a) = mpsc::channel(4);
+        drop(rx_a); // first LP's gateway is gone
+        let (tx_b, mut rx_b) = mpsc::channel(4);
+        let agg = Arc::new(Aggregator::default());
+        let book = |b: &str, a: &str| LpBook {
+            bids: vec![(px(b), qty("10"))],
+            asks: vec![(px(a), qty("10"))],
+            ts_ns: 1,
+        };
+        agg.update("LMAX", "EURUSD", book("1.1", "1.1001"));
+        agg.update("SIM", "EURUSD", book("1.1", "1.1002"));
+        let fb = LpFeedback::default();
+        let m = Arc::new(map());
+        let links = vec![
+            LpLink {
+                name: "LMAX".into(),
+                orders: tx_a,
+                symbols: m.clone(),
+            },
+            LpLink {
+                name: "SIM".into(),
+                orders: tx_b,
+                symbols: m,
+            },
+        ];
+        let mut r = AggLpRouter::new(links, agg, fb.clone(), "LP-");
+        r.send(&LpOrderRequest {
+            lp_order_id: 9,
+            symbol: "EURUSD".into(),
+            side: risk::Side::Buy,
+            volume: qty("1"),
+            limit: None,
+            all_or_none: false,
+        });
+        assert!(
+            matches!(rx_b.try_recv().unwrap(), OrderCommand::Submit(o) if o.cl_ord_id == "LP-9")
+        );
+        assert_eq!(
+            fb.lock().unwrap().pop_front(),
+            Some(Command::LpRouted {
+                lp_order_id: 9,
+                lp: "SIM".into()
+            })
+        );
     }
 
     #[test]

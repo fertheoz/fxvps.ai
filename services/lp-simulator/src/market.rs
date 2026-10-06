@@ -92,7 +92,9 @@ impl Market {
             let v = st.spec.volatility_ticks.max(0);
             let d = self.rng.gen_range(-v..=v);
             let floor = st.spec.spread_ticks + self.depth as i64 + 1;
-            st.mid_ticks = (st.mid_ticks + d).max(floor);
+            let dev = st.mid_ticks - st.spec.initial_mid.raw() / st.spec.tick_size.raw();
+            let pull = -dev.signum() * dev.abs().min(st.spec.revert_ticks.max(0));
+            st.mid_ticks = (st.mid_ticks + d + pull).max(floor);
         }
         self.rebuild();
     }

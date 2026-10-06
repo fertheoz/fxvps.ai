@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
@@ -28,6 +28,15 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     latency > 0 ? new Promise((res) => setTimeout(() => res(clone(v)), latency * (0.5 + rnd()))) : Promise.resolve(clone(v));
 
   let lpConfig: LpConfig | null = null;
+  const lpRuntime = (p: LpPolicyRuntime): LpPolicyRuntime => p;
+  let lpAgg: LpAggregation = {
+    mode: "best_price",
+    maxDeviationPoints: 300,
+    lps: [
+      lpRuntime({ name: "LMAX", enabled: true, priority: 1, minLots: null, maxLots: null, symbols: [], quoting: 41, deviating: [], lastQuoteAt: new Date().toISOString(), mdUp: true, tradeUp: true }),
+      lpRuntime({ name: "SIM", enabled: true, priority: 2, minLots: 0.01, maxLots: 50, symbols: [], quoting: 5, deviating: [], lastQuoteAt: new Date().toISOString(), mdUp: true, tradeUp: true }),
+    ],
+  };
   const redactLp = (c: LpConfig): LpConfig => ({
     ...c,
     md: { ...c.md, password: null, password_set: !!c.md.password },
@@ -359,6 +368,29 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       return delay(f);
     },
 
+    async getLpAggregation() { return delay(lpAgg); },
+    async saveLpAggregation(c: LpAggregationInput, actor) {
+      guard(actor, "lp.manage");
+      lpAgg = {
+        mode: c.mode,
+        maxDeviationPoints: c.maxDeviationPoints,
+        lps: c.lps.map((p) => {
+          const prev = lpAgg.lps.find((x) => x.name === p.name);
+          return { ...p, minLots: p.minLots == null ? null : Number(p.minLots), maxLots: p.maxLots == null ? null : Number(p.maxLots), quoting: prev?.quoting ?? 0, deviating: prev?.deviating ?? [], lastQuoteAt: prev?.lastQuoteAt ?? null, mdUp: prev?.mdUp ?? false, tradeUp: prev?.tradeUp ?? false };
+        }),
+      };
+      audit(actor, "lp.aggregation", "aggregator", `${c.mode}; ${c.lps.map((p) => p.name + (p.enabled ? "" : " (off)")).join(", ")}`);
+      return delay(lpAgg);
+    },
+    async lpReport(): Promise<LpReportRow[]> {
+      const a = s.trades.filter((t) => t.book === "A").length;
+      const row = (lp: string, orders: number, rej: number, slip: number, lat: number): LpReportRow => ({
+        lp, orders, filled: orders - rej, partial: 0, rejected: rej, working: 0, requestedLots: orders * 1.2, filledLots: (orders - rej) * 1.2,
+        fillRate: orders ? (orders - rej) / orders : 0, rejectRate: orders ? rej / orders : 0, avgSlipPoints: slip, p95SlipPoints: slip * 3, p50LatencyMs: lat, p95LatencyMs: lat * 2.5,
+        lastFillAt: s.trades[0]?.closedAt ?? null, symbols: 5,
+      });
+      return delay([row("LMAX", Math.ceil(a * 0.7), 1, 0.4, 38), row("SIM", Math.floor(a * 0.3), 0, 1.1, 4)]);
+    },
     async getLpConfig() {
       return delay(lpConfig ? redactLp(lpConfig) : null);
     },

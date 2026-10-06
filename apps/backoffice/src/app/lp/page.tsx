@@ -1,13 +1,15 @@
 "use client";
 import * as React from "react";
-import { Play, RefreshCw, Square } from "lucide-react";
+import { Play, Plus, RefreshCw, Square, Trash2 } from "lucide-react";
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader } from "@/components/ui/primitives";
 import { NumField, SelectField, TextField } from "@/components/form";
-import type { LpConfig, LpEndpoint } from "@/lib/api/types";
+import { AGG_MODES, type AggMode, type LpAggregation, type LpConfig, type LpEndpoint, type LpPolicy } from "@/lib/api/types";
+import { Badge } from "@/components/ui/primitives";
 import { FixBadge } from "@/components/badges";
 import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
+import type { MessageKey } from "@/lib/i18n";
 
 export default function LpPage() {
   const t = useT();
@@ -49,6 +51,8 @@ export default function LpPage() {
           </tbody>
         </table>
       </Card>
+      {actor.can("lp.view") && <AggregationCard />}
+      {actor.can("reports.view") && <LpPerformanceCard />}
       {actor.can("lp.view") && <LpConfigCard />}
     </div>
   );
@@ -181,6 +185,145 @@ function LpConfigForm({ initial }: { initial: LpConfig }) {
           <textarea className="min-h-24 rounded-md border border-border bg-background p-2 font-mono text-xs" value={instr} onChange={(e) => setInstr(e.target.value)} disabled={!editable} />
         </Label>
         {editable && <div><Button onClick={save} disabled={mut.isPending}>{t("common.save")}</Button></div>}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Multi-LP aggregation (stage 6)
+// ---------------------------------------------------------------------------
+
+type PolicyDraft = LpPolicy & { symbolsText: string };
+
+const toDraft = (a: LpAggregation): PolicyDraft[] => a.lps.map((p) => ({
+  name: p.name, enabled: p.enabled, priority: p.priority,
+  minLots: p.minLots == null ? null : String(p.minLots), maxLots: p.maxLots == null ? null : String(p.maxLots),
+  symbols: p.symbols, symbolsText: p.symbols.join(" "),
+}));
+
+function AggregationCard() {
+  const t = useT();
+  const q = useApiQuery("getLpAggregation", [], { live: 5000 });
+  if (q.isLoading) return <Card className="mt-4 p-4">{t("common.loading")}</Card>;
+  if (q.error || !q.data) return <Card className="mt-4 p-4 text-sm text-muted-foreground" data-testid="lp-agg-none">{t("lp.aggNone")}</Card>;
+  return <AggregationForm key={JSON.stringify([q.data.mode, q.data.maxDeviationPoints, q.data.lps.map((p) => [p.name, p.enabled, p.priority, p.minLots, p.maxLots, p.symbols])])} data={q.data} />;
+}
+
+function AggregationForm({ data }: { data: LpAggregation }) {
+  const t = useT();
+  const f = useFormat();
+  const actor = useActor();
+  const toast = useToast();
+  const mfaOk = useMfaOk();
+  const editable = actor.can("lp.manage") && mfaOk;
+  const [mode, setMode] = React.useState<AggMode>(data.mode);
+  const [dev, setDev] = React.useState(data.maxDeviationPoints);
+  const [lps, setLps] = React.useState<PolicyDraft[]>(toDraft(data));
+  const [newLp, setNewLp] = React.useState("");
+  const mut = useApiMutation((v: Parameters<ReturnType<typeof api>["saveLpAggregation"]>[0]) => api().saveLpAggregation(v, actor), () => toast(t("lp.aggSaved")));
+  const upd = (i: number, patch: Partial<PolicyDraft>) => setLps(lps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  const save = () => mut.mutate({
+    mode, maxDeviationPoints: Math.max(0, Math.trunc(dev) || 0),
+    lps: lps.map(({ symbolsText, ...p }) => ({ ...p, minLots: p.minLots?.trim() || null, maxLots: p.maxLots?.trim() || null, symbols: symbolsText.split(/[\s,]+/).map((x) => x.trim().toUpperCase()).filter(Boolean) })),
+  });
+  const runtime = (name: string) => data.lps.find((p) => p.name === name);
+  return (
+    <Card className="mt-4" data-testid="lp-agg">
+      <CardHeader><CardTitle>{t("lp.agg")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-4">
+        <p className="text-xs text-muted-foreground">{t("lp.aggHint")}</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Label>
+            {t("lp.mode")}
+            <select className="rounded-md border border-border bg-background p-2 text-sm" value={mode} onChange={(e) => setMode(e.target.value as AggMode)} disabled={!editable} data-testid="lp-agg-mode">
+              {AGG_MODES.map((m) => <option key={m} value={m}>{t(`lp.mode.${m}` as MessageKey)}</option>)}
+            </select>
+          </Label>
+          <NumField label={t("lp.deviation")} value={dev} onChange={setDev} step={1} disabled={!editable} />
+        </div>
+        <p className="-mt-2 text-xs text-muted-foreground">{t("lp.deviationHint")}</p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-xs text-muted-foreground">
+              <tr>{["LP", t("lp.enabled"), t("lp.priority"), t("lp.minLots"), t("lp.maxLots"), t("lp.symbols"), t("common.status"), t("lp.quoting"), t("lp.lastQuote"), ""].map((h, i) => <th key={i} className="whitespace-nowrap px-2 py-2 text-left font-medium">{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {lps.map((p, i) => {
+                const r = runtime(p.name);
+                return (
+                  <tr key={p.name} className="border-t border-border align-top" data-testid={`lp-agg-row-${p.name}`}>
+                    <td className="px-2 py-2 font-medium">{p.name}</td>
+                    <td className="px-2 py-2"><input type="checkbox" checked={p.enabled} onChange={(e) => upd(i, { enabled: e.target.checked })} disabled={!editable} aria-label={t("lp.enabled")} /></td>
+                    <td className="px-2 py-1"><Input type="number" min={1} max={1000} className="w-16" value={p.priority} onChange={(e) => upd(i, { priority: Math.max(1, Math.trunc(Number(e.target.value)) || 1) })} disabled={!editable} /></td>
+                    <td className="px-2 py-1"><Input className="w-20" value={p.minLots ?? ""} placeholder="—" onChange={(e) => upd(i, { minLots: e.target.value || null })} disabled={!editable} /></td>
+                    <td className="px-2 py-1"><Input className="w-20" value={p.maxLots ?? ""} placeholder="—" onChange={(e) => upd(i, { maxLots: e.target.value || null })} disabled={!editable} /></td>
+                    <td className="px-2 py-1"><Input className="w-40 font-mono text-xs" value={p.symbolsText} placeholder="EURUSD GBPUSD" onChange={(e) => upd(i, { symbolsText: e.target.value })} disabled={!editable} /></td>
+                    <td className="px-2 py-2">
+                      {r ? (
+                        <div className="flex flex-wrap gap-1">
+                          <Badge tone={r.mdUp ? "success" : "danger"}>MD</Badge>
+                          <Badge tone={r.tradeUp ? "success" : "danger"}>TRD</Badge>
+                          {r.deviating.length > 0 && <Badge tone="warning" title={r.deviating.join(", ")}>{t("lp.deviating")} {r.deviating.length}</Badge>}
+                        </div>
+                      ) : "—"}
+                    </td>
+                    <td className="px-2 py-2 tabular-nums">{r?.quoting ?? 0}</td>
+                    <td className="px-2 py-2 whitespace-nowrap text-xs">{r?.lastQuoteAt ? f.date(r.lastQuoteAt) : "—"}</td>
+                    <td className="px-2 py-1">{editable && <Button size="sm" variant="ghost" onClick={() => setLps(lps.filter((_, j) => j !== i))} aria-label="remove"><Trash2 className="h-3 w-3" /></Button>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {editable && (
+          <div className="flex flex-wrap items-end gap-2">
+            <TextField label={t("lp.lpName")} value={newLp} onChange={setNewLp} />
+            <Button variant="outline" disabled={!newLp.trim() || lps.some((p) => p.name === newLp.trim())} onClick={() => { setLps([...lps, { name: newLp.trim(), enabled: true, priority: lps.length + 1, minLots: null, maxLots: null, symbols: [], symbolsText: "" }]); setNewLp(""); }}>
+              <Plus className="h-3 w-3" />{t("lp.addLp")}
+            </Button>
+            <Button className="ml-auto" onClick={save} disabled={mut.isPending} data-testid="lp-agg-save">{t("common.save")}</Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function LpPerformanceCard() {
+  const t = useT();
+  const f = useFormat();
+  const q = useApiQuery("lpReport", [], { live: 10000 });
+  const rows = q.data ?? [];
+  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+  return (
+    <Card className="mt-4" data-testid="lp-perf">
+      <CardHeader><CardTitle>{t("lp.perf")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-xs text-muted-foreground">{t("lp.perfHint")}</p>
+        {rows.length === 0 ? <p className="text-sm text-muted-foreground">{t("lp.noOrders")}</p> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs text-muted-foreground">
+                <tr>{["LP", t("lp.orders"), t("lp.fillRate"), t("lp.rejectRate"), t("lp.slip"), t("lp.latencyP"), t("lp.lastFill")].map((h, i) => <th key={i} className="whitespace-nowrap px-3 py-2 text-left font-medium">{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.lp} className="border-t border-border tabular-nums">
+                    <td className="px-3 py-2 font-medium">{r.lp}</td>
+                    <td className="px-3 py-2">{r.orders} <span className="text-xs text-muted-foreground">({r.filled}/{r.partial}/{r.rejected}{r.working ? `/${r.working}` : ""})</span></td>
+                    <td className={`px-3 py-2 ${r.fillRate < 0.9 && r.orders > 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>{pct(r.fillRate)} <span className="text-xs text-muted-foreground">{f.num(r.filledLots)}/{f.num(r.requestedLots)} lot</span></td>
+                    <td className={`px-3 py-2 ${r.rejectRate > 0.05 ? "text-red-600 dark:text-red-400" : ""}`}>{pct(r.rejectRate)}</td>
+                    <td className="px-3 py-2">{r.avgSlipPoints.toFixed(2)} / {r.p95SlipPoints.toFixed(2)}</td>
+                    <td className="px-3 py-2">{f.num(r.p50LatencyMs)} / {f.num(r.p95LatencyMs)} ms</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-xs">{r.lastFillAt ? f.date(r.lastFillAt) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
