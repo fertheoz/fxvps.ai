@@ -254,6 +254,22 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
   const [tools, setTools] = useState(false);
   const setChartTool = useTerminal((s) => s.setChartTool);
   const chartTool = useTerminal((s) => s.chartTool);
+  // Full screen: the Fullscreen API where it exists (Android, desktop); iPhone Safari
+  // has none for pages, so the button explains "Add to Home Screen" instead.
+  const [fsHelp, setFsHelp] = useState(false);
+  const [fullscreen, setFullscreen] = useState(() => typeof document !== 'undefined' && !!document.fullscreenElement);
+  useEffect(() => {
+    const on = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', on);
+    return () => document.removeEventListener('fullscreenchange', on);
+  }, []);
+  const standalone = typeof matchMedia === 'function' && (matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true);
+  const toggleFullscreen = () => {
+    const el = document.documentElement;
+    if (document.fullscreenElement) return void document.exitFullscreen?.();
+    if (document.fullscreenEnabled && el.requestFullscreen) return void el.requestFullscreen().catch(() => setFsHelp(true));
+    setFsHelp(true);
+  };
   // Pending order from the chart: drag the line to a price, then place.
   const [limit, setLimit] = useState<number | null>(null);
   const [lineType, setLineType] = useState<'limit' | 'stop'>('limit');
@@ -322,6 +338,20 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
           </div>
           <div className="text-[11px] text-muted">{spec?.description}</div>
         </button>
+        {!standalone && (
+          <button
+            onClick={toggleFullscreen}
+            aria-pressed={fullscreen}
+            aria-label={t('m.fullscreen')}
+            title={t('m.fullscreen')}
+            data-testid="m-fullscreen"
+            className={`ml-auto mr-2 h-10 w-10 rounded-full grid place-items-center ${fullscreen ? 'bg-accent text-white' : 'bg-panel-2 text-muted'}`}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+            </svg>
+          </button>
+        )}
         <button
           onClick={toggleQuick}
           aria-pressed={quick}
@@ -385,6 +415,26 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
           draft={limit !== null && spec ? { price: limit, label: `${limitName} ${formatPrice(limit, spec.digits)}`, tone: limitSide === 'buy' ? 'up' : 'down', onMove: setLimit } : undefined}
         />
       </div>
+      {fsHelp && (
+        <div className="fixed inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setFsHelp(false)} data-testid="m-fs-help">
+          <div className="fx-sheet bg-panel rounded-t-[28px] px-5 pt-3 pb-[calc(env(safe-area-inset-bottom)+20px)]" onClick={(e) => e.stopPropagation()}>
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-line" />
+            <h2 className="text-[17px] font-semibold">{t('m.fsTitle')}</h2>
+            <p className="mt-2 text-muted">{t('m.fsBody')}</p>
+            <ol className="mt-3 flex flex-col gap-2">
+              {(['m.fsStep1', 'm.fsStep2', 'm.fsStep3'] as const).map((k, i) => (
+                <li key={k} className="flex items-center gap-3">
+                  <span className="num w-7 h-7 rounded-full bg-accent text-white grid place-items-center text-[13px] font-semibold">{i + 1}</span>
+                  {t(k)}
+                </li>
+              ))}
+            </ol>
+            <button className="mt-4 w-full h-12 rounded-2xl bg-panel-2 font-medium" onClick={() => setFsHelp(false)}>
+              {t('sec.done')}
+            </button>
+          </div>
+        </div>
+      )}
       {tools && (
         <div className="fixed inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setTools(false)} data-testid="m-tools-sheet">
           <div className="fx-sheet bg-panel rounded-t-[28px] max-h-[80dvh] overflow-y-auto pb-[env(safe-area-inset-bottom)]" onClick={(e) => e.stopPropagation()}>
