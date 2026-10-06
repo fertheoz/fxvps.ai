@@ -18,6 +18,7 @@ import type {
   TradingEvent,
 } from '@fxvps/trading-core';
 import { translate, type Lang } from '../i18n';
+import { DEFAULT_MW_COLUMNS, type MwColumnId } from '../components/mwColumns';
 
 export type Theme = 'dark' | 'light';
 /** Charts on screen at once; 6 is the ceiling (every chart costs the client CPU and memory). */
@@ -103,6 +104,8 @@ export interface TerminalState {
   toolboxMode: 'normal' | 'max' | 'min';
   /** Side panels in the split (pinned) or folded into an edge strip that opens on hover. */
   sidePinned: { left: boolean; right: boolean };
+  /** Market Watch columns shown (catalogue in components/mwColumns.ts). */
+  mwColumns: MwColumnId[];
   indicators: Indicators;
   indicatorSettings: IndicatorSettings;
   /** Draw the ask price as a second line (candles follow the bid). */
@@ -142,6 +145,7 @@ export interface TerminalState {
   openChart(symbol: string): void;
   setToolboxMode(mode: 'normal' | 'max' | 'min'): void;
   setSidePinned(side: 'left' | 'right', pinned: boolean): void;
+  toggleMwColumn(id: MwColumnId): void;
   setChartSymbol(symbol: string, index?: number): void;
   setChartTimeframe(tf: Timeframe, index?: number): void;
   setActiveChart(i: number): void;
@@ -212,6 +216,7 @@ export const useTerminal = create<TerminalState>()(
       hiddenCharts: {},
       toolboxMode: 'normal',
       sidePinned: { left: true, right: true },
+      mwColumns: DEFAULT_MW_COLUMNS,
       indicators: { sma: false, ema: true, bollinger: false, rsi: false, volume: true },
       indicatorSettings: DEFAULT_INDICATOR_SETTINGS,
       showAskLine: false,
@@ -342,6 +347,10 @@ export const useTerminal = create<TerminalState>()(
       },
       setSidePinned(side, pinned) {
         set({ sidePinned: { ...get().sidePinned, [side]: pinned } });
+      },
+      toggleMwColumn(id) {
+        const cur = get().mwColumns;
+        set({ mwColumns: cur.includes(id) ? cur.filter((c) => c !== id) : [...cur, id] });
       },
       swapCharts(a, b) {
         if (a === b) return;
@@ -487,6 +496,7 @@ export const useTerminal = create<TerminalState>()(
         hiddenCharts: s.hiddenCharts,
         toolboxMode: s.toolboxMode,
         sidePinned: s.sidePinned,
+        mwColumns: s.mwColumns,
         indicators: s.indicators,
         indicatorSettings: s.indicatorSettings,
         showAskLine: s.showAskLine,
