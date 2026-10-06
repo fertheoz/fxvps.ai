@@ -176,11 +176,11 @@ export interface PriceAlert {
   createdAt: number;
 }
 
-/** A trend line or rectangle between two (time, price) points; times in UTC seconds. */
+/** A trend line, rectangle or Fibonacci retracement between two (time, price) points; times in UTC seconds. */
 export interface ChartShape {
   id: string;
   symbol: string;
-  kind: 'trend' | 'rect';
+  kind: 'trend' | 'rect' | 'fib';
   a: { time: number; price: number };
   b: { time: number; price: number };
 }

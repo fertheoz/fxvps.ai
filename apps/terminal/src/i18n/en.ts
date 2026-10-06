@@ -255,6 +255,7 @@ export const en = {
   'obj.alert': 'Price alert',
   'obj.trend': 'Trend line',
   'obj.rect': 'Rectangle',
+  'obj.fib': 'Fibonacci',
   'obj.drawHint': 'Drag on the chart to draw',
   'obj.place': 'Place',
   'obj.objects': 'Lines and alerts',

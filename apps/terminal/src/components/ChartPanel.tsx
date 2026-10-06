@@ -402,9 +402,9 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     if (!layer || !spec) return;
     layer.setTheme(cssVar('--accent'));
     const list = (objects?.shapes ?? []).filter((x) => x.symbol === spec.name);
-    layer.update(drawing ? [...list, drawing] : list, drawing?.id ?? selectedShape, shapeGeometry());
+    layer.update(drawing ? [...list, drawing] : list, drawing?.id ?? selectedShape, shapeGeometry(), spec?.digits ?? 5);
   });
-  const drawTool = chartTool === 'trend' || chartTool === 'rect';
+  const drawTool = chartTool === 'trend' || chartTool === 'rect' || chartTool === 'fib';
   /** Point (time s, price) under a pointer, projected beyond the last bar when needed. */
   const pointAt = (e: { clientX: number; clientY: number }) => {
     const chart = chartRef.current;
@@ -421,7 +421,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     const p = pointAt(e);
     if (!p) return true;
     e.currentTarget.setPointerCapture(e.pointerId);
-    setDrawing({ id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, symbol: spec.name, kind: chartTool as 'trend' | 'rect', a: p, b: p });
+    setDrawing({ id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, symbol: spec.name, kind: chartTool as 'trend' | 'rect' | 'fib', a: p, b: p });
     return true;
   };
   const shapeMove = (e: React.PointerEvent<HTMLDivElement>): boolean => {
