@@ -1424,3 +1424,39 @@ fn same_exec_id_on_different_lp_orders_is_not_a_duplicate() {
     let lots: i64 = h.pos(1).iter().map(|p| p.volume.raw()).sum();
     assert_eq!(lots, qty("0.2").raw());
 }
+
+#[test]
+fn retry_keeps_the_slippage_cap() {
+    use risk::PartialFill;
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 5;
+    g.markup_ask_points = Some(8);
+    g.max_slippage_points = Some(10);
+    g.partial_fill = PartialFill::Retry { max_attempts: 3 };
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "10000");
+    let mut o = h.pending(1, "m", Side::Buy, OrderType::Market, None, None);
+    o.requested_price = Some(px("1.10018"));
+    let (_, id) = h.order(o);
+    let first = h.router.take();
+    assert_eq!(first[0].limit, Some(px("1.10020")));
+    h.cmd(Command::LpFill {
+        lp_order_id: first[0].lp_order_id,
+        exec_id: "x1".into(),
+        volume: qty("0.4"),
+        price: px("1.10010"),
+    });
+    h.cmd(Command::LpReject {
+        lp_order_id: first[0].lp_order_id,
+        reason: "ioc remainder".into(),
+    });
+    // the remainder goes out again, still bounded by the client's cap
+    let again = h.router.take();
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].volume, qty("0.6"));
+    assert_eq!(again[0].limit, Some(px("1.10020")));
+    assert_eq!(h.e.order(id).unwrap().lp_attempts, 2);
+}

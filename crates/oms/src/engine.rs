@@ -1004,15 +1004,7 @@ impl Engine {
                     let m = self.order_markup(o, &g, o.req.side).raw() * o.req.side.sign();
                     let lp_limit = Price::from_raw(l.raw() - m);
                     self.send_lp_limit(o.req.symbol.clone(), o.req.side, vec![id], Some(lp_limit));
-                } else if let (Some(req), Some(max)) = (
-                    o.req.requested_price,
-                    o.max_slippage_override.or(g.max_slippage_points),
-                ) {
-                    // Slippage cap: the LP may fill up to `max` points past the requested
-                    // price (client terms), as an IOC limit net of the markup.
-                    let point = self.st.symbols[&o.req.symbol].point().raw();
-                    let m = self.order_markup(o, &g, o.req.side).raw() * o.req.side.sign();
-                    let lp_limit = Price::from_raw(req.raw() + o.req.side.sign() * point * max - m);
+                } else if let Some(lp_limit) = self.slippage_limit(o, &g) {
                     self.send_lp_limit(o.req.symbol.clone(), o.req.side, vec![id], Some(lp_limit));
                 } else if self.st.config.aggregate_a_book && o.close_position.is_none() {
                     self.st.pending_lp.push(id);
@@ -1021,6 +1013,18 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// Slippage cap: the LP may fill a market order up to `max` points past the
+    /// requested price (client terms), as an IOC limit net of the markup.
+    fn slippage_limit(&self, o: &Order, g: &GroupConfig) -> Option<Price> {
+        let req = o.req.requested_price?;
+        let max = o.max_slippage_override.or(g.max_slippage_points)?;
+        let point = self.st.symbols[&o.req.symbol].point().raw();
+        let m = self.order_markup(o, g, o.req.side).raw() * o.req.side.sign();
+        Some(Price::from_raw(
+            req.raw() + o.req.side.sign() * point * max - m,
+        ))
     }
 
     fn send_lp(&mut self, symbol: String, side: Side, children: Vec<OrderId>) {
@@ -1388,9 +1392,11 @@ impl Engine {
             }
             match self.policy(c) {
                 PartialFill::Retry { max_attempts } if o.lp_attempts < max_attempts => {
-                    // Try again at the LP with what is left.
+                    // Try again at the LP with what is left, inside the same slippage cap.
                     let (sym, side) = (o.req.symbol.clone(), o.req.side);
-                    self.send_lp(sym, side, vec![c]);
+                    let g = self.st.groups[&self.st.accounts[&o.req.account].group].clone();
+                    let limit = self.slippage_limit(o, &g);
+                    self.send_lp_limit(sym, side, vec![c], limit);
                     continue;
                 }
                 _ => {}
