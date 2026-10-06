@@ -97,6 +97,7 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     listTrades: () => call("GET", "/v1/reports/trades"),
     statements: () => call("GET", "/v1/reports/statements"),
     listLpExecutions: () => call("GET", "/v1/reports/lp-executions"),
+    execution: () => call("GET", "/v1/reports/execution"),
     revenue: () => call("GET", "/v1/reports/revenue"),
     listAudit: () => call("GET", "/v1/audit"),
     listApprovals: (status = "pending_approval") => call<ApprovalRequest[]>("GET", `/v1/approvals?status=${enc(status)}`),

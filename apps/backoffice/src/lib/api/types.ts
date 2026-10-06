@@ -107,6 +107,48 @@ export interface LpExecution {
   clients: { orderId: string; login: number; lots: number; price: number }[];
 }
 
+/** One client order in the execution-quality report. Points: positive slippage = worse for the client. */
+export interface ExecutionRow {
+  id: string;
+  at: string;
+  login: number;
+  symbol: string;
+  side: "buy" | "sell";
+  type: "market" | "limit" | "stop" | "stop_limit";
+  lots: number;
+  filledLots: number;
+  status: "filled" | "partial" | "rejected";
+  reason: string | null;
+  book: "A" | "B";
+  requested: number | null;
+  fill: number | null;
+  clientSlipPts: number | null;
+  lpPrice: number | null;
+  capturePts: number | null;
+  lpLatencyMs: number | null;
+  lpFills: number;
+  lpStatus: "working" | "filled" | "rejected" | null;
+  rearmed: boolean;
+}
+
+export interface ExecutionSummary {
+  symbol: string;
+  orders: number;
+  fillRate: number;
+  partialRate: number;
+  rejectRate: number;
+  avgSlipPts: number;
+  p95SlipPts: number;
+  improvedRate: number;
+  avgCapturePts: number;
+  avgLatencyMs: number;
+}
+
+export interface ExecutionReport {
+  rows: ExecutionRow[];
+  bySymbol: ExecutionSummary[];
+}
+
 /** Broker revenue legs (minor units). `lp` is our own result at the LP. */
 export interface RevenueTotals {
   markup: number;
@@ -181,6 +223,8 @@ export interface AdminApi {
   statements(): Promise<Statement[]>;
   /** Orders routed to the LP with their fills, newest first. */
   listLpExecutions(): Promise<LpExecution[]>;
+  /** Execution quality: client slippage, LP leg, latency, per-symbol summary. */
+  execution(): Promise<ExecutionReport>;
   /** Realized broker revenue from the ledger (markup, B-book, commission). */
   revenue(): Promise<RevenueReport>;
 

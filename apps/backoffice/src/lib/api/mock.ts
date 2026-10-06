@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, LpConfig, BalanceOpResult, DashboardStats, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, LpConfig, BalanceOpResult, DashboardStats, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 export class ForbiddenError extends Error {
@@ -331,6 +331,39 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
         };
       });
       return delay(rows);
+    },
+    async execution(): Promise<ExecutionReport> {
+      // Demo data: closed trades as market orders; slippage and latency drawn from a fixed seed.
+      const rnd = mulberry32(7);
+      const rows: ExecutionRow[] = s.trades.slice(0, 200).map((t) => {
+        const slip = Math.round((rnd() * 3 - 0.8) * 10) / 10;
+        const point = t.symbol.endsWith("JPY") ? 0.001 : t.symbol.startsWith("XAU") ? 0.01 : 0.00001;
+        const sign = t.side === "buy" ? 1 : -1;
+        const fill = t.closePrice;
+        const requested = Number((fill - sign * slip * point).toFixed(5));
+        const a = t.book === "A";
+        const capture = a ? Math.round((1 + rnd()) * 10) / 10 : null;
+        return {
+          id: `o-${t.id}`, at: t.closedAt, login: t.login, symbol: t.symbol, side: t.side, type: "market", lots: t.lots, filledLots: t.lots,
+          status: "filled", reason: null, book: t.book, requested, fill, clientSlipPts: slip,
+          lpPrice: a && capture !== null ? Number((fill - sign * capture * point).toFixed(5)) : null,
+          capturePts: capture, lpLatencyMs: a ? Math.round(20 + rnd() * 60) : null, lpFills: a ? 1 : 0, lpStatus: a ? "filled" : null, rearmed: false,
+        };
+      });
+      const by = new Map<string, ExecutionRow[]>();
+      for (const r of rows) by.set(r.symbol, [...(by.get(r.symbol) ?? []), r]);
+      const bySymbol: ExecutionSummary[] = [...by.entries()].map(([symbol, rs]) => {
+        const slips = rs.map((r) => r.clientSlipPts ?? 0).sort((x, y) => x - y);
+        const avg = (v: number[]) => (v.length ? v.reduce((x, y) => x + y, 0) / v.length : 0);
+        const lat = rs.filter((r) => r.lpLatencyMs !== null).map((r) => r.lpLatencyMs ?? 0);
+        const cap = rs.filter((r) => r.capturePts !== null).map((r) => r.capturePts ?? 0);
+        return {
+          symbol, orders: rs.length, fillRate: 1, partialRate: 0, rejectRate: 0, avgSlipPts: avg(slips),
+          p95SlipPts: slips[Math.round((slips.length - 1) * 0.95)] ?? 0, improvedRate: slips.filter((x) => x < 0).length / Math.max(1, slips.length),
+          avgCapturePts: avg(cap), avgLatencyMs: avg(lat),
+        };
+      });
+      return delay({ rows, bySymbol });
     },
     async revenue(): Promise<RevenueReport> {
       const dayAgo = Date.now() - 86_400_000;

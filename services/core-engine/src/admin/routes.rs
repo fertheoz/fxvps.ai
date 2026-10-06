@@ -51,6 +51,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/reports/trades", get(trades))
         .route("/v1/reports/statements", get(statements))
         .route("/v1/reports/lp-executions", get(lp_executions))
+        .route("/v1/reports/execution", get(execution))
         .route("/v1/reports/revenue", get(revenue))
         .route("/v1/audit", get(audit))
         .route("/v1/admin-users", get(list_users))
@@ -1310,6 +1311,11 @@ async fn trades(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
 async fn lp_executions(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "reports.view")?;
     Ok(Json(ctx.q(views::lp_executions).await?))
+}
+
+async fn execution(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "reports.view")?;
+    Ok(Json(ctx.q(views::execution).await?))
 }
 
 async fn revenue(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

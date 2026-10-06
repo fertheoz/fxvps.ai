@@ -8,7 +8,7 @@ import { BookBadge, SideBadge } from "@/components/badges";
 import { useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { Trade } from "@/lib/schemas";
-import type { LpExecution, RevenueRow, RevenueTotals, Statement } from "@/lib/api";
+import type { ExecutionRow, ExecutionSummary, LpExecution, RevenueRow, RevenueTotals, Statement } from "@/lib/api";
 import { formatMinorPlain } from "@/lib/money";
 import { downloadCsv, toCsv } from "@/lib/utils";
 
@@ -16,7 +16,14 @@ const tc = createColumnHelper<Trade>();
 const sc = createColumnHelper<Statement>();
 const lc = createColumnHelper<LpExecution>();
 const rc = createColumnHelper<RevenueRow>();
-type Tab = "trades" | "statements" | "lp" | "revenue";
+const xc = createColumnHelper<ExecutionRow>();
+const xs = createColumnHelper<ExecutionSummary>();
+type Tab = "trades" | "statements" | "lp" | "execution" | "revenue";
+
+const pts = (v: number | null | undefined, digits = 1) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(digits)}`);
+const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
+/** Slippage colour: red when the client lost ground, green when the price improved. */
+const slipTone = (v: number | null | undefined) => (v === null || v === undefined || v === 0 ? undefined : v > 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400");
 
 export default function ReportsPage() {
   const t = useT();
@@ -27,6 +34,37 @@ export default function ReportsPage() {
   const statements = useApiQuery("statements");
   const lp = useApiQuery("listLpExecutions", [], { live: 5000 });
   const revenue = useApiQuery("revenue", [], { live: 5000 });
+  const execution = useApiQuery("execution", [], { live: 5000 });
+
+  const execCols = [
+    xc.accessor("at", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
+    xc.accessor("login", { header: t("clients.login") }),
+    xc.accessor("symbol", { header: t("positions.symbol") }),
+    xc.accessor("side", { header: t("positions.side"), cell: (c) => <SideBadge side={c.getValue()} /> }),
+    xc.accessor("type", { header: t("reports.kind") }),
+    xc.accessor("lots", { header: t("positions.lots"), cell: (c) => <span className="tabular-nums">{c.row.original.filledLots < c.getValue() ? `${c.row.original.filledLots} / ${c.getValue()}` : c.getValue()}</span> }),
+    xc.accessor("book", { header: t("groups.book"), cell: (c) => <BookBadge book={c.getValue()} /> }),
+    xc.accessor("requested", { header: t("reports.requested"), cell: (c) => <span className="tabular-nums">{c.getValue() ?? "—"}</span> }),
+    xc.accessor("fill", { header: t("reports.fillPrice"), cell: (c) => <span className="tabular-nums">{c.getValue() ?? "—"}</span> }),
+    xc.accessor("clientSlipPts", { header: t("reports.clientSlip"), cell: (c) => <span className={`tabular-nums ${slipTone(c.getValue()) ?? ""}`}>{pts(c.getValue())}</span> }),
+    xc.accessor("lpPrice", { header: t("reports.lpPrice"), cell: (c) => <span className="tabular-nums">{c.getValue() ?? "—"}</span> }),
+    xc.accessor("capturePts", { header: t("reports.capture"), cell: (c) => <span className="tabular-nums">{pts(c.getValue())}</span> }),
+    xc.accessor("lpLatencyMs", { header: t("reports.lpLatency"), cell: (c) => <span className="tabular-nums">{c.getValue() === null ? "—" : `${Math.round(c.getValue() ?? 0)} ms`}</span> }),
+    xc.accessor("lpFills", { header: t("reports.lpFills"), cell: (c) => <span className="tabular-nums">{c.row.original.book === "A" ? c.getValue() : "—"}{c.row.original.rearmed ? " ↻" : ""}</span> }),
+    xc.accessor("status", { header: t("reports.status"), cell: (c) => <span className={c.getValue() === "rejected" ? "text-red-600 dark:text-red-400" : undefined} title={c.row.original.reason ?? undefined}>{c.getValue()}</span> }),
+  ];
+  const sumCols = [
+    xs.accessor("symbol", { header: t("positions.symbol") }),
+    xs.accessor("orders", { header: t("reports.orders") }),
+    xs.accessor("fillRate", { header: t("reports.fillRate"), cell: (c) => pct(c.getValue()) }),
+    xs.accessor("partialRate", { header: t("reports.partialRate"), cell: (c) => pct(c.getValue()) }),
+    xs.accessor("rejectRate", { header: t("reports.rejectRate"), cell: (c) => pct(c.getValue()) }),
+    xs.accessor("avgSlipPts", { header: t("reports.avgSlip"), cell: (c) => <span className={`tabular-nums ${slipTone(c.getValue()) ?? ""}`}>{pts(c.getValue(), 2)}</span> }),
+    xs.accessor("p95SlipPts", { header: t("reports.p95Slip"), cell: (c) => <span className={`tabular-nums ${slipTone(c.getValue()) ?? ""}`}>{pts(c.getValue(), 2)}</span> }),
+    xs.accessor("improvedRate", { header: t("reports.improved"), cell: (c) => pct(c.getValue()) }),
+    xs.accessor("avgCapturePts", { header: t("reports.capture"), cell: (c) => <span className="tabular-nums">{pts(c.getValue(), 2)}</span> }),
+    xs.accessor("avgLatencyMs", { header: t("reports.lpLatency"), cell: (c) => <span className="tabular-nums">{c.getValue() ? `${Math.round(c.getValue())} ms` : "—"}</span> }),
+  ];
 
   const lpCols = [
     lc.accessor("createdAt", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
@@ -89,6 +127,9 @@ export default function ReportsPage() {
     if (tab === "lp") {
       const rows = (lp.data ?? []).map((x) => [x.id, x.createdAt, x.symbol, x.side, x.lots, x.filledLots, x.avgPrice, x.status, x.fills.map((y) => y.execId).join(" "), x.clients.map((y) => `${y.login}@${y.price}`).join(" ")]);
       downloadCsv("lp-executions.csv", toCsv(["id", "created_at", "symbol", "side", "lots", "filled", "lp_price", "status", "exec_ids", "clients"], rows));
+    } else if (tab === "execution") {
+      const rows = (execution.data?.rows ?? []).map((x) => [x.id, x.at, x.login, x.symbol, x.side, x.type, x.lots, x.filledLots, x.book, x.requested ?? "", x.fill ?? "", x.clientSlipPts ?? "", x.lpPrice ?? "", x.capturePts ?? "", x.lpLatencyMs ?? "", x.lpFills, x.rearmed ? 1 : 0, x.status, x.reason ?? ""]);
+      downloadCsv("execution.csv", toCsv(["id", "at", "login", "symbol", "side", "type", "lots", "filled", "book", "requested", "fill", "client_slip_pts", "lp_price", "capture_pts", "lp_latency_ms", "lp_fills", "rearmed", "status", "reason"], rows));
     } else if (tab === "revenue") {
       const rows = (revenue.data?.rows ?? []).map((x) => [x.id, x.at, x.login, x.symbol, x.lots, x.price, x.lpPrice ?? "", x.kind, x.book, formatMinorPlain(x.client, "USD"), formatMinorPlain(x.broker, "USD"), formatMinorPlain(x.lp, "USD"), x.ref]);
       downloadCsv("revenue.csv", toCsv(["id", "at", "login", "symbol", "lots", "client_price", "lp_price", "kind", "book", "client", "broker", "lp", "ref"], rows));
@@ -107,11 +148,19 @@ export default function ReportsPage() {
         {actor.can("reports.export") && <Button variant="outline" onClick={exportCsv} data-testid="export-csv"><Download className="h-4 w-4" />{t("common.export")}</Button>}
       </PageHeader>
       <div className="mb-3">
-        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "revenue", label: t("reports.revenue") }]} />
+        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }]} />
       </div>
       {tab === "trades" && <DataTable data={trades.data ?? []} columns={tradeCols} getRowId={(x) => x.id} />}
       {tab === "statements" && <DataTable data={statements.data ?? []} columns={stmtCols} getRowId={(x) => String(x.login)} />}
       {tab === "lp" && <DataTable data={lp.data ?? []} columns={lpCols} getRowId={(x) => x.id} />}
+      {tab === "execution" && (
+        <div data-testid="execution-report">
+          <p className="mb-2 text-xs text-muted-foreground">{t("reports.slipHint")}</p>
+          <h3 className="mb-1 text-sm font-medium">{t("reports.bySymbol")}</h3>
+          <div className="mb-4"><DataTable data={execution.data?.bySymbol ?? []} columns={sumCols} getRowId={(x) => x.symbol} /></div>
+          <DataTable data={execution.data?.rows ?? []} columns={execCols} getRowId={(x) => x.id} />
+        </div>
+      )}
       {tab === "revenue" && (
         <div data-testid="revenue-report">
           <div className="mb-3 grid grid-cols-2 gap-3 xl:grid-cols-4">{totals(revenue.data?.last24h, t("reports.last24h"))}</div>
