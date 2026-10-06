@@ -238,7 +238,7 @@ export const tr: Record<MessageKey, string> = {
   'm.fsInstall': 'Uygulamayı yükle',
   'm.fsAfterShare': 'Açılan sayfada “Ana Ekrana Ekle”yi seçin, sonra fxvps.ai’yi Ana Ekran’dan açın.',
   'm.fsStep1Safari': 'Safari’nin altındaki Paylaş düğmesine dokunun',
-  'm.fsStep1Chrome': 'Adres çubuğunun yanındaki Paylaş simgesine dokunun',
+  'm.fsStep1Chrome': 'Adres çubuğunun sağ ucundaki Paylaş simgesine dokunun',
   'm.fsStep2': '“Ana Ekrana Ekle”yi seçin',
   'm.fsStep3': 'fxvps.ai’yi Ana Ekran’dan açın',
   'm.deals': 'İşlemler',
