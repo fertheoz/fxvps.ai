@@ -258,7 +258,8 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
   const chartTool = useTerminal((s) => s.chartTool);
   // Full screen: the Fullscreen API where it exists (Android, desktop); iPhone Safari
   // has none for pages, so the button explains "Add to Home Screen" instead.
-  const [fsHelp, setFsHelp] = useState(false);
+  // ?addhome=1: we were sent here from Chrome's "Open in Safari" button; show the card at once.
+  const [fsHelp, setFsHelp] = useState(() => typeof location !== 'undefined' && new URLSearchParams(location.search).get('addhome') === '1');
   const [fullscreen, setFullscreen] = useState(() => typeof document !== 'undefined' && !!document.fullscreenElement);
   useEffect(() => {
     const on = () => setFullscreen(!!document.fullscreenElement);
@@ -270,15 +271,20 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
   // iPhone browsers only offer the system share sheet (which has "Add to Home Screen").
   const installPrompt = useInstallPrompt();
   const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
-  const iosChrome = /CriOS/.test(ua);
-  // iPhone Chrome's web-share sheet has no "Add to Home Screen" (only Chrome's own
-  // share menu next to the address bar does), so there we show the steps instead.
+  const ios = /iPhone|iPad|iPod/.test(ua);
+  const iosChrome = ios && /CriOS/.test(ua);
+  // Chrome's web-share sheet on iPhone has no "Add to Home Screen", Safari's does:
+  // from Chrome the shortest path is one tap into Safari (x-safari-https://).
   const canShare = !iosChrome && typeof navigator !== 'undefined' && typeof navigator.share === 'function';
   const [shared, setShared] = useState(false);
   const addToHome = async () => {
     if (installPrompt) {
       await promptInstall();
       setFsHelp(false);
+      return;
+    }
+    if (iosChrome) {
+      location.href = `x-safari-https://${location.host}/?addhome=1`;
       return;
     }
     if (canShare) {
@@ -447,9 +453,9 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
             <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-line" />
             <h2 className="text-[17px] font-semibold">{t('m.fsTitle')}</h2>
             <p className="mt-2 text-muted">{t('m.fsBody')}</p>
-            {(installPrompt || canShare) && (
+            {(installPrompt || canShare || iosChrome) && (
               <button className="mt-3 w-full h-12 rounded-2xl bg-accent text-white font-semibold" onClick={() => void addToHome()} data-testid="m-add-home">
-                {installPrompt ? t('m.fsInstall') : t('m.fsShare')}
+                {installPrompt ? t('m.fsInstall') : iosChrome ? t('m.fsOpenSafari') : t('m.fsShare')}
               </button>
             )}
             {shared && <p className="mt-2 text-[13px] text-muted">{t('m.fsAfterShare')}</p>}
@@ -462,6 +468,12 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
                   </li>
                 ))}
               </ol>
+            )}
+            {ios && !iosChrome && !shared && (
+              <div className="mt-3 flex flex-col items-center text-accent" data-testid="m-share-arrow">
+                <span className="text-[12px] font-medium">{t('m.fsArrow')}</span>
+                <span className="text-[26px] leading-none animate-bounce">↓</span>
+              </div>
             )}
             <button className="mt-4 w-full h-12 rounded-2xl bg-panel-2 font-medium" onClick={() => setFsHelp(false)}>
               {t('sec.done')}
