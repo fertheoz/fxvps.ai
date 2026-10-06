@@ -87,6 +87,9 @@ pub struct SettingsRec {
     pub session_timeout_min: u32,
     pub require_mfa: bool,
     pub default_book: String,
+    /// Our own LEI, stamped as executing entity on transaction reports.
+    #[serde(default)]
+    pub broker_lei: String,
 }
 
 impl Default for SettingsRec {
@@ -98,6 +101,7 @@ impl Default for SettingsRec {
             session_timeout_min: 30,
             require_mfa: true,
             default_book: "A".into(),
+            broker_lei: String::new(),
         }
     }
 }
@@ -112,6 +116,41 @@ pub struct AuditRec {
     pub action: String,
     pub target: String,
     pub details: String,
+    /// Hash chain (stage 11): `hash = sha256(prev_hash | id | at | actor | role | action | target | details)`.
+    /// Records written before the chain existed carry empty strings.
+    #[serde(default)]
+    pub prev_hash: String,
+    #[serde(default)]
+    pub hash: String,
+}
+
+/// Chain link of one audit record over its predecessor's hash.
+pub fn audit_hash(
+    prev: &str,
+    id: &str,
+    at: u64,
+    actor: &str,
+    role: Role,
+    action: &str,
+    target: &str,
+    details: &str,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for part in [
+        prev,
+        id,
+        &at.to_string(),
+        actor,
+        &format!("{role:?}"),
+        action,
+        target,
+        details,
+    ] {
+        h.update(part.as_bytes());
+        h.update([0u8]);
+    }
+    format!("{:x}", h.finalize())
 }
 
 /// Mutating admin commands (the admin journal payload).
@@ -143,6 +182,11 @@ pub enum AdminCmd {
         account: u64,
         group: String,
         profile: ClientProfile,
+    },
+    /// Reporting identity of a client (stage 11).
+    ProfileUpdated {
+        account: u64,
+        lei: Option<String>,
     },
     GroupSaved {
         group: String,
@@ -214,6 +258,9 @@ pub struct AdminRecord {
 pub struct ClientProfile {
     pub name: String,
     pub email: String,
+    /// Legal Entity Identifier for transaction reporting (20 chars) when the client is a legal person.
+    #[serde(default)]
+    pub lei: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
@@ -256,15 +303,54 @@ impl AdminState {
     }
 
     fn audit(&mut self, r: &AdminRecord, action: String, target: String, details: String) {
+        let prev_hash = self
+            .audit
+            .last()
+            .map(|a| a.hash.clone())
+            .unwrap_or_default();
+        let id = format!("a{}", r.seq);
+        let hash = audit_hash(
+            &prev_hash,
+            &id,
+            r.ts,
+            &r.actor.name,
+            r.actor.role,
+            &action,
+            &target,
+            &details,
+        );
         self.audit.push(AuditRec {
-            id: format!("a{}", r.seq),
+            id,
             at: r.ts,
             actor: r.actor.name.clone(),
             role: r.actor.role,
             action,
             target,
             details,
+            prev_hash,
+            hash,
         });
+    }
+
+    /// Recomputes the whole chain: `Ok(head)` when every link matches, else the
+    /// first broken record id.
+    pub fn verify_chain(&self) -> Result<String, String> {
+        let mut prev = String::new();
+        for a in &self.audit {
+            if a.hash.is_empty() {
+                // pre-chain record: the chain starts after it
+                prev.clear();
+                continue;
+            }
+            let expect = audit_hash(
+                &prev, &a.id, a.at, &a.actor, a.role, &a.action, &a.target, &a.details,
+            );
+            if a.prev_hash != prev || a.hash != expect {
+                return Err(a.id.clone());
+            }
+            prev = a.hash.clone();
+        }
+        Ok(prev)
     }
 
     fn apply_credit(&mut self, op: &BalanceOp) {
@@ -387,6 +473,17 @@ impl AdminState {
                 "engine".into(),
                 details.clone(),
             ),
+            AdminCmd::ProfileUpdated { account, lei } => {
+                let p = self.profiles.entry(*account).or_default();
+                let old = p.lei.clone().unwrap_or_default();
+                p.lei = lei.clone();
+                self.audit(
+                    r,
+                    "profile.update".into(),
+                    format!("#{account}"),
+                    format!("LEI {old} → {}", lei.clone().unwrap_or_default()),
+                )
+            }
             AdminCmd::AlertRaised {
                 kind,
                 target,

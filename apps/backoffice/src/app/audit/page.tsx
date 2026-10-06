@@ -13,6 +13,7 @@ export default function AuditPage() {
   const t = useT();
   const f = useFormat();
   const { data = [] } = useApiQuery("listAudit", [], { live: 5000 });
+  const chain = useApiQuery("auditChain", [], { live: 15000 });
   const columns = [
     col.accessor("at", { header: t("audit.at"), cell: (c) => <span className="tabular-nums">{f.date(c.getValue())}</span> }),
     col.accessor("actor", { header: t("audit.actor") }),
@@ -24,7 +25,9 @@ export default function AuditPage() {
   return (
     <div data-testid="page-audit">
       <PageHeader title={t("audit.title")}>
-        <span className="flex items-center gap-1 text-xs text-muted-foreground"><Lock className="h-3 w-3" />{t("audit.immutable")}</span>
+        <span className="flex items-center gap-2 text-xs text-muted-foreground" title={t("audit.chainHint")}><Lock className="h-3 w-3" />{t("audit.immutable")}
+          {chain.data && (chain.data.verified ? <Badge tone="success" data-testid="audit-chain">{t("audit.chain")}: {t("audit.chainOk")} · {chain.data.chained}/{chain.data.count} · {chain.data.headHash.slice(0, 12)}</Badge> : <Badge tone="danger" data-testid="audit-chain">{t("audit.chain")}: {t("audit.chainBroken")} {chain.data.brokenAt}</Badge>)}
+        </span>
       </PageHeader>
       <DataTable data={data} columns={columns} getRowId={(a) => a.id} pageSize={20} testId="audit-table" />
     </div>

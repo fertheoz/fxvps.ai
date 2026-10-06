@@ -51,6 +51,7 @@ function SettingsForm({ initial }: { initial: Settings }) {
         <NumField label={t("settings.sessionTimeout")} value={draft.sessionTimeoutMin} onChange={(v) => set("sessionTimeoutMin", v)} error={errors.sessionTimeoutMin} step={1} disabled={!editable} />
         <SelectField label={t("settings.requireMfa")} value={draft.requireMfa ? "yes" : "no"} options={["yes", "no"] as const} onChange={(v) => set("requireMfa", v === "yes")} disabled={!editable} />
         <SelectField label={t("settings.defaultBook")} value={draft.defaultBook} options={Book.options} onChange={(v) => set("defaultBook", v)} disabled={!editable} />
+        <TextField label={t("settings.brokerLei")} value={draft.brokerLei ?? ""} onChange={(v) => set("brokerLei", v.toUpperCase())} error={errors.brokerLei} disabled={!editable} />
         {editable && <div className="sm:col-span-2"><Button onClick={() => { const v = validate(); if (v) mut.mutate(v); }} disabled={mut.isPending}>{t("common.save")}</Button></div>}
       </CardContent>
     </Card>

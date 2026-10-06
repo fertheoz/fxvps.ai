@@ -98,6 +98,8 @@ export const Client = z.object({
   margin: MinorAmount,
   createdAt: z.string(),
   lastIp: z.string(),
+  /** Legal Entity Identifier (transaction reporting). */
+  lei: z.string().nullable().optional(),
 });
 export type Client = z.infer<typeof Client>;
 
@@ -168,6 +170,7 @@ export const AuditEntry = z.object({
   action: z.string(),
   target: z.string(),
   details: z.string(),
+  hash: z.string().optional(),
 });
 export type AuditEntry = z.infer<typeof AuditEntry>;
 
@@ -215,5 +218,6 @@ export const Settings = z.object({
   sessionTimeoutMin: z.number().int().min(5).max(480),
   requireMfa: z.boolean(),
   defaultBook: Book,
+  brokerLei: z.string().optional(),
 });
 export type Settings = z.infer<typeof Settings>;

@@ -36,6 +36,10 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/accounts/{id}/balance-ops", post(balance_op))
         .route("/v1/accounts/{id}/kyc", patch(set_kyc))
         .route("/v1/accounts/{id}/group", patch(set_group))
+        .route("/v1/accounts/{id}/profile", patch(set_profile))
+        .route("/v1/reports/transactions", get(transactions))
+        .route("/v1/reports/best-execution", get(best_execution))
+        .route("/v1/audit/chain", get(audit_chain))
         .route("/v1/approvals", get(list_approvals))
         .route("/v1/approvals/{id}/approve", post(approve))
         .route("/v1/approvals/{id}/reject", post(reject))
@@ -434,7 +438,11 @@ async fn open_account(
         AdminCmd::AccountOpened {
             account: next,
             group: req.group,
-            profile: super::store::ClientProfile { name, email },
+            profile: super::store::ClientProfile {
+                name,
+                email,
+                lei: None,
+            },
         },
     )?;
     drop(store);
@@ -786,6 +794,139 @@ async fn reject(
 #[derive(Deserialize)]
 struct KycReq {
     kyc: String,
+}
+
+#[derive(Deserialize)]
+struct ProfileReq {
+    #[serde(default)]
+    lei: Option<String>,
+}
+
+/// LEI must be 20 alphanumerics (ISO 17442) or empty.
+async fn set_profile(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(req): Json<ProfileReq>,
+) -> ApiResult {
+    need(&actor, "clients.edit")?;
+    let account = parse_id(&id)?;
+    let lei = req
+        .lei
+        .map(|l| l.trim().to_uppercase())
+        .filter(|l| !l.is_empty());
+    if let Some(l) = &lei {
+        if l.len() != 20 || !l.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(ApiError::bad("LEI must be 20 alphanumeric characters"));
+        }
+    }
+    if !ctx.q(move |e| e.account(account).is_some()).await? {
+        return Err(ApiError::not_found("unknown account"));
+    }
+    ctx.store
+        .lock()
+        .await
+        .append(&actor, AdminCmd::ProfileUpdated { account, lei })?;
+    ctx.notify(&["listClients", "getClient", "listAudit"]);
+    let st = ctx.view_state().await;
+    ctx.q(move |e| views::client(e, account, &st))
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("unknown account"))
+}
+
+#[derive(Deserialize)]
+struct ReportRange {
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
+}
+
+fn parse_iso_ns(s: &str) -> Option<u64> {
+    // YYYY-MM-DD or full RFC 3339 (date part only is used for day bounds)
+    let d = s.get(0..10)?;
+    let mut it = d.split('-');
+    let (y, m, day): (i64, i64, i64) = (
+        it.next()?.parse().ok()?,
+        it.next()?.parse().ok()?,
+        it.next()?.parse().ok()?,
+    );
+    // days from civil (Howard Hinnant)
+    let y2 = if m <= 2 { y - 1 } else { y };
+    let era = if y2 >= 0 { y2 } else { y2 - 399 } / 400;
+    let yoe = y2 - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days).ok().map(|d| d * 86_400_000_000_000)
+}
+
+/// MiFIR-style transaction report rows (`?from=YYYY-MM-DD&to=YYYY-MM-DD`, to exclusive; default last 30 days).
+async fn transactions(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<ReportRange>,
+) -> ApiResult {
+    need(&actor, "reports.view")?;
+    let now = now_ns();
+    let from = q
+        .from
+        .as_deref()
+        .and_then(parse_iso_ns)
+        .unwrap_or(now.saturating_sub(30 * DAY_NS));
+    let to =
+        q.to.as_deref()
+            .and_then(parse_iso_ns)
+            .map(|t| t + DAY_NS)
+            .unwrap_or(u64::MAX);
+    let st = ctx.view_state().await;
+    Ok(Json(
+        ctx.q(move |e| views::transactions(e, &st, from, to))
+            .await?,
+    ))
+}
+
+/// Best-execution summary per venue and asset class (`?from=&to=`, default last 30 days).
+async fn best_execution(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<ReportRange>,
+) -> ApiResult {
+    need(&actor, "reports.view")?;
+    let now = now_ns();
+    let from = q
+        .from
+        .as_deref()
+        .and_then(parse_iso_ns)
+        .unwrap_or(now.saturating_sub(30 * DAY_NS));
+    let to =
+        q.to.as_deref()
+            .and_then(parse_iso_ns)
+            .map(|t| t + DAY_NS)
+            .unwrap_or(u64::MAX);
+    Ok(Json(
+        ctx.q(move |e| views::best_execution(e, from, to)).await?,
+    ))
+}
+
+/// Audit hash-chain status: recomputed over every record.
+async fn audit_chain(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "audit.view")?;
+    let st = &ctx.store.lock().await.state;
+    let (verified, head, broken) = match st.verify_chain() {
+        Ok(h) => (true, h, None),
+        Err(id) => (false, String::new(), Some(id)),
+    };
+    let chained = st.audit.iter().filter(|a| !a.hash.is_empty()).count();
+    Ok(Json(json!({
+        "count": st.audit.len(),
+        "chained": chained,
+        "verified": verified,
+        "headHash": head,
+        "brokenAt": broken,
+        "lastAt": st.audit.last().map(|a| views::iso(a.at)),
+    })))
 }
 
 async fn set_kyc(
@@ -1764,7 +1905,8 @@ async fn audit(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
             .rev()
             .map(|a| {
                 json!({ "id": a.id, "at": views::iso(a.at), "actor": a.actor, "role": a.role,
-                        "action": a.action, "target": a.target, "details": a.details })
+                        "action": a.action, "target": a.target, "details": a.details,
+                        "hash": a.hash })
             })
             .collect(),
     )))
@@ -1811,6 +1953,13 @@ async fn save_settings(
     Json(s): Json<SettingsRec>,
 ) -> ApiResult {
     need(&actor, "settings.edit")?;
+    if !s.broker_lei.is_empty()
+        && (s.broker_lei.len() != 20 || !s.broker_lei.chars().all(|c| c.is_ascii_alphanumeric()))
+    {
+        return Err(ApiError::bad(
+            "brokerLei must be 20 alphanumeric characters or empty",
+        ));
+    }
     if s.broker_name.trim().chars().count() < 2
         || s.four_eyes_threshold <= 0
         || !(5..=480).contains(&s.session_timeout_min)

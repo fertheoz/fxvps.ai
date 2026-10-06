@@ -47,6 +47,20 @@ for f in .env docker-compose.yml docker-compose.override.yml lp-sim.toml lp-sim-
 done
 docker compose exec -T postgres pg_dump -h 127.0.0.1 -p 5433 -U fxvps identity > "$TMP/yedek/identity.sql" || fail "pg_dump"
 
+# Denetim defteri append-only çapası: dünkü dosyanın önek hash'i bugün de aynı olmalı
+ANCHOR="$OUT/admin-anchor.txt"   # "<bayt> <sha256>" (dün)
+if [ -s core-data/admin.jsonl ]; then
+  if [ -s "$ANCHOR" ]; then
+    read -r PREV_BYTES PREV_SHA < "$ANCHOR"
+    NOW_BYTES=$(stat -c %s core-data/admin.jsonl)
+    if [ "$NOW_BYTES" -lt "$PREV_BYTES" ]; then fail "denetim defteri KISALMIŞ ($PREV_BYTES → $NOW_BYTES bayt)"; fi
+    CUR_SHA=$(head -c "$PREV_BYTES" core-data/admin.jsonl | sha256sum | cut -d" " -f1)
+    [ "$CUR_SHA" = "$PREV_SHA" ] || fail "denetim defteri öneki DEĞİŞMİŞ (ilk $PREV_BYTES bayt)"
+  fi
+  printf '%s %s\n' "$(stat -c %s core-data/admin.jsonl)" "$(sha256sum core-data/admin.jsonl | cut -d" " -f1)" > "$ANCHOR.new" && mv "$ANCHOR.new" "$ANCHOR"
+  cp "$ANCHOR" "$OUT/admin-anchor-$STAMP.txt"
+fi
+
 tar -C "$TMP" -czf "$TMP/yedek.tgz" yedek
 ENC="$OUT/fxvps-$STAMP.tgz.enc"
 openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in "$TMP/yedek.tgz" -out "$ENC" -pass "file:$KEY" || fail "şifreleme"

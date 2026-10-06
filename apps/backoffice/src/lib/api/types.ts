@@ -314,6 +314,61 @@ export interface RolloverResult {
   reason: string;
 }
 
+export interface TransactionRow {
+  txId: string;
+  tradingDateTime: string;
+  executingEntity: string;
+  buyerId: string;
+  sellerId: string;
+  clientLogin: number;
+  clientName: string | null;
+  instrument: string;
+  assetClass: string | null;
+  isin: string;
+  side: "buy" | "sell";
+  entry: "open" | "close";
+  price: number;
+  priceCurrency: string | null;
+  quantityLots: number;
+  quantityUnits: number;
+  notional: number;
+  tradingCapacity: "DEAL" | "MTCH";
+  venue: string;
+  executionLp: string | null;
+  book: "A" | "B";
+  commission: number;
+  swap: number;
+  realisedPnl: number;
+  reason: string;
+}
+export interface TransactionReport { from: string; to: string | null; rows: TransactionRow[] }
+
+export interface BestExecutionRow {
+  venue: string;
+  assetClass: string;
+  orders: number;
+  filled: number;
+  rejected: number;
+  fillRate: number;
+  lots: number;
+  volumeSharePct: number;
+  avgClientSlipPts: number;
+  p95ClientSlipPts: number;
+  priceImprovementPct: number;
+  p50LatencyMs: number;
+  p95LatencyMs: number;
+}
+export interface BestExecutionReport { from: string; to: string | null; rows: BestExecutionRow[] }
+
+export interface AuditChain {
+  count: number;
+  chained: number;
+  verified: boolean;
+  headHash: string;
+  brokenAt: string | null;
+  lastAt: string | null;
+}
+
 export interface RevenueRow {
   id: string;
   at: string;
@@ -360,6 +415,12 @@ export interface AdminApi {
   setKyc(id: string, kyc: Client["kyc"], actor: Actor): Promise<Client>;
   /** Moves the account to another group (refused while it has positions or orders). */
   setGroup(id: string, group: string, actor: Actor): Promise<Client>;
+  /** Reporting identity (LEI) of a client; null clears it. */
+  setProfile(id: string, p: { lei: string | null }, actor: Actor): Promise<Client>;
+  /** MiFIR-style transaction report rows for [from, to] (YYYY-MM-DD). */
+  transactions(from?: string, to?: string): Promise<TransactionReport>;
+  bestExecution(from?: string, to?: string): Promise<BestExecutionReport>;
+  auditChain(): Promise<AuditChain>;
 
   listGroups(): Promise<Group[]>;
   listRules(): Promise<RoutingRule[]>;
