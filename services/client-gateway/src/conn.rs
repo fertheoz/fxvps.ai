@@ -380,6 +380,7 @@ async fn session(
                         if out.send(Body::Depth(Depth::clone(&d))).is_err() {
                             return slow();
                         }
+                        hub.metrics.depth_frames_sent.inc();
                     }
                 }
             },

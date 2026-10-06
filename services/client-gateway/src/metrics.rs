@@ -11,6 +11,7 @@ pub struct Metrics {
     pub quote_batches_sent: IntCounter,
     pub quotes_sent: IntCounter,
     pub quotes_conflated: IntCounter,
+    pub depth_frames_sent: IntCounter,
     pub slow_consumer_drops: IntCounter,
     pub orders_received: IntCounter,
     pub orders_rate_limited: IntCounter,
@@ -60,6 +61,7 @@ impl Default for Metrics {
                 "client_gw_quotes_conflated_total",
                 "Quotes replaced by a newer one before delivery",
             ),
+            depth_frames_sent: counter(r, "client_gw_depth_frames_sent_total", "Depth frames"),
             slow_consumer_drops: counter(
                 r,
                 "client_gw_slow_consumer_drops_total",

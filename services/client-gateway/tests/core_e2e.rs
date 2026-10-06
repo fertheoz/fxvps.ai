@@ -156,6 +156,32 @@ async fn start() -> (Demo, String) {
     (demo, addr)
 }
 
+/// Subscribing with `depth_symbols` streams the LP book (simulator: several
+/// levels per side, sizes set) as `Depth` frames, marked up like the quotes.
+#[tokio::test]
+async fn depth_frames_follow_depth_subscription() {
+    let (_demo, addr) = start().await;
+    let (mut c, _) = Client::login(&addr, "DEMO-1").await;
+    c.send(Body::Subscribe(Subscribe {
+        request_id: "sub-depth".into(),
+        symbols: vec![],
+        depth_symbols: vec!["EURUSD".into()],
+    }))
+    .await;
+    let d = c
+        .until(|b| match b {
+            Body::Depth(d) if d.symbol == "EURUSD" => Some(d),
+            _ => None,
+        })
+        .await;
+    assert!(d.bids.len() > 1 && d.asks.len() > 1, "{d:?}");
+    let best_bid = fx(d.bids[0].price);
+    let best_ask = fx(d.asks[0].price);
+    assert!(best_bid < best_ask, "{d:?}");
+    assert!(fx(d.bids[1].price) < best_bid, "bids best first: {d:?}");
+    assert!(fx(d.bids[0].qty).is_positive(), "{d:?}");
+}
+
 #[tokio::test]
 async fn open_close_margin_reject_and_stop_out() {
     let (demo, addr) = start().await;
