@@ -794,3 +794,242 @@ pub fn lp_sessions(rows: &[fix_gateway::SessionStatus]) -> Value {
             .collect(),
     )
 }
+
+/// Per-bucket accumulator of the dashboard series.
+#[derive(Default, Clone)]
+struct DashBucket {
+    markup: i128,
+    commission: i128,
+    b_book: i128,
+    lots: f64,
+    orders: u32,
+    rejects: u32,
+}
+
+/// Dashboard series for `range` ("today" | "24h" | "7d" | "30d"): revenue legs,
+/// volume and order counts per bucket, totals with the previous period for
+/// comparison, top symbols / clients, accounts near margin call and an
+/// execution-quality summary. Everything comes from the engine's deals,
+/// orders and LP orders; nothing is sampled, so the series is exact.
+pub fn dashboard_series(e: &Engine, admin: &AdminState, now_ns: u64, range: &str) -> Value {
+    const HOUR: u64 = 3_600_000_000_000;
+    const DAY: u64 = 24 * HOUR;
+    let (since, bucket, label_day) = match range {
+        "today" => (now_ns - now_ns % DAY, HOUR, false),
+        "7d" => (now_ns.saturating_sub(7 * DAY), DAY, true),
+        "30d" => (now_ns.saturating_sub(30 * DAY), DAY, true),
+        _ => (now_ns.saturating_sub(DAY), HOUR, false),
+    };
+    let len = now_ns.saturating_sub(since).max(bucket);
+    let prev_since = since.saturating_sub(len);
+    let n_buckets = len.div_ceil(bucket) as usize;
+    let mut buckets = vec![DashBucket::default(); n_buckets];
+    let mut total = DashBucket::default();
+    let mut prev = DashBucket::default();
+    let name = |a: u64| {
+        admin
+            .profiles
+            .get(&a)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| a.to_string())
+    };
+    let a_book = |d: &oms::Deal| {
+        d.lp_price.is_some()
+            || e.account(d.account)
+                .and_then(|a| e.group(&a.group))
+                .is_some_and(|g| g.routing == Routing::ABook)
+    };
+    // (symbol -> lots, revenue), (account -> pnl, lots)
+    let mut by_symbol: BTreeMap<String, (f64, i128)> = BTreeMap::new();
+    let mut by_client: BTreeMap<u64, (i128, f64)> = BTreeMap::new();
+    for d in e.deals() {
+        if d.ts < prev_since {
+            continue;
+        }
+        let (markup, b_book) = if d.entry == oms::DealEntry::Out {
+            if a_book(d) {
+                (d.broker_pnl, 0)
+            } else {
+                (0, d.broker_pnl)
+            }
+        } else {
+            (0, 0)
+        };
+        let commission = -d.commission.minor;
+        let lots = qty_f(d.volume);
+        let target = if d.ts >= since { &mut total } else { &mut prev };
+        target.markup += markup;
+        target.commission += commission;
+        target.b_book += b_book;
+        target.lots += lots;
+        if d.ts >= since {
+            let i = (((d.ts - since) / bucket) as usize).min(n_buckets - 1);
+            let b = &mut buckets[i];
+            b.markup += markup;
+            b.commission += commission;
+            b.b_book += b_book;
+            b.lots += lots;
+            let s = by_symbol.entry(d.symbol.clone()).or_default();
+            s.0 += lots;
+            s.1 += markup + commission + b_book;
+            let c = by_client.entry(d.account).or_default();
+            if d.entry == oms::DealEntry::Out {
+                c.0 += d.pnl.minor;
+            }
+            c.1 += lots;
+        }
+    }
+    // orders: counts, rejects, client slippage
+    let points: BTreeMap<&str, f64> = e
+        .symbols()
+        .map(|s| (s.symbol.as_str(), price_f(s.point())))
+        .collect();
+    let (mut filled, mut slips) = (0u32, Vec::<f64>::new());
+    for o in e.orders() {
+        if o.created_ts < prev_since {
+            continue;
+        }
+        let rejected = o.status == OrderStatus::Rejected;
+        let target = if o.created_ts >= since {
+            &mut total
+        } else {
+            &mut prev
+        };
+        target.orders += 1;
+        if rejected {
+            target.rejects += 1;
+        }
+        if o.created_ts >= since {
+            let i = (((o.created_ts - since) / bucket) as usize).min(n_buckets - 1);
+            buckets[i].orders += 1;
+            if rejected {
+                buckets[i].rejects += 1;
+            }
+            if o.filled.raw() > 0 {
+                filled += 1;
+                if let (Some(req), Some(&point)) =
+                    (o.req.requested_price, points.get(o.req.symbol.as_str()))
+                {
+                    if point > 0.0 {
+                        let sign = if o.req.side == Side::Buy { 1.0 } else { -1.0 };
+                        slips.push(sign * (price_f(o.avg_price) - price_f(req)) / point);
+                    }
+                }
+            }
+        }
+    }
+    // LP latency p95 (send -> first fill)
+    let mut lat: Vec<f64> = e
+        .lp_orders()
+        .filter(|l| l.created_ts >= since)
+        .filter_map(|l| {
+            l.fills
+                .iter()
+                .map(|f| f.ts)
+                .min()
+                .map(|t| t.saturating_sub(l.created_ts) as f64 / 1e6)
+        })
+        .collect();
+    lat.sort_by(|a, b| a.total_cmp(b));
+    let pct = |v: &[f64], p: f64| {
+        if v.is_empty() {
+            0.0
+        } else {
+            v[((v.len() - 1) as f64 * p).round() as usize]
+        }
+    };
+    let avg = |v: &[f64]| {
+        if v.is_empty() {
+            0.0
+        } else {
+            v.iter().sum::<f64>() / v.len() as f64
+        }
+    };
+    // accounts near margin call
+    let mut risk: Vec<Value> = e
+        .accounts()
+        .filter_map(|a| {
+            let r = e.account_risk(a.id).ok()?;
+            let level = r.margin_level_x100()?;
+            (level < 200 * 100).then(|| {
+                json!({
+                    "login": a.id,
+                    "name": name(a.id),
+                    "marginLevelPct": level as f64 / 100.0,
+                    "equity": minor(r.equity.minor),
+                    "margin": minor(r.margin.minor),
+                    "marginCall": a.margin_call,
+                })
+            })
+        })
+        .collect();
+    risk.sort_by(|x, y| {
+        x["marginLevelPct"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .total_cmp(&y["marginLevelPct"].as_f64().unwrap_or(0.0))
+    });
+    risk.truncate(10);
+    let mut top_symbols: Vec<(String, f64, i128)> =
+        by_symbol.into_iter().map(|(s, (l, r))| (s, l, r)).collect();
+    top_symbols.sort_by(|a, b| b.1.total_cmp(&a.1));
+    top_symbols.truncate(8);
+    let mut clients: Vec<(u64, i128, f64)> =
+        by_client.into_iter().map(|(a, (p, l))| (a, p, l)).collect();
+    clients.sort_by_key(|c| std::cmp::Reverse(c.1));
+    let winners: Vec<Value> = clients
+        .iter()
+        .take(5)
+        .map(|(a, p, l)| json!({"login": a, "name": name(*a), "pnl": minor(*p), "lots": l}))
+        .collect();
+    let losers: Vec<Value> = clients
+        .iter()
+        .rev()
+        .take(5)
+        .filter(|(_, p, _)| *p < 0)
+        .map(|(a, p, l)| json!({"login": a, "name": name(*a), "pnl": minor(*p), "lots": l}))
+        .collect();
+    let bucket_json = |i: usize, b: &DashBucket| {
+        let t = since + i as u64 * bucket;
+        let iso_t = iso(t);
+        json!({
+            "t": iso_t,
+            "label": if label_day { iso_t[5..10].to_string() } else { iso_t[11..16].to_string() },
+            "markup": minor(b.markup),
+            "commission": minor(b.commission),
+            "bBook": minor(b.b_book),
+            "lots": b.lots,
+            "orders": b.orders,
+            "rejects": b.rejects,
+        })
+    };
+    let totals_json = |b: &DashBucket| {
+        json!({
+            "revenue": minor(b.markup + b.commission + b.b_book),
+            "markup": minor(b.markup),
+            "commission": minor(b.commission),
+            "bBook": minor(b.b_book),
+            "lots": b.lots,
+            "orders": b.orders,
+            "rejects": b.rejects,
+        })
+    };
+    json!({
+        "range": range,
+        "since": iso(since),
+        "buckets": buckets.iter().enumerate().map(|(i, b)| bucket_json(i, b)).collect::<Vec<_>>(),
+        "totals": totals_json(&total),
+        "previous": totals_json(&prev),
+        "topSymbols": top_symbols.iter().map(|(s, l, r)| json!({"symbol": s, "lots": l, "revenue": minor(*r)})).collect::<Vec<_>>(),
+        "winners": winners,
+        "losers": losers,
+        "risk": risk,
+        "execution": {
+            "orders": total.orders,
+            "fillRate": if total.orders == 0 { 0.0 } else { f64::from(filled) / f64::from(total.orders) },
+            "avgClientSlipPts": avg(&slips),
+            "p95LatencyMs": pct(&lat, 0.95),
+            "p50LatencyMs": pct(&lat, 0.5),
+        },
+    })
+}

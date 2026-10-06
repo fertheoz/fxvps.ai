@@ -28,6 +28,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/stream", get(super::stream::stream))
         .route("/v1/stream/ticket", post(super::stream::ticket))
         .route("/v1/dashboard", get(dashboard))
+        .route("/v1/dashboard/series", get(dashboard_series))
         .route("/v1/exposure", get(exposure))
         .route("/v1/accounts", get(list_accounts).post(open_account))
         .route("/v1/accounts/{id}", get(get_account))
@@ -323,6 +324,31 @@ async fn dashboard(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
         })
         .await?;
     Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+struct RangeQuery {
+    #[serde(default)]
+    range: Option<String>,
+}
+
+async fn dashboard_series(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<RangeQuery>,
+) -> ApiResult {
+    need(&actor, "dashboard.view")?;
+    let range = match q.range.as_deref() {
+        Some(r @ ("today" | "24h" | "7d" | "30d")) => r.to_string(),
+        None => "24h".to_string(),
+        _ => return Err(ApiError::bad("range must be today, 24h, 7d or 30d")),
+    };
+    let st = ctx.view_state().await;
+    let now = now_ns();
+    Ok(Json(
+        ctx.q(move |e| views::dashboard_series(e, &st, now, &range))
+            .await?,
+    ))
 }
 
 async fn exposure(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

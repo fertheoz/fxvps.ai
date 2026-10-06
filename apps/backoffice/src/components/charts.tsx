@@ -36,6 +36,43 @@ export function PnlChart({ data, fmt }: { data: { t: string; aBook: number; bBoo
   );
 }
 
+/** Revenue legs per bucket (stacked): markup, commission, B-book result. */
+export function RevenueChart({ data, fmt, labels }: { data: { label: string; markup: number; commission: number; bBook: number }[]; fmt: (minor: number) => string; labels: [string, string, string] }) {
+  return (
+    <ResponsiveContainer width="100%" height={260}>
+      <BarChart data={data} margin={{ left: 8, right: 16 }} stackOffset="sign">
+        <CartesianGrid stroke={CHART.grid} vertical={false} />
+        <XAxis dataKey="label" stroke={CHART.axis} fontSize={11} interval="preserveStartEnd" />
+        <YAxis tickFormatter={(v: number) => fmt(v)} stroke={CHART.axis} fontSize={11} width={70} />
+        <Tooltip formatter={(v) => fmt(Number(v))} contentStyle={tooltipStyle} cursor={{ fill: "rgba(128,128,128,0.08)" }} />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        <Bar dataKey="markup" name={labels[0]} stackId="r" fill={CHART.a} isAnimationActive={false} />
+        <Bar dataKey="commission" name={labels[1]} stackId="r" fill={CHART.up} isAnimationActive={false} />
+        <Bar dataKey="bBook" name={labels[2]} stackId="r" fill={CHART.b} isAnimationActive={false} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+/** Traded lots per bucket with the order / reject counts on a second axis. */
+export function VolumeChart({ data, labels }: { data: { label: string; lots: number; orders: number; rejects: number }[]; labels: [string, string, string] }) {
+  return (
+    <ResponsiveContainer width="100%" height={260}>
+      <BarChart data={data} margin={{ left: 8, right: 8 }}>
+        <CartesianGrid stroke={CHART.grid} vertical={false} />
+        <XAxis dataKey="label" stroke={CHART.axis} fontSize={11} interval="preserveStartEnd" />
+        <YAxis yAxisId="lots" stroke={CHART.axis} fontSize={11} width={48} />
+        <YAxis yAxisId="n" orientation="right" stroke={CHART.axis} fontSize={11} width={32} allowDecimals={false} />
+        <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(128,128,128,0.08)" }} />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        <Bar yAxisId="lots" dataKey="lots" name={labels[0]} fill={CHART.a} isAnimationActive={false} />
+        <Line yAxisId="n" dataKey="orders" name={labels[1]} stroke={CHART.up} dot={false} strokeWidth={2} isAnimationActive={false} />
+        <Line yAxisId="n" dataKey="rejects" name={labels[2]} stroke={CHART.down} dot={false} strokeWidth={2} isAnimationActive={false} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 export function FlowChart({ data, fmt, labels }: { data: { day: string; deposits: number; withdrawals: number }[]; fmt: (minor: number) => string; labels: [string, string] }) {
   return (
     <ResponsiveContainer width="100%" height={240}>

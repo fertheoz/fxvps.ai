@@ -37,6 +37,43 @@ export interface DashboardStats {
   depositSeries: { day: string; deposits: number; withdrawals: number }[];
 }
 
+export type DashboardRange = "today" | "24h" | "7d" | "30d";
+
+export interface DashboardBucket {
+  t: string;
+  label: string;
+  markup: number;
+  commission: number;
+  bBook: number;
+  lots: number;
+  orders: number;
+  rejects: number;
+}
+
+export interface DashboardTotals {
+  revenue: number;
+  markup: number;
+  commission: number;
+  bBook: number;
+  lots: number;
+  orders: number;
+  rejects: number;
+}
+
+/** Exact per-bucket series from the engine's deals / orders for a range. */
+export interface DashboardSeries {
+  range: DashboardRange;
+  since: string;
+  buckets: DashboardBucket[];
+  totals: DashboardTotals;
+  previous: DashboardTotals;
+  topSymbols: { symbol: string; lots: number; revenue: number }[];
+  winners: { login: number; name: string; pnl: number; lots: number }[];
+  losers: { login: number; name: string; pnl: number; lots: number }[];
+  risk: { login: number; name: string; marginLevelPct: number; equity: number; margin: number; marginCall: boolean }[];
+  execution: { orders: number; fillRate: number; avgClientSlipPts: number; p95LatencyMs: number; p50LatencyMs: number };
+}
+
 export interface BalanceOpResult {
   id: string;
   status: "applied" | "pending_approval";
@@ -197,6 +234,7 @@ export interface RevenueReport {
  */
 export interface AdminApi {
   dashboard(): Promise<DashboardStats>;
+  dashboardSeries(range: DashboardRange): Promise<DashboardSeries>;
   exposure(): Promise<SymbolExposure[]>;
 
   listClients(q?: ListQuery): Promise<Client[]>;
