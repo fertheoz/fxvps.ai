@@ -1,7 +1,7 @@
 # Checkpoint — 6 Ekim 2026
 
 Yeni bir oturum (yerel ya da bulut) buradan başlar. Önceki özet: [`CHECKPOINT-2026-10-05.md`](CHECKPOINT-2026-10-05.md).
-Sabit nokta: `main` @ `d293726` (#58), CT 970'te canlı. Son güncelleme: 6 Ekim 01:10 (TSİ).
+Sabit nokta: `main` @ #68, CT 970'te canlı. Son güncelleme: 6 Ekim 03:45 (TSİ).
 
 ## 5–6 Ekim gecesi `main`'e birleşenler
 
@@ -15,6 +15,27 @@ Sabit nokta: `main` @ `d293726` (#58), CT 970'te canlı. Son güncelleme: 6 Ekim
 | #55 | Terminal: oturum yenileme sekmeler arasında Web Lock ile sıraya girer |
 | #57 | **Konsol:** LP işlemleri dökümü, gelir raporu (`/v1/reports/lp-executions`, `/v1/reports/revenue`), panelde gerçek A-book geliri ve LP oturum sayısı |
 | #58 | nginx: HTML `Cache-Control: no-cache` (dağıtımdan sonra eski sürüm önbellekten açılmaz) |
+
+## 6 Ekim gecesi ikinci parti (#60–#68, hepsi canlıda)
+
+| PR | İçerik |
+|---|---|
+| #60 | Telefon: hızlı emir (şimşek), grafikten limit/stop çizgisi, beş sekme (Piyasa · Grafik · İşlem · Geçmiş · Hesap) |
+| #61 | **Motor:** A-book limit emirleri LMAX'e IOC limit olarak gider (müşteri limiti ∓ markup); dolmayan kısım bekleyene döner, aynı fiyatta tekrar denemez |
+| #62 | Konsol: hesabı gruba taşı (`SetAccountGroup`, düz hesap şartı). Kurucu `demo-retail`'i hedge'e çevirdi |
+| #63 | Grafikte bekleyen emri basılı tutarak (telefon) / çift tıkla (masaüstü) taşıma, Esc |
+| #64 | Protokol v1.3 `include_history`: emir geçmişi; telefonda Geçmiş 3 bacak (Pozisyonlar · Emirler · İşlemler) |
+| #65 | Grafik logosu kapalı; atıf `?` penceresi ve Hesap ekranında |
+| #66 | Protokol v1.3 `Prefs*`: hesap başına ayar belgesi (gateway `<data-dir>/prefs.json`); yatay çizgi + fiyat uyarısı (terminal açıkken tetiklenir) |
+| #67 | Toplu kapatma (tümü / kârdakiler / zarardakiler), telefonda hesap türü |
+| #68 | Telefonda sıkı satırlar (Piyasa 46 px) |
+| — | #63'ten sonra üst şerit küçültme + lot kutusuna dokunarak giriş PR'sız doğrudan `main`'e gitti (arka plan işi yerel dalı değiştirmişti; bir daha olmaz: arka plan işleri `gh -R` ile yerel depoya dokunmaz) |
+
+Açık işlere ekler:
+- Grafik araçları sırası: trend çizgisi + dikdörtgen → gösterge ayarları + şablon → Fibonacci → uygulama kapalıyken uyarı bildirimi (sunucu tarafı değerlendirme + push).
+- Performans: tik günlüklemesi (her tik JSON satırı) kaldırılacak/ikili biçime alınacak; LMAX demoya karşı yük ölçümü; quote conflation 20 Hz → daha yüksek.
+- LMAX'e giden ilk IOC limit emri henüz canlıda gözlenmedi (kurucu Buy Limit koydu; sonucu konsol → LP işlemleri).
+- Stop Limit çizgiyle yerleştirilemiyor (fişten giriliyor).
 
 ## Durum (6 Ekim 01:10 TSİ)
 
