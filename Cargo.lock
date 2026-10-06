@@ -1651,11 +1651,13 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 name = "lp-simulator"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "domain",
  "fix-codec",
  "fix-session",
  "rand 0.8.8",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "toml",

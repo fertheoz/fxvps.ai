@@ -90,7 +90,7 @@ function SymbolDialog({ sym, onClose }: { sym: SymbolSpec; onClose: () => void }
             const apply = (v: string) => {
               const parsed = v.split(",").map((p) => p.trim()).filter(Boolean).map((p) => {
                 const m = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec(p);
-                return m ? { day: d, open: m[1].padStart(5, "0"), close: m[2].padStart(5, "0") } : null;
+                return m ? { day: d, open: (m[1] ?? "").padStart(5, "0"), close: (m[2] ?? "").padStart(5, "0") } : null;
               });
               if (parsed.some((p) => p === null)) return;
               set("tradeSessions", [...draft.tradeSessions.filter((x) => x.day !== d), ...(parsed as { day: typeof d; open: string; close: string }[])]);

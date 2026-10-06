@@ -149,7 +149,7 @@ pub async fn start(cfg: SimConfig) -> std::io::Result<SimHandle> {
     tasks.push(tokio::spawn(accept_loop(
         trade_listener,
         cfg.trade.clone(),
-        shutdown_rx,
+        shutdown_rx.clone(),
         {
             let market = market.clone();
             move |io, ep, sd| {
