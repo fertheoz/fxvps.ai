@@ -25,20 +25,22 @@ export function ChartGrid() {
   const activeSymbol = useTerminal((s) => s.charts[s.activeChart]?.symbol ?? '');
   const [listOpen, setListOpen] = useState(false);
   const toolBtn = (kind: 'hline' | 'alert' | 'trend' | 'rect' | 'fib', label: string, icon: string) => (
+    // Icon only: the bar has to fit a 1280px desktop next to the indicator toggles; the name is the tooltip.
     <button
       aria-pressed={tool === kind}
+      aria-label={label}
       title={label}
-      className={`px-1.5 h-5 rounded text-[11px] ${tool === kind ? 'bg-accent text-white' : 'border border-line text-muted hover:text-fg'}`}
+      className={`w-6 h-5 rounded text-[12px] leading-none ${tool === kind ? 'bg-accent text-white' : 'border border-line text-muted hover:text-fg'}`}
       onClick={() => setTool(tool === kind ? null : kind)}
       data-testid={`tool-${kind}`}
     >
-      {icon} {label}
+      {icon}
     </button>
   );
 
   return (
     <section className="flex flex-col h-full">
-      <div className="flex items-center gap-3 h-8 px-2 bg-panel border-b border-line shrink-0">
+      <div className="flex items-center gap-3 h-8 px-2 bg-panel border-b border-line shrink-0 overflow-hidden whitespace-nowrap">
         <div className="flex items-center gap-1">
           <span className="text-muted">{t('chart.layout')}</span>
           {([1, 2, 4] as ChartLayout[]).map((l) => (
@@ -52,17 +54,18 @@ export function ChartGrid() {
             </button>
           ))}
         </div>
-        <div className="relative flex items-center gap-1">
-          <span className="text-muted">{t('obj.tools')}</span>
+        <div className="relative flex items-center gap-1" title={t('obj.tools')}>
           {toolBtn('hline', t('obj.hline'), '—')}
           {toolBtn('alert', t('obj.alert'), '🔔')}
           {toolBtn('trend', t('obj.trend'), '╱')}
           {toolBtn('rect', t('obj.rect'), '▭')}
           {toolBtn('fib', t('obj.fib'), '𝔽')}
           <button
-            className="px-1.5 h-5 rounded text-[11px] border border-line text-muted hover:text-fg"
+            className="w-6 h-5 rounded text-[12px] leading-none border border-line text-muted hover:text-fg"
             onClick={() => setListOpen((o) => !o)}
             aria-expanded={listOpen}
+            aria-label={t('obj.objects')}
+            title={t('obj.objects')}
             data-testid="tool-list"
           >
             ≡
