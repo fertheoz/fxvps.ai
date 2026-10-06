@@ -191,6 +191,7 @@ async fn client(idx: usize, cfg: LoadConfig, deadline: Instant) -> ClientStats {
                             let sub = frame(Body::Subscribe(Subscribe {
                                 request_id: format!("sub-{idx}"),
                                 symbols: cfg.symbols.clone(),
+                                depth_symbols: Vec::new(),
                             }));
                             if ws.send(sub).await.is_err() { st.error("send"); break; }
                         }
