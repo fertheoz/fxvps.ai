@@ -465,6 +465,12 @@ export const useTerminal = create<TerminalState>()(
     {
       name: 'fxvps-terminal',
       version: 1,
+      // Older saves hold four chart slots; the six-chart layout needs the rest.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<TerminalState>;
+        const charts = Array.isArray(p.charts) ? [...p.charts, ...defaultCharts.slice(p.charts.length)] : current.charts;
+        return { ...current, ...p, charts };
+      },
       storage: createJSONStorage(() => {
         try {
           return localStorage;
