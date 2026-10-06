@@ -22,6 +22,10 @@ pub const OMNIBUS: AccountId = AccountId(10);
 pub const BROKER_BOOK: AccountId = AccountId(11);
 const CLIENT_LEDGER_BASE: u64 = 1_000;
 
+/// Fill guard for A-book market orders without a slippage cap: the LP may not
+/// fill more than this far (basis points) past the client's requested price.
+pub const SLIPPAGE_GUARD_BPS: i64 = 50;
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
 pub struct EngineConfig {
     pub allocation: AllocationMode,
@@ -986,6 +990,26 @@ impl Engine {
         let g = self.st.groups[&acc.group].clone();
         self.st.orders.get_mut(&id).expect("order").working = true;
         self.cancel_oco(id);
+        // Client market orders that open/increase exposure carry the client price
+        // seen at execution as their reference (slippage cap, circuit breaker,
+        // slippage reports). Closes, stop-outs and triggered stops stay unbounded:
+        // they must fill.
+        let o = &self.st.orders[&id];
+        if o.req.requested_price.is_none()
+            && o.req.order_type == OrderType::Market
+            && o.close_position.is_none()
+            && o.routing == Routing::ABook
+        {
+            if let Ok(q) = self.client_quote(&g, &o.req.symbol) {
+                let px = q.for_side(o.req.side);
+                self.st
+                    .orders
+                    .get_mut(&id)
+                    .expect("order")
+                    .req
+                    .requested_price = Some(px);
+            }
+        }
         let o = &self.st.orders[&id];
         match o.routing {
             Routing::BBook => {
@@ -1004,23 +1028,38 @@ impl Engine {
                     let m = self.order_markup(o, &g, o.req.side).raw() * o.req.side.sign();
                     let lp_limit = Price::from_raw(l.raw() - m);
                     self.send_lp_limit(o.req.symbol.clone(), o.req.side, vec![id], Some(lp_limit));
-                } else if let (Some(req), Some(max)) = (
-                    o.req.requested_price,
-                    o.max_slippage_override.or(g.max_slippage_points),
-                ) {
-                    // Slippage cap: the LP may fill up to `max` points past the requested
-                    // price (client terms), as an IOC limit net of the markup.
-                    let point = self.st.symbols[&o.req.symbol].point().raw();
-                    let m = self.order_markup(o, &g, o.req.side).raw() * o.req.side.sign();
-                    let lp_limit = Price::from_raw(req.raw() + o.req.side.sign() * point * max - m);
-                    self.send_lp_limit(o.req.symbol.clone(), o.req.side, vec![id], Some(lp_limit));
-                } else if self.st.config.aggregate_a_book && o.close_position.is_none() {
+                } else if self.st.config.aggregate_a_book
+                    && o.close_position.is_none()
+                    && o.max_slippage_override.or(g.max_slippage_points).is_none()
+                {
+                    // one LP order per (symbol, side): no per-order guard
                     self.st.pending_lp.push(id);
+                } else if let Some(lp_limit) = self.slippage_limit(o, &g) {
+                    self.send_lp_limit(o.req.symbol.clone(), o.req.side, vec![id], Some(lp_limit));
                 } else {
                     self.send_lp(o.req.symbol.clone(), o.req.side, vec![id]);
                 }
             }
         }
+    }
+
+    /// Slippage cap: the LP may fill a market order up to `max` points past the
+    /// requested price (client terms), as an IOC limit net of the markup.
+    fn slippage_limit(&self, o: &Order, g: &GroupConfig) -> Option<Price> {
+        let req = o.req.requested_price?;
+        let point = self.st.symbols[&o.req.symbol].point().raw().max(1);
+        // No configured cap: a circuit breaker of SLIPPAGE_GUARD_BPS of the
+        // requested price (flash crash / bad tick only; never a requote in
+        // normal markets), in whole points.
+        let guard = (req.raw() as i128 * SLIPPAGE_GUARD_BPS as i128 / 10_000) as i64 / point;
+        let max = o
+            .max_slippage_override
+            .or(g.max_slippage_points)
+            .unwrap_or(guard);
+        let m = self.order_markup(o, g, o.req.side).raw() * o.req.side.sign();
+        Some(Price::from_raw(
+            req.raw() + o.req.side.sign() * point * max - m,
+        ))
     }
 
     fn send_lp(&mut self, symbol: String, side: Side, children: Vec<OrderId>) {
@@ -1388,9 +1427,11 @@ impl Engine {
             }
             match self.policy(c) {
                 PartialFill::Retry { max_attempts } if o.lp_attempts < max_attempts => {
-                    // Try again at the LP with what is left.
+                    // Try again at the LP with what is left, inside the same slippage cap.
                     let (sym, side) = (o.req.symbol.clone(), o.req.side);
-                    self.send_lp(sym, side, vec![c]);
+                    let g = self.st.groups[&self.st.accounts[&o.req.account].group].clone();
+                    let limit = self.slippage_limit(o, &g);
+                    self.send_lp_limit(sym, side, vec![c], limit);
                     continue;
                 }
                 _ => {}
