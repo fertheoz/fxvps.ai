@@ -256,9 +256,15 @@ pub struct SymbolSpec {
     pub min_lot: Qty,
     pub lot_step: Qty,
     pub max_lot: Qty,
-    /// Swap per lot per day in profit currency (signed, scaled 1e8).
+    /// Swap per lot per day (signed, scaled 1e8): profit-currency money per
+    /// lot (`SwapMode::Money`) or points of the quote (`SwapMode::Points`).
     pub swap_long: Price,
     pub swap_short: Price,
+    #[serde(default)]
+    pub swap_mode: SwapMode,
+    /// Weekday (0 = Sunday .. 6 = Saturday) whose rollover charges three days.
+    #[serde(default = "default_triple_day")]
+    pub triple_swap_day: u8,
     /// Commission per lot per side (in its own currency).
     pub commission_per_lot: Money,
     pub asset_class: AssetClass,
@@ -279,6 +285,8 @@ impl SymbolSpec {
             max_lot: Qty::from_units(100),
             swap_long: Price::ZERO,
             swap_short: Price::ZERO,
+            swap_mode: SwapMode::Money,
+            triple_swap_day: 3,
             commission_per_lot: Money::zero(Currency::USD),
             asset_class: AssetClass::MajorFx,
         }
@@ -335,6 +343,13 @@ pub struct GroupConfig {
     /// Group commission model; `None` = the symbol's per-lot commission.
     #[serde(default)]
     pub commission: Option<GroupCommission>,
+    /// Swap scale in percent (100 = the symbol's swap, 0 = swap-free group).
+    #[serde(default = "hundred_u32")]
+    pub swap_multiplier_pct: u32,
+}
+
+fn hundred_u32() -> u32 {
+    100
 }
 
 fn default_true() -> bool {
@@ -367,6 +382,7 @@ impl GroupConfig {
             max_slippage_points: None,
             pass_price_improvement: true,
             commission: None,
+            swap_multiplier_pct: 100,
         }
     }
 
@@ -960,6 +976,88 @@ impl HedgePolicy {
         }
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 8: swap / rollover
+// ---------------------------------------------------------------------------
+
+/// How a symbol's swap rates are expressed.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SwapMode {
+    /// Profit-currency amount per lot per day.
+    #[default]
+    Money,
+    /// Points of the quote per day (× point × contract size × lots).
+    Points,
+}
+
+fn default_triple_day() -> u8 {
+    3
+}
+
+/// When the daily rollover runs (console: Settings → Swap).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SwapConfig {
+    #[serde(default = "yes_bool")]
+    pub enabled: bool,
+    /// UTC hour of the daily rollover (22 = 17:00 New York in summer).
+    #[serde(default = "default_rollover_hour")]
+    pub rollover_hour_utc: u8,
+    /// No rollover on Saturday / Sunday (the triple day covers the weekend).
+    #[serde(default = "yes_bool")]
+    pub skip_weekend: bool,
+}
+
+fn yes_bool() -> bool {
+    true
+}
+fn default_rollover_hour() -> u8 {
+    22
+}
+
+impl Default for SwapConfig {
+    fn default() -> SwapConfig {
+        SwapConfig {
+            enabled: true,
+            rollover_hour_utc: 22,
+            skip_weekend: true,
+        }
+    }
+}
+
+impl SwapConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.rollover_hour_utc > 23 {
+            return Err("rolloverHourUtc must be 0..23".into());
+        }
+        Ok(())
+    }
+}
+
+/// Weekday of a UNIX timestamp (ns), 0 = Sunday .. 6 = Saturday.
+pub fn weekday_utc(ts_ns: u64) -> u8 {
+    let day = ts_ns / 86_400_000_000_000;
+    ((day + 4) % 7) as u8 // 1970-01-01 was a Thursday
+}
+
+/// Swap of one position for one day in the symbol's profit currency, scaled
+/// 1e8 (negative = charged): the symbol rate × lots × the group's multiplier.
+pub fn swap_scaled(spec: &SymbolSpec, side: Side, volume: Qty, multiplier_pct: u32) -> i128 {
+    let rate = match side {
+        Side::Buy => spec.swap_long,
+        Side::Sell => spec.swap_short,
+    }
+    .raw() as i128;
+    let per_lot = match spec.swap_mode {
+        SwapMode::Money => rate,
+        SwapMode::Points => {
+            rate * spec.point().raw() as i128 / SCALE as i128 * spec.contract_size as i128
+        }
+    };
+    per_lot * volume.raw() as i128 / SCALE as i128 * multiplier_pct as i128 / 100
 }
 
 #[cfg(test)]

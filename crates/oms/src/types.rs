@@ -4,7 +4,7 @@ use ledger::AccountId;
 use money::{Money, Price, Qty};
 pub use risk::{
     FlowStats, GroupConfig, HedgeMode, HedgePolicy, MarginMode, PartialFill, Routing, RoutingRule,
-    Side, SymbolSpec,
+    Side, SwapConfig, SwapMode, SymbolSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -197,6 +197,9 @@ pub struct Deal {
     /// Our own result at the LP for a closing A-book deal (minor units).
     #[serde(default)]
     pub lp_pnl: i128,
+    /// Swap released with this closing deal (minor units, negative = cost).
+    #[serde(default)]
+    pub swap: i128,
 }
 
 /// New parameters of a pending order (`Command::ModifyOrder`); every field
@@ -254,6 +257,9 @@ pub struct Position {
     pub trailing_points: Option<i64>,
     pub routing: Routing,
     pub opened_ts: u64,
+    /// Accumulated swap (minor units of the account currency, negative = charged).
+    #[serde(default)]
+    pub swap_minor: i128,
 }
 
 impl Position {
@@ -396,6 +402,8 @@ pub enum Command {
     },
     /// B-book exposure limits / auto-hedge policy (stage 7).
     SetHedge(HedgePolicy),
+    /// Rollover schedule (stage 8).
+    SetSwapConfig(SwapConfig),
     /// Sends aggregated A-book orders (when aggregation is enabled).
     FlushLp,
     /// Daily rollover: charge/credit swaps.
@@ -488,5 +496,11 @@ pub enum Event {
     NegativeBalanceCompensated {
         account: AccountNo,
         amount: Money,
+    },
+    /// Daily rollover ran (`positions` charged) or was skipped (same day / weekend / disabled).
+    Rollover {
+        applied: bool,
+        positions: u32,
+        reason: String,
     },
 }

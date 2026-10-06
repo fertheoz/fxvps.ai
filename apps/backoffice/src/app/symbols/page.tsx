@@ -76,6 +76,7 @@ function SymbolDialog({ sym, onClose }: { sym: SymbolSpec; onClose: () => void }
         <NumField label="Max lot" value={draft.maxLot} onChange={(v) => set("maxLot", v)} error={errors.maxLot} />
         <NumField label={t("symbols.swapLong")} value={draft.swapLong} onChange={(v) => set("swapLong", v)} error={errors.swapLong} />
         <NumField label={t("symbols.swapShort")} value={draft.swapShort} onChange={(v) => set("swapShort", v)} error={errors.swapShort} />
+        <SelectField label={t("symbols.swapType")} value={draft.swapType === "percent" ? "money" : draft.swapType} options={["money", "points"] as const} onChange={(v) => set("swapType", v)} />
         <SelectField label={t("symbols.tripleSwap")} value={draft.tripleSwapDay} options={Weekday.options} onChange={(v) => set("tripleSwapDay", v)} />
         <SelectField label={t("symbols.enabled")} value={draft.enabled ? "yes" : "no"} options={["yes", "no"] as const} onChange={(v) => set("enabled", v === "yes")} />
       </div>

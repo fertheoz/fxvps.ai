@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
@@ -28,6 +28,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     latency > 0 ? new Promise((res) => setTimeout(() => res(clone(v)), latency * (0.5 + rnd()))) : Promise.resolve(clone(v));
 
   let lpConfig: LpConfig | null = null;
+  let swapCfg: SwapConfig = { enabled: true, rolloverHourUtc: 22, skipWeekend: true, lastRolloverAt: null };
   let hedge: HedgePolicy = { enabled: true, mode: "switch_to_a_book", defaultSymbolLimit: 25, symbolLimits: { XAUUSD: 5 }, totalLimit: 100, accountLimit: 10, hedgeRatioPct: 100, releasePct: 80 };
   const lpRuntime = (p: LpPolicyRuntime): LpPolicyRuntime => p;
   let lpAgg: LpAggregation = {
@@ -520,6 +521,19 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
 
     async getSettings() { return delay(s.settings); },
+    async getSwapConfig() { return delay(swapCfg); },
+    async saveSwapConfig(c: SwapConfig, actor) {
+      guard(actor, "settings.edit");
+      swapCfg = { ...swapCfg, enabled: c.enabled, rolloverHourUtc: c.rolloverHourUtc, skipWeekend: c.skipWeekend };
+      audit(actor, "settings.swap", "engine", `${c.enabled ? "on" : "off"} at ${c.rolloverHourUtc}:00 UTC`);
+      return delay(swapCfg);
+    },
+    async runRollover(actor) {
+      guard(actor, "risk.edit");
+      swapCfg = { ...swapCfg, lastRolloverAt: new Date().toISOString() };
+      audit(actor, "settings.rollover", "engine", `${s.positions.length} positions`);
+      return delay({ applied: true, positions: s.positions.length, reason: "" });
+    },
     async getMe() { return delay({ sub: "mock", name: "mock", role: "admin", permissions: [], mfaOk: true }); },
     async saveSettings(v: Settings, actor) {
       guard(actor, "settings.edit");

@@ -181,6 +181,14 @@ pub enum AdminCmd {
     HedgeSaved {
         details: String,
     },
+    /// Rollover schedule (engine journal).
+    SwapConfigSaved {
+        details: String,
+    },
+    /// Manual rollover run from the console.
+    RolloverRun {
+        details: String,
+    },
     AccountGroupSet {
         account: u64,
         group: String,
@@ -364,6 +372,15 @@ impl AdminState {
             AdminCmd::LpConfigSaved { details } => {
                 self.audit(r, "lp.config".into(), "fix-gateway".into(), details.clone())
             }
+            AdminCmd::SwapConfigSaved { details } => {
+                self.audit(r, "settings.swap".into(), "engine".into(), details.clone())
+            }
+            AdminCmd::RolloverRun { details } => self.audit(
+                r,
+                "settings.rollover".into(),
+                "engine".into(),
+                details.clone(),
+            ),
             AdminCmd::HedgeSaved { details } => {
                 self.audit(r, "risk.hedge".into(), "engine".into(), details.clone())
             }

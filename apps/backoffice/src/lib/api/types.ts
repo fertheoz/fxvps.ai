@@ -272,8 +272,24 @@ export interface RevenueTotals {
   markup: number;
   bBook: number;
   commission: number;
+  /** Swap kept by the broker (B-book) - stage 8. */
+  swap?: number;
   lp: number;
   total: number;
+}
+
+/** Rollover schedule (stage 8). */
+export interface SwapConfig {
+  enabled: boolean;
+  rolloverHourUtc: number;
+  skipWeekend: boolean;
+  lastRolloverAt?: string | null;
+}
+
+export interface RolloverResult {
+  applied: boolean;
+  positions: number;
+  reason: string;
 }
 
 export interface RevenueRow {
@@ -369,6 +385,10 @@ export interface AdminApi {
   saveUser(u: AdminUser, actor: Actor): Promise<AdminUser>;
 
   getSettings(): Promise<Settings>;
+  getSwapConfig(): Promise<SwapConfig>;
+  saveSwapConfig(c: SwapConfig, actor: Actor): Promise<SwapConfig>;
+  /** Runs today's rollover now (idempotent per UTC day). */
+  runRollover(actor: Actor): Promise<RolloverResult>;
   /** Session: `mfaOk` false = mutating calls answer `mfa_required` until a 2FA login. */
   getMe(): Promise<{ sub: string; name: string; role: string; permissions: string[]; mfaOk: boolean }>;
   saveSettings(s: Settings, actor: Actor): Promise<Settings>;

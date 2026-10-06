@@ -927,6 +927,63 @@ fn swap_rollover() {
     h.cmd(Command::Rollover);
     // long: -7 * 2 = -14 ; short: +2 * 1 = +2  -> -12, minus spread on nothing
     assert_eq!(h.bal(1), usd("9988"));
+    // same UTC day: idempotent
+    h.cmd(Command::Rollover);
+    assert_eq!(h.bal(1), usd("9988"));
+    // swap sits on the positions and travels into the closing deals
+    let long = h.pos(1).into_iter().find(|p| p.side == Side::Buy).unwrap();
+    assert_eq!(long.swap_minor, -1400);
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: long.id,
+        volume: Some(qty("1")),
+        client_order_id: "half".into(),
+    });
+    let d = h.e.deals().last().unwrap();
+    assert_eq!(d.swap, -700);
+    assert_eq!(
+        h.pos(1)
+            .into_iter()
+            .find(|p| p.side == Side::Buy)
+            .unwrap()
+            .swap_minor,
+        -700
+    );
+}
+
+#[test]
+fn rollover_triple_day_weekend_and_multiplier() {
+    use risk::SwapConfig;
+    let mut h = b();
+    // 1970-01-01 (ts ~1 µs) is a Thursday; make Thursday the triple day of EURUSD
+    let mut eu = h.e.symbol_spec("EURUSD").unwrap().clone();
+    eu.triple_swap_day = 4;
+    h.cmd(Command::AddSymbol(eu));
+    let mut g = h.e.group("b").unwrap().clone();
+    g.swap_multiplier_pct = 50;
+    h.cmd(Command::SetGroup(g));
+    h.market(1, "l", Side::Buy, "2");
+    h.cmd(Command::Rollover);
+    // -7 × 2 lots × 50 % × 3 days = -21
+    assert_eq!(h.bal(1), usd("9979"));
+    // next day is Friday (1 day), then Saturday: skipped
+    h.ts += 86_400_000_000_000;
+    h.cmd(Command::Rollover);
+    assert_eq!(h.bal(1), usd("9972"));
+    h.ts += 86_400_000_000_000;
+    let ev = h.cmd(Command::Rollover);
+    assert!(ev
+        .iter()
+        .any(|e| matches!(e, Event::Rollover { applied: false, .. })));
+    assert_eq!(h.bal(1), usd("9972"));
+    // disabled schedule: nothing, even on a weekday
+    h.ts += 2 * 86_400_000_000_000;
+    h.cmd(Command::SetSwapConfig(SwapConfig {
+        enabled: false,
+        ..SwapConfig::default()
+    }));
+    h.cmd(Command::Rollover);
+    assert_eq!(h.bal(1), usd("9972"));
 }
 
 fn scenario(h: &mut H) {
