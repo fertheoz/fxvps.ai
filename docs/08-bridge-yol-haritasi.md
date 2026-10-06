@@ -107,10 +107,79 @@ raporlarında gerçek swap. Konsol: Ayarlar → Swap kartı (+ "şimdi koş"),
 sembolde swap tipi/üçlü gün, grupta swap çarpanı. Terminal pozisyon swap alanı
 proto genişlemesi bekliyor.
 
-### Etap 9 — Dashboard ve rapor genişliği
+### Etap 9 — Dashboard ve rapor genişliği ✅
 Saatlik/günlük seriler (hacim, gelir kalemleri, kayma, gecikme), LP sağlık
 paneli (gerçek seq/latency), uyarılar (dolum oranı düşüşü, gecikme sıçraması,
 LP kopması, maruziyet limiti).
+
+Yapılan: dashboard kovalarına kayma (ort. puan), LP p95 gecikme, dolum sayısı ve
+swap eklendi + "yürütme kalitesi" grafiği; LP oturum tablosunda gerçek
+MsgSeqNum ve son mesaj zamanı (`GatewayEvent::SessionStats`); **uyarı
+motoru** (`admin/alerts.rs`, 15 sn): LP oturumu düşük (>60 sn), dolum oranı
+<%90 (1 saat, ≥10 emir), p95 gecikme sıçraması (>500 ms ve 3× önceki saat),
+B-book maruziyet limiti aşımı, sapma korumasının dışladığı LP, stop-out'taki
+hesaplar. Her yeni uyarı denetim defterine yazılır, `CORE_ALERT_WEBHOOK_URL`
+varsa JSON POST edilir; konsolda üst çubukta zil + dashboard uyarı kartı +
+onaylama. Eşikler şimdilik sabit (ayar sayfası Etap 13).
+
+---
+
+## Sonraki beş etap — Claude'un önerisi (Etap 10–14)
+
+Kurucunun 1–9 etabı "bir bridge'de olması gerekenler"di; aşağıdakiler gerçek
+para ve gerçek müşteri gelmeden önce **operasyonun dayanıklılığını** ve
+**ticari yüzeyi** tamamlar. Sıra, risk ↓ ve gelir ↑ etkisine göre.
+
+### Etap 10 — Felaket kurtarma ve sıfır kesintili dağıtım
+Bugün tek CT, tek disk, tek süreç. Hedefler: (a) günlük motor journal +
+admin store + candles **şifreli offsite yedeği** ve **otomatik geri yükleme
+provası** (yedekten boş CT'ye kalk, snapshot digest'i karşılaştır);
+(b) **mavi/yeşil trading süreci**: yeni imaj journal'ı replay edip "hazır"
+dedikten sonra FIX oturumları ve WS bağlantıları devredilir (müşteri
+~45 sn kopma yaşamaz); (c) **chaos sınavı**: LP kesintisi, disk dolması,
+saat sapması, çift süreç senaryoları CI'da koşar; (d) journal boyutu
+büyüdükçe **snapshot + sıkıştırılmış arşiv** (bugün 235 MB, lineer büyüyor).
+
+### Etap 11 — Uyum, raporlama ve denetim izi
+Lisans alındığında ilk sorulanlar: (a) **müşteri ekstresi PDF/e-posta**
+(günlük/aylık, imzalı), (b) **MiFIR/EMIR benzeri işlem raporu dışa aktarımı**
+(CSV/XML şablonu, LEI alanları), (c) **best execution raporu** (yürütme
+kalitesi verimiz zaten var → RTS 27/28 formatına döküm), (d) **değiştirilemez
+denetim**: audit zinciri hash-zincirli + günlük kök hash'i dış kayda (örn.
+Git tag / zaman damgası servisi), (e) **negatif bakiye koruması ve stop-out
+olaylarının müşteriye bildirimi** (e-posta/terminal).
+
+### Etap 12 — Müşteri yaşam döngüsü ve ödeme
+Konsolda hesap var ama müşteri hunisi yok: (a) **KYC akışı** (belge yükleme,
+durum makinesi, onay/ret nedeni, sağlayıcı entegrasyon noktası),
+(b) **para yatırma/çekme talepleri** (kripto USDT TRC-20 — mt5forexvps'teki
+eşleyici burada yeniden kullanılır — + banka havalesi talimatı), çift onay
+mevcut 4-göz mekanizmasına bağlanır, (c) **IB/partner ağacı**: alt hesaplar
+zaten var → komisyon paylaşımı, IB raporu, IB portalı (salt-okunur),
+(d) **demo→gerçek dönüşüm**: demo hesap süresi, bakiye sıfırlama, "gerçek
+hesaba geç" düğmesi.
+
+### Etap 13 — Operasyon ayarları ve otomasyon
+Sabitlerin hepsi ayara dönsün: (a) **uyarı eşikleri ve kanalları** (Telegram
+bot, e-posta, webhook; sessiz saatler), (b) **piyasa saatleri / tatil
+takvimi**: sembol seansları dışında emir reddi, haftasonu swap ve rollover
+takvime bağlanır, haber takvimi bağlanınca toksisite "haber anı" ölçütü
+tamamlanır, (c) **LP simülatörü senaryo paneli**: konsoldan fiyat şoku, ret
+oranı, gecikme enjeksiyonu (simülatör zaten kalıcı), (d) **kural motoru
+sürümleme**: kural setleri etiketli, geri alma, "dry-run'ı geçmiş 7 güne
+uygula" karşılaştırması, (e) **günlük operasyon raporu** (Telegram'a özet:
+hacim, gelir, uyarılar, LP sağlığı).
+
+### Etap 14 — Performans, ölçek ve çoklu kiracı
+Birden fazla marka/broker aynı çekirdekte: (a) **kiracı (tenant) ayrımı**:
+gruplar ve hesaplar kiracıya bağlı, konsol rolü kiracı kapsamlı, ayrı
+Cloudflare hostname'leri, (b) **yük ve gecikme bütçesi**: 1k eşzamanlı WS,
+10k emir/dk hedefi; `loadgen` CI'da; p99 emir yolu < 5 ms motor içi,
+(c) **NATS ile süreç ayrımı** (belgede "follow-up" diye duran): fix-gateway,
+core-engine, client-gateway ayrı konteyner, biri düşünce diğerleri yaşar,
+(d) **okuma kopyası**: raporlar/dashboard sorguları motoru kilitlemesin
+(snapshot'tan servis), (e) **FIX API müşterilere** (kurumsal müşteri kendi
+FIX oturumuyla bağlanır; fix-session crate'i zaten acceptor rolünü biliyor).
 
 ## Her etabın teslim kapısı
 tsc/lint/test yeşil → PR → CI → merge → CT 970 → canlıda ölçüm (gerçek LMAX

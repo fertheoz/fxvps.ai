@@ -57,6 +57,14 @@ pub enum GatewayEvent {
         ref_seq_num: u64,
         text: Option<String>,
     },
+    /// Periodic session statistics (at most once a second per session).
+    SessionStats {
+        session: SessionKind,
+        /// MsgSeqNum of the last inbound message.
+        in_seq: u64,
+        /// Unix ms of the last inbound message.
+        last_msg_ms: u64,
+    },
 }
 
 /// Commands accepted from internal components (OMS, tests).
@@ -145,6 +153,12 @@ pub struct SessionStatus {
     pub last_down_reason: Option<String>,
     /// Session-level Rejects received since start.
     pub rejects: u64,
+    /// MsgSeqNum of the last inbound message (0 = none yet).
+    #[serde(default)]
+    pub in_seq: u64,
+    /// Unix ms of the last inbound message (0 = none yet).
+    #[serde(default)]
+    pub last_msg_ms: u64,
 }
 
 fn unix_ms() -> u64 {
@@ -162,6 +176,17 @@ pub fn apply_status(table: &mut [SessionStatus], ev: &GatewayEvent) {
             (*session, Some(false), Some(reason.clone()), false)
         }
         GatewayEvent::SessionReject { session, .. } => (*session, None, None, true),
+        GatewayEvent::SessionStats {
+            session,
+            in_seq,
+            last_msg_ms,
+        } => {
+            if let Some(r) = table.iter_mut().find(|r| r.kind == *session) {
+                r.in_seq = *in_seq;
+                r.last_msg_ms = *last_msg_ms;
+            }
+            return;
+        }
         _ => return,
     };
     let Some(r) = table.iter_mut().find(|r| r.kind == kind) else {
@@ -227,6 +252,8 @@ pub fn start(cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
             since_ms: 0,
             last_down_reason: None,
             rejects: 0,
+            in_seq: 0,
+            last_msg_ms: 0,
         })
         .collect::<Vec<_>>(),
     ));
@@ -275,6 +302,36 @@ pub fn start(cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
         shutdown,
         tasks,
     })
+}
+
+/// Throttled `SessionStats` publisher (one event per second per session).
+/// `due` publishes and returns **false** so the caller still handles the message.
+#[derive(Default)]
+struct Stats {
+    last: Option<std::time::Instant>,
+}
+
+impl Stats {
+    fn due(
+        &mut self,
+        events: &broadcast::Sender<GatewayEvent>,
+        kind: SessionKind,
+        in_seq: u64,
+    ) -> bool {
+        let now = std::time::Instant::now();
+        if self
+            .last
+            .is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1))
+        {
+            self.last = Some(now);
+            let _ = events.send(GatewayEvent::SessionStats {
+                session: kind,
+                in_seq,
+                last_msg_ms: unix_ms(),
+            });
+        }
+        false
+    }
 }
 
 /// Byte stream to the LP: plain TCP or TLS.
@@ -411,6 +468,7 @@ async fn md_task(
         let mut books = Books::default();
         let mut stop = false;
         let mut up = false;
+        let mut stats = Stats::default();
         loop {
             tokio::select! {
                 e = ev.recv() => match e {
@@ -434,6 +492,7 @@ async fn md_task(
                         let _ = cmd.send(SessionCommand::Send(req)).await;
                     }
                     Some(SessionEvent::App(m)) => match &m.body {
+                        _ if stats.due(&events, kind, m.header.msg_seq_num) => {}
                         Body::MarketDataSnapshot(w) => {
                             if let Some(q) = books.snapshot(&cfg, w) {
                                 let _ = events.send(GatewayEvent::Quote(q));
@@ -557,6 +616,7 @@ async fn trade_task(
         let handle = tokio::spawn(run_session(io, s, cmd_rx, ev_tx));
         let mut up = false;
         let mut stop = false;
+        let mut stats = Stats::default();
         loop {
             tokio::select! {
                 e = ev.recv() => match e {
@@ -566,6 +626,7 @@ async fn trade_task(
                         let _ = events.send(GatewayEvent::SessionUp { session: kind });
                     }
                     Some(SessionEvent::App(m)) => match &m.body {
+                        _ if stats.due(&events, kind, m.header.msg_seq_num) => {}
                         Body::ExecutionReport(er) => {
                             let _ = events.send(GatewayEvent::Execution(normalize::execution(&cfg, er)));
                         }
@@ -637,6 +698,8 @@ mod status_tests {
                 since_ms: 0,
                 last_down_reason: None,
                 rejects: 0,
+                in_seq: 0,
+                last_msg_ms: 0,
             })
             .collect()
     }

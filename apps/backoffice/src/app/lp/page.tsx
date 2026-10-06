@@ -36,9 +36,9 @@ export default function LpPage() {
                   <FixBadge status={s.status} />
                   {s.status !== "logged_on" && s.lastError && <div className="mt-1 max-w-xs text-xs text-red-600 dark:text-red-400" data-testid="lp-error">{s.lastError}</div>}
                 </td>
-                <td className="px-3">{s.inSeq.toLocaleString()}</td>
-                <td className="px-3">{s.outSeq.toLocaleString()}</td>
-                <td className="px-3">{s.status === "logged_on" ? `${f.num(s.latencyMs)} ms` : "—"}</td>
+                <td className="px-3" title={t("lp.inSeqHint")}>{s.inSeq ? s.inSeq.toLocaleString() : "—"}</td>
+                <td className="px-3">{s.outSeq ? s.outSeq.toLocaleString() : "—"}</td>
+                <td className="px-3">{s.status === "logged_on" && s.latencyMs ? `${f.num(s.latencyMs)} ms` : "—"}</td>
                 <td className={`px-3 ${s.rejects24h > 5 ? "text-red-600 dark:text-red-400" : ""}`}>{s.rejects24h}</td>
                 <td className="px-3 whitespace-nowrap">{f.date(s.lastHeartbeat)}</td>
                 <td className="px-3">

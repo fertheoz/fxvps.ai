@@ -88,3 +88,21 @@ export function FlowChart({ data, fmt, labels }: { data: { day: string; deposits
     </ResponsiveContainer>
   );
 }
+
+/** Client slippage (points) and LP p95 latency (ms) per bucket on two axes. */
+export function ExecutionChart({ data, labels }: { data: { label: string; avgSlipPts?: number; p95LatencyMs?: number }[]; labels: [string, string] }) {
+  return (
+    <ResponsiveContainer width="99%" height={240}>
+      <LineChart data={data} margin={{ left: 8, right: 8 }}>
+        <CartesianGrid stroke={CHART.grid} vertical={false} />
+        <XAxis dataKey="label" stroke={CHART.axis} fontSize={11} interval="preserveStartEnd" />
+        <YAxis yAxisId="slip" stroke={CHART.axis} fontSize={11} width={40} />
+        <YAxis yAxisId="lat" orientation="right" stroke={CHART.axis} fontSize={11} width={44} allowDecimals={false} />
+        <Tooltip contentStyle={tooltipStyle} />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        <Line yAxisId="slip" dataKey="avgSlipPts" name={labels[0]} stroke={CHART.b} dot={false} strokeWidth={2} isAnimationActive={false} connectNulls />
+        <Line yAxisId="lat" dataKey="p95LatencyMs" name={labels[1]} stroke={CHART.a} dot={false} strokeWidth={2} isAnimationActive={false} connectNulls />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}

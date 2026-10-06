@@ -2,7 +2,8 @@
 import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, PageHeader, Pnl, Stat, Tabs } from "@/components/ui/primitives";
-import { ExposureChart, FlowChart, RevenueChart, VolumeChart } from "@/components/charts";
+import { ExecutionChart, ExposureChart, FlowChart, RevenueChart, VolumeChart } from "@/components/charts";
+import { AlertsCard } from "@/components/alerts";
 import { FixBadge } from "@/components/badges";
 import { useApiQuery } from "@/lib/queries";
 import { useFormat, useT } from "@/lib/hooks";
@@ -63,6 +64,12 @@ export default function DashboardPage() {
           <CardHeader><CardTitle>{t("dash.volumeChart")}</CardTitle></CardHeader>
           <CardContent>{d ? <VolumeChart data={d.buckets} labels={[t("positions.lots"), t("dash.orders"), t("reports.rejectRate")]} /> : t("common.loading")}</CardContent>
         </Card>
+
+        <Card className="min-w-0 overflow-hidden xl:col-span-2">
+          <CardHeader><CardTitle>{t("dash.execChart")}</CardTitle></CardHeader>
+          <CardContent>{d ? <ExecutionChart data={d.buckets} labels={[t("reports.avgSlip"), t("reports.p95Latency")]} /> : t("common.loading")}</CardContent>
+        </Card>
+        <AlertsCard />
 
         <Card className="min-w-0 overflow-hidden xl:col-span-2">
           <CardHeader><CardTitle>{t("dash.exposure")}</CardTitle></CardHeader>

@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
@@ -28,6 +28,11 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     latency > 0 ? new Promise((res) => setTimeout(() => res(clone(v)), latency * (0.5 + rnd()))) : Promise.resolve(clone(v));
 
   let lpConfig: LpConfig | null = null;
+  const alerts: Alert[] = [
+    { id: "al-1", kind: "exposure", target: "XAUUSD", severity: "critical", title: "B-book exposure over limit", detail: "XAUUSD: B-book 6.2 lots, limit 5 lots", raisedAt: Date.now() * 1e6 - 9e11, resolvedAt: null, acked: false },
+    { id: "al-2", kind: "lp_deviation", target: "SIM", severity: "warning", title: "SIM prices excluded by the deviation guard", detail: "EURUSD, GBPUSD", raisedAt: Date.now() * 1e6 - 3e12, resolvedAt: null, acked: true },
+    { id: "al-3", kind: "lp_down", target: "LMAX-TRADING", severity: "critical", title: "LMAX TRADING session down", detail: "heartbeat timeout", raisedAt: Date.now() * 1e6 - 8e12, resolvedAt: Date.now() * 1e6 - 7.6e12, acked: true },
+  ];
   let swapCfg: SwapConfig = { enabled: true, rolloverHourUtc: 22, skipWeekend: true, lastRolloverAt: null };
   let hedge: HedgePolicy = { enabled: true, mode: "switch_to_a_book", defaultSymbolLimit: 25, symbolLimits: { XAUUSD: 5 }, totalLimit: 100, accountLimit: 10, hedgeRatioPct: 100, releasePct: 80 };
   const lpRuntime = (p: LpPolicyRuntime): LpPolicyRuntime => p;
@@ -135,6 +140,8 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
           lots: Math.round(rnd() * 400) / 10,
           orders: Math.round(rnd() * 40),
           rejects: Math.round(rnd() * 2),
+          avgSlipPts: Math.round((rnd() - 0.3) * 200) / 100,
+          p95LatencyMs: Math.round(20 + rnd() * 80),
         };
       });
       const sum = (k: keyof DashboardBucket) => buckets.reduce((a, b) => a + Number(b[k]), 0);
@@ -185,6 +192,13 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
 
     async exposure() { tick(); return delay(exposure()); },
+    async listAlerts() { return delay({ active: alerts.filter((a) => !a.resolvedAt), recent: alerts.filter((a) => a.resolvedAt) }); },
+    async ackAlert(id, actor) {
+      guard(actor, "dashboard.view");
+      const a = alerts.find((x) => x.id === id);
+      if (a) a.acked = true;
+      return delay({ active: alerts.filter((x) => !x.resolvedAt), recent: alerts.filter((x) => x.resolvedAt) });
+    },
     async hedgePolicy() { return delay(hedge); },
     async saveHedgePolicy(p: HedgePolicy, actor) {
       guard(actor, "risk.edit");

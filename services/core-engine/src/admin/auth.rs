@@ -228,6 +228,16 @@ impl Actor {
     pub fn can(&self, permission: &str) -> bool {
         can(self.role, permission)
     }
+
+    /// Internal actor of background jobs (alerts, schedulers) in audit records.
+    pub fn system() -> Actor {
+        Actor {
+            sub: "system".into(),
+            name: "system".into(),
+            role: Role::Admin,
+            mfa_ok: true,
+        }
+    }
 }
 
 /// Mutating permissions (everything that is not a `.view`) need MFA when

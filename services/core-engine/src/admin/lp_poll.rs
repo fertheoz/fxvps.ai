@@ -76,6 +76,8 @@ mod tests {
             since_ms: 1,
             last_down_reason: None,
             rejects: 2,
+            in_seq: 0,
+            last_msg_ms: 0,
         }
     }
 

@@ -79,6 +79,8 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     dashboard: () => call("GET", "/v1/dashboard"),
     dashboardSeries: (range) => call("GET", `/v1/dashboard/series?range=${encodeURIComponent(range)}`),
     exposure: () => call("GET", "/v1/exposure"),
+    listAlerts: () => call("GET", "/v1/alerts"),
+    ackAlert: (id, actor) => call("POST", `/v1/alerts/${enc(id)}/ack`, {}, actor),
     hedgePolicy: () => call("GET", "/v1/risk/hedge"),
     // lots travel as raw 1e8 fixed-point on the wire (engine Qty)
     saveHedgePolicy: (p, actor) => call("PUT", "/v1/risk/hedge", {

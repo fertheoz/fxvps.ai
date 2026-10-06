@@ -189,6 +189,12 @@ pub enum AdminCmd {
     RolloverRun {
         details: String,
     },
+    /// Operational alert raised by the evaluator (stage 9).
+    AlertRaised {
+        kind: String,
+        target: String,
+        detail: String,
+    },
     AccountGroupSet {
         account: u64,
         group: String,
@@ -381,6 +387,11 @@ impl AdminState {
                 "engine".into(),
                 details.clone(),
             ),
+            AdminCmd::AlertRaised {
+                kind,
+                target,
+                detail,
+            } => self.audit(r, format!("alert.{kind}"), target.clone(), detail.clone()),
             AdminCmd::HedgeSaved { details } => {
                 self.audit(r, "risk.hedge".into(), "engine".into(), details.clone())
             }
