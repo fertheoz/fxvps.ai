@@ -7,6 +7,7 @@ import { isGatewayApi } from '../store/api';
 import { defaultGateway, loadGateway } from '../store/connection';
 import { UserMenu } from './Auth';
 import { ConnectDialog } from './ConnectDialog';
+import { promptInstall, useInstallPrompt } from '../lib/install';
 
 const connColor: Record<ConnectionState, string> = {
   connected: 'bg-up',
@@ -41,6 +42,7 @@ export function TopBar() {
   const setShortcuts = useTerminal((s) => s.setShortcutsOpen);
   const m = useMetrics();
   const [gwOpen, setGwOpen] = useState(false);
+  const installable = useInstallPrompt();
   // The build-time default gateway is never written to sessionStorage.
   const gateway = isGatewayApi() ? (loadGateway() ?? defaultGateway()) : null;
   const active = accounts.find((a) => a.id === activeId);
@@ -97,6 +99,19 @@ export function TopBar() {
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        {installable && (
+          <button
+            className="flex items-center gap-1.5 px-2 py-1 rounded border border-accent/50 text-accent hover:bg-accent/10"
+            onClick={() => void promptInstall()}
+            title={t('top.install')}
+            data-testid="install-app"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3h16v-3" />
+            </svg>
+            {t('top.install')}
+          </button>
+        )}
         <UserMenu />
         <button
           className="px-2 py-1 rounded border border-line text-muted hover:text-fg max-w-[220px] truncate"

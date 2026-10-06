@@ -22,6 +22,7 @@ import { bulkTargets, selectActiveAccount, selectHistory, selectOrders, selectPo
 import { ChartAttribution, ChartPanel } from '../components/ChartPanel';
 import { ObjectList } from '../components/ObjectList';
 import { IndicatorSettings } from '../components/IndicatorSettings';
+import { promptInstall, useInstallPrompt } from '../lib/install';
 import { OrderTicket } from '../components/OrderTicket';
 
 /** Phone layout: one view at a time, bottom tab bar, order ticket as a bottom sheet. */
@@ -267,23 +268,14 @@ function ChartView({ onSymbols }: { onSymbols: () => void }) {
   const standalone = typeof matchMedia === 'function' && (matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true);
   // Android Chrome hands us an install prompt we can show from our own button;
   // iPhone browsers only offer the system share sheet (which has "Add to Home Screen").
-  const [installPrompt, setInstallPrompt] = useState<{ prompt: () => Promise<unknown> } | null>(null);
-  useEffect(() => {
-    const on = (e: Event) => {
-      e.preventDefault();
-      setInstallPrompt(e as unknown as { prompt: () => Promise<unknown> });
-    };
-    window.addEventListener('beforeinstallprompt', on);
-    return () => window.removeEventListener('beforeinstallprompt', on);
-  }, []);
+  const installPrompt = useInstallPrompt();
   const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
   const iosChrome = /CriOS/.test(ua);
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
   const [shared, setShared] = useState(false);
   const addToHome = async () => {
     if (installPrompt) {
-      await installPrompt.prompt().catch(() => undefined);
-      setInstallPrompt(null);
+      await promptInstall();
       setFsHelp(false);
       return;
     }

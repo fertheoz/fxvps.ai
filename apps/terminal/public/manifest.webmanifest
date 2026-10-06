@@ -1,11 +1,11 @@
 {
+  "id": "/",
   "name": "fxvps.ai Terminal",
   "short_name": "fxvps.ai",
   "description": "fxvps.ai trading terminal",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
   "background_color": "#0b0e13",
   "theme_color": "#0b0e13",
   "icons": [
