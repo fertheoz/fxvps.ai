@@ -344,9 +344,10 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
         const a = t.book === "A";
         const capture = a ? Math.round((1 + rnd()) * 10) / 10 : null;
         return {
-          id: `o-${t.id}`, at: t.closedAt, login: t.login, symbol: t.symbol, side: t.side, type: "market", lots: t.lots, filledLots: t.lots,
+          id: `o-${t.id}`, at: t.closedAt, login: t.login, name: s.clients.find((c) => c.login === t.login)?.name ?? null, symbol: t.symbol, side: t.side, type: "market", lots: t.lots, filledLots: t.lots,
           status: "filled", reason: null, book: t.book, requested, fill, clientSlipPts: slip,
           lpPrice: a && capture !== null ? Number((fill - sign * capture * point).toFixed(5)) : null,
+          lpSentPrice: a && capture !== null ? Number((fill - sign * (capture + 0.2) * point).toFixed(5)) : null, lpSlipPts: a ? 0.2 : null, attempts: a ? 1 : 0,
           capturePts: capture, lpLatencyMs: a ? Math.round(20 + rnd() * 60) : null, lpFills: a ? 1 : 0, lpStatus: a ? "filled" : null, rearmed: false,
         };
       });
@@ -360,7 +361,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
         return {
           symbol, orders: rs.length, fillRate: 1, partialRate: 0, rejectRate: 0, avgSlipPts: avg(slips),
           p95SlipPts: slips[Math.round((slips.length - 1) * 0.95)] ?? 0, improvedRate: slips.filter((x) => x < 0).length / Math.max(1, slips.length),
-          avgCapturePts: avg(cap), avgLatencyMs: avg(lat),
+          avgCapturePts: avg(cap), avgLpSlipPts: cap.length ? 0.2 : 0, avgLatencyMs: avg(lat), p50LatencyMs: lat.sort((x, y) => x - y)[Math.floor((lat.length - 1) / 2)] ?? 0, p95LatencyMs: lat[Math.round((lat.length - 1) * 0.95)] ?? 0, avgAttempts: cap.length ? 1 : 0,
         };
       });
       return delay({ rows, bySymbol });

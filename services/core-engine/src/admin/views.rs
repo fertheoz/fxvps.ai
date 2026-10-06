@@ -411,8 +411,9 @@ struct ExecAgg {
     improved: u32,
     capture_sum: f64,
     capture_n: u32,
-    latency_sum_ms: f64,
-    latency_n: u32,
+    latencies_ms: Vec<f64>,
+    lp_slips: Vec<f64>,
+    attempts_sum: u32,
 }
 
 impl ExecAgg {
@@ -426,11 +427,16 @@ impl ExecAgg {
                 v.iter().sum::<f64>() / v.len() as f64
             }
         };
-        let p95 = if s.is_empty() {
-            0.0
-        } else {
-            s[((s.len() - 1) as f64 * 0.95).round() as usize]
+        let pct = |v: &[f64], p: f64| {
+            if v.is_empty() {
+                0.0
+            } else {
+                v[((v.len() - 1) as f64 * p).round() as usize]
+            }
         };
+        let p95 = pct(&s, 0.95);
+        let mut lat = self.latencies_ms.clone();
+        lat.sort_by(|a, b| a.total_cmp(b));
         let rate = |n: u32| {
             if self.orders == 0 {
                 0.0
@@ -448,7 +454,11 @@ impl ExecAgg {
             "p95SlipPts": p95,
             "improvedRate": if s.is_empty() { 0.0 } else { f64::from(self.improved) / s.len() as f64 },
             "avgCapturePts": if self.capture_n == 0 { 0.0 } else { self.capture_sum / f64::from(self.capture_n) },
-            "avgLatencyMs": if self.latency_n == 0 { 0.0 } else { self.latency_sum_ms / f64::from(self.latency_n) },
+            "avgLpSlipPts": avg(&self.lp_slips),
+            "avgLatencyMs": avg(&lat),
+            "p50LatencyMs": pct(&lat, 0.5),
+            "p95LatencyMs": pct(&lat, 0.95),
+            "avgAttempts": rate(self.attempts_sum),
         })
     }
 }
@@ -456,13 +466,15 @@ impl ExecAgg {
 /// Execution quality: one row per client order that reached a terminal state
 /// (newest first, capped), with the client's slippage against the price it
 /// asked for (points, positive = worse for the client), the LP leg behind it
-/// (average price, time to first fill, number of fills) and the difference we
-/// captured between the client and LP prices. Plus a per-symbol summary.
-pub fn execution(e: &Engine) -> Value {
-    let mut lp_of: BTreeMap<oms::OrderId, &oms::LpOrder> = BTreeMap::new();
+/// (average price, slippage against the LP quote at send time, time to first
+/// fill, fills, attempts) and the difference we captured between the client
+/// and LP prices. Plus a per-symbol summary.
+pub fn execution(e: &Engine, admin: &AdminState) -> Value {
+    // Every LP order a client order took part in, oldest first (re-arms send again).
+    let mut lp_of: BTreeMap<oms::OrderId, Vec<&oms::LpOrder>> = BTreeMap::new();
     for l in e.lp_orders() {
         for c in &l.children {
-            lp_of.insert(*c, l);
+            lp_of.entry(*c).or_default().push(l);
         }
     }
     let points: BTreeMap<&str, f64> = e
@@ -487,7 +499,8 @@ pub fn execution(e: &Engine) -> Value {
             (Some(r), Some(f)) if point > 0.0 => Some(sign * (f - r) / point),
             _ => None,
         };
-        let lp = lp_of.get(&o.id).copied();
+        let attempts = lp_of.get(&o.id);
+        let lp = attempts.and_then(|v| v.last().copied());
         let lp_avg = lp.and_then(|l| {
             let (mut lots, mut notional) = (0f64, 0f64);
             for f in &l.fills {
@@ -507,6 +520,21 @@ pub fn execution(e: &Engine) -> Value {
                 .min()
                 .map(|t| t.saturating_sub(l.created_ts) as f64 / 1e6)
         });
+        // What the LP did to us: fill vs. the LP quote we saw when sending (same sign convention).
+        let lp_sent = lp
+            .and_then(|l| {
+                if l.side == Side::Buy {
+                    l.sent_ask
+                } else {
+                    l.sent_bid
+                }
+            })
+            .map(price_f);
+        let lp_slip = match (lp_avg, lp_sent) {
+            (Some(a), Some(s)) if point > 0.0 => Some(sign * (a - s) / point),
+            _ => None,
+        };
+        let attempts = attempts.map_or(0, |v| v.len());
         let agg = by_symbol.entry(o.req.symbol.clone()).or_default();
         agg.orders += 1;
         match o.status {
@@ -525,13 +553,17 @@ pub fn execution(e: &Engine) -> Value {
             agg.capture_n += 1;
         }
         if let Some(ms) = latency_ms {
-            agg.latency_sum_ms += ms;
-            agg.latency_n += 1;
+            agg.latencies_ms.push(ms);
         }
+        if let Some(s) = lp_slip {
+            agg.lp_slips.push(s);
+        }
+        agg.attempts_sum += attempts as u32;
         rows.push(json!({
             "id": o.id.to_string(),
             "at": iso(o.created_ts),
             "login": o.req.account,
+            "name": admin.profiles.get(&o.req.account).map(|p| p.name.clone()),
             "symbol": o.req.symbol,
             "side": side_str(o.req.side),
             "type": match o.req.order_type {
@@ -553,6 +585,9 @@ pub fn execution(e: &Engine) -> Value {
             "fill": fill,
             "clientSlipPts": slip,
             "lpPrice": lp_avg,
+            "lpSentPrice": lp_sent,
+            "lpSlipPts": lp_slip,
+            "attempts": attempts,
             "capturePts": capture,
             "lpLatencyMs": latency_ms,
             "lpFills": lp.map_or(0, |l| l.fills.len()),
