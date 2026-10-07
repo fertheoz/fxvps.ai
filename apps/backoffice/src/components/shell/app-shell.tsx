@@ -16,10 +16,19 @@ import { LoginScreen } from "./login";
 import { canAccessRoute, ROLES, type Role } from "@/lib/rbac";
 import { LOCALES, type Locale } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { useRouter } from "next/navigation";
 
 export function RouteGuard({ role, pathname, children }: { role: Role; pathname: string; children: React.ReactNode }) {
   const t = useT();
+  const router = useRouter();
+  // A role without the dashboard (e.g. partner) lands on its first page instead of "denied".
+  const home = NAV.find((n) => canAccessRoute(role, n.href))?.href;
+  const redirect = pathname === "/" && !canAccessRoute(role, "/") && home && home !== "/";
+  React.useEffect(() => {
+    if (redirect) router.replace(home);
+  }, [redirect, home, router]);
   if (canAccessRoute(role, pathname)) return <>{children}</>;
+  if (redirect) return null;
   return (
     <div className="mx-auto mt-24 max-w-md text-center" data-testid="access-denied">
       <ShieldOff className="mx-auto h-10 w-10 text-muted-foreground" />

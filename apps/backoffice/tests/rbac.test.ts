@@ -44,9 +44,11 @@ describe("RBAC", () => {
     expect(can("risk", "balance.approve")).toBe(true);
   });
 
-  it("every role can see the dashboard and every nav item is mapped", () => {
-    for (const r of ROLES) expect(canAccessRoute(r, "/")).toBe(true);
+  it("every staff role can see the dashboard and every nav item is mapped", () => {
+    for (const r of ROLES) expect(canAccessRoute(r, "/")).toBe(r !== "partner");
     for (const n of NAV) expect(permissionForRoute(n.href)).not.toBeNull();
+    // a partner sees only its own page
+    expect(NAV.filter((n) => canAccessRoute("partner", n.href)).map((n) => n.href)).toEqual(["/partner"]);
   });
 
   it("4-eyes threshold", () => {

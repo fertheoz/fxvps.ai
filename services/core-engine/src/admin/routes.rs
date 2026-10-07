@@ -105,6 +105,10 @@ pub fn router() -> Router<AdminCtx> {
             get(super::bridge_admin::audit_status).put(super::bridge_admin::audit_settings),
         )
         .route("/v1/denetim/reset", post(super::bridge_admin::audit_reset))
+        .route(
+            "/v1/partner/overview",
+            get(super::bridge_admin::partner_overview),
+        )
         .route("/v1/lp/sessions/{id}/reconnect", post(lp_reconnect))
         .route("/v1/lp/aggregation", get(lp_agg_get).put(lp_agg_put))
         .route("/v1/reports/lp", get(lp_report))
@@ -2549,7 +2553,7 @@ async fn save_tenants(
 
 /// Logins the actor may see: `None` = everything (no tenant), else the
 /// accounts of the tenant's groups.
-async fn tenant_logins(
+pub(super) async fn tenant_logins(
     ctx: &AdminCtx,
     actor: &Actor,
 ) -> Result<Option<std::collections::BTreeSet<u64>>, ApiError> {

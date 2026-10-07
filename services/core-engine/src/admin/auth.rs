@@ -48,15 +48,18 @@ pub enum Role {
     Risk,
     Support,
     Readonly,
+    /// MT5 bridge institution: its own accounts and sessions only.
+    Partner,
 }
 
 impl Role {
-    pub const ALL: [Role; 5] = [
+    pub const ALL: [Role; 6] = [
         Role::Admin,
         Role::Dealer,
         Role::Risk,
         Role::Support,
         Role::Readonly,
+        Role::Partner,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -65,6 +68,7 @@ impl Role {
             Role::Risk => "risk",
             Role::Support => "support",
             Role::Readonly => "readonly",
+            Role::Partner => "partner",
         }
     }
     pub fn parse(s: &str) -> Option<Role> {
@@ -72,7 +76,7 @@ impl Role {
     }
 }
 
-pub const PERMISSIONS: [&str; 25] = [
+pub const PERMISSIONS: [&str; 26] = [
     "dashboard.view",
     "clients.view",
     "clients.edit",
@@ -98,6 +102,8 @@ pub const PERMISSIONS: [&str; 25] = [
     "users.edit",
     "settings.view",
     "settings.edit",
+    // an institution (MT5 bridge partner) looking at its own accounts only
+    "partner.view",
 ];
 
 const DEALER: &[&str] = &[
@@ -156,7 +162,9 @@ pub fn can(role: Role, permission: &str) -> bool {
             permission.ends_with(".view")
                 && permission != "users.view"
                 && permission != "settings.view"
+                && permission != "partner.view"
         }
+        Role::Partner => permission == "partner.view",
     }
 }
 
@@ -219,6 +227,7 @@ fn token_role(c: &RawClaims) -> Option<Role> {
         Role::Dealer,
         Role::Support,
         Role::Readonly,
+        Role::Partner,
     ]
     .into_iter()
     .find(|r| c.roles.iter().any(|x| x == r.as_str()))

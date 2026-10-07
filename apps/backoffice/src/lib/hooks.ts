@@ -8,7 +8,7 @@ import type { Actor } from "./api";
 import { decodeToken, isLive, useToken } from "./auth";
 import type { Role } from "./rbac";
 
-const ROLE_NAMES = { admin: "Admin Demo", dealer: "Deniz Dealer", risk: "Rita Risk", support: "Sam Support", readonly: "Olga Observer" } as const;
+const ROLE_NAMES = { admin: "Admin Demo", dealer: "Deniz Dealer", risk: "Rita Risk", support: "Sam Support", readonly: "Olga Observer", partner: "Pat Partner" } as const;
 
 export function useT() {
   const { locale } = usePrefs();

@@ -46,6 +46,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if args.get(1).map(String::as_str) == Some("grant-role") {
+        let email = args
+            .get(2)
+            .ok_or("usage: identity grant-role <email> <role>")?;
+        let role = args
+            .get(3)
+            .ok_or("usage: identity grant-role <email> <role>")?;
+        let url = std::env::var("DATABASE_URL").map_err(|_| "grant-role needs DATABASE_URL")?;
+        let store = PgStore::connect(&url).await?;
+        let changed = identity::store::grant_role(&store, email, role).await?;
+        println!(
+            "{}",
+            if changed {
+                "role granted"
+            } else {
+                "already had it"
+            }
+        );
+        return Ok(());
+    }
     if args.get(1).map(String::as_str) == Some("grant-admin") {
         let email = args.get(2).ok_or("usage: identity grant-admin <email>")?;
         let url = std::env::var("DATABASE_URL").map_err(|_| "grant-admin needs DATABASE_URL")?;
