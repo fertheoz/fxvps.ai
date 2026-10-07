@@ -136,15 +136,15 @@ services:
       FXVPS_JWT_ISSUER: https://id.fxvps.ai
       FXVPS_JWT_AUDIENCE: fxvps
       FXVPS_ALLOWED_ORIGINS: https://trade.fxvps.ai
-      # MT5 plugin bridge (/bridge): institutions, keys as SHA-256 (kurum-ekle.sh)
-      FXVPS_BRIDGE_FILE: /etc/fxvps/bridge/kurumlar.json
+      # MT5 plugin bridge (/bridge): institutions managed in the console (Kurumlar),
+      # keys stored as SHA-256; shared with the admin API in the engine data dir
+      FXVPS_BRIDGE_FILE: /var/lib/core-engine/bridge/kurumlar.json
       RUST_LOG: ${RUST_LOG:-info}
     # chown 65532:65532 fix-store core-data
     volumes:
       - "./fix-store:/var/lib/fix-gateway:ro"
       - "./core-data:/var/lib/core-engine"
       - "./lp-sim-gateway.json:/etc/fxvps/lp-sim-gateway.json:ro"
-      - "./bridge:/etc/fxvps/bridge:ro"
       - "/var/lib/fxvps-yedek:/var/lib/fxvps-yedek:ro"
     depends_on: [identity, nats]
     # SIGTERM → final snapshot → lock released → the other colour takes over

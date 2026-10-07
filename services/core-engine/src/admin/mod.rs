@@ -9,6 +9,7 @@
 
 pub mod alerts;
 pub mod auth;
+mod bridge_admin;
 pub mod lp_poll;
 mod routes;
 pub mod seed;
