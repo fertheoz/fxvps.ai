@@ -469,7 +469,32 @@ fn daily_report_text(
         x["fillRate"].as_f64().unwrap_or(0.0) * 100.0,
         x["avgClientSlipPts"].as_f64().unwrap_or(0.0),
         x["p95LatencyMs"].as_f64().unwrap_or(0.0)
-    )
+    ) + &night_watch_lines()
+}
+
+/// The night watches (status files written by cron jobs and the auditor):
+/// one line each, so the daily report shows what ran and what failed.
+fn night_watch_lines() -> String {
+    let mut out = String::new();
+    for (label, var) in [
+        ("Denetim", "CORE_AUDIT_STATUS_FILE"),
+        ("Yük sınavı", "CORE_LOADTEST_STATUS_FILE"),
+        ("Köprü sınavı", "CORE_BRIDGE_TEST_STATUS_FILE"),
+        ("Yedek", "CORE_BACKUP_STATUS_FILE"),
+    ] {
+        let Ok(path) = std::env::var(var) else {
+            continue;
+        };
+        let line = match std::fs::read_to_string(&path) {
+            Ok(s) => s.trim().chars().take(140).collect::<String>(),
+            Err(_) => "kayıt yok".into(),
+        };
+        out.push_str(&format!(
+            "
+{label}: {line}"
+        ));
+    }
+    out
 }
 
 /// Background evaluator: every 15 s; thresholds and channels from the admin store.
