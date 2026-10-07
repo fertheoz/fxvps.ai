@@ -80,6 +80,35 @@ fn status(ctx: &AdminCtx) -> Value {
         .unwrap_or(json!({"sessions": []}))
 }
 
+const DAY_NS: u64 = 86_400_000_000_000;
+
+/// `{h24, d7}` activity per institution account (engine query).
+async fn activities(
+    ctx: &AdminCtx,
+    list: &[Institution],
+) -> Result<std::collections::HashMap<String, Value>, ApiError> {
+    let accounts: Vec<(String, u64)> = list
+        .iter()
+        .filter_map(|i| i.account.parse().ok().map(|n| (i.id.clone(), n)))
+        .collect();
+    let now = super::routes::now_ns();
+    ctx.q(move |e| {
+        accounts
+            .into_iter()
+            .map(|(id, n)| {
+                (
+                    id,
+                    json!({
+                        "h24": super::views::account_activity(e, n, now.saturating_sub(DAY_NS)),
+                        "d7": super::views::account_activity(e, n, now.saturating_sub(7 * DAY_NS)),
+                    }),
+                )
+            })
+            .collect()
+    })
+    .await
+}
+
 fn view(i: &Institution, st: &Value) -> Value {
     let sessions: Vec<&Value> = st["sessions"]
         .as_array()
@@ -152,7 +181,16 @@ async fn account_problem(ctx: &AdminCtx, account: &str) -> Result<Option<String>
 pub async fn list(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "lp.view")?;
     let st = status(&ctx);
-    let list: Vec<Value> = load(&ctx)?.iter().map(|i| view(i, &st)).collect();
+    let insts = load(&ctx)?;
+    let act = activities(&ctx, &insts).await?;
+    let list: Vec<Value> = insts
+        .iter()
+        .map(|i| {
+            let mut v = view(i, &st);
+            v["activity"] = act.get(&i.id).cloned().unwrap_or(Value::Null);
+            v
+        })
+        .collect();
     Ok(Json(json!({
         "institutions": list,
         "endpoint": std::env::var("CORE_BRIDGE_PUBLIC_URL").unwrap_or_else(|_| "wss://trade.fxvps.ai/bridge".into()),
@@ -434,8 +472,18 @@ pub async fn partner_overview(State(ctx): State<AdminCtx>, actor: Actor) -> ApiR
             (accs, positions, deals)
         })
         .await?;
+    let act = activities(&ctx, &insts).await?;
     Ok(Json(json!({
-        "institutions": insts.iter().map(|i| view(i, &st)).collect::<Vec<_>>(),
+        "institutions": insts.iter().map(|i| {
+            let mut v = view(i, &st);
+            // the partner sees its volume, not our revenue
+            let mut a = act.get(&i.id).cloned().unwrap_or(Value::Null);
+            for w in ["h24", "d7"] {
+                if let Some(o) = a[w].as_object_mut() { o.remove("revenue"); }
+            }
+            v["activity"] = a;
+            v
+        }).collect::<Vec<_>>(),
         "accounts": accs,
         "positions": positions,
         "deals": deals,

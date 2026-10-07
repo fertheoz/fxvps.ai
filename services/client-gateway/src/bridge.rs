@@ -64,6 +64,25 @@ pub struct SessionStat {
     pub fills: u64,
     pub rejects: u64,
     pub reconcile_ok: Option<bool>,
+    /// Order received -> final fill sent, ms (last 500 orders).
+    pub fill_ms_p50: f64,
+    pub fill_ms_p99: f64,
+    #[serde(skip)]
+    lat: std::collections::VecDeque<f64>,
+}
+
+impl SessionStat {
+    fn push_latency(&mut self, ms: f64) {
+        if self.lat.len() == 500 {
+            self.lat.pop_front();
+        }
+        self.lat.push_back(ms);
+        let mut v: Vec<f64> = self.lat.iter().copied().collect();
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let at = |p: f64| v[((v.len() as f64 - 1.0) * p).round() as usize];
+        self.fill_ms_p50 = (at(0.5) * 10.0).round() / 10.0;
+        self.fill_ms_p99 = (at(0.99) * 10.0).round() / 10.0;
+    }
 }
 
 #[derive(Debug, Default)]
@@ -261,6 +280,7 @@ struct Sym {
 struct Track {
     filled: Fixed,
     done: bool,
+    at: Instant,
 }
 
 struct Session {
@@ -428,8 +448,14 @@ async fn run(hub: Arc<Hub>, bridge: Arc<Bridge>, socket: WebSocket, ip: Option<I
                     if let AccountEvent::Order(u) = &*ev {
                         if u.account_id == s.inst.account {
                             if let Some(out) = s.on_order_update(u) {
+                                let lat = s.tracks.get(&u.client_request_id).map(|t| t.at.elapsed().as_secs_f64() * 1e3);
                                 bridge.stat(sid, |st| match out["t"].as_str() {
-                                    Some("fill") if out["done"] == true => st.fills += 1,
+                                    Some("fill") if out["done"] == true => {
+                                        st.fills += 1;
+                                        if let Some(ms) = lat {
+                                            st.push_latency(ms);
+                                        }
+                                    }
                                     Some("reject") => st.rejects += 1,
                                     _ => {}
                                 });
@@ -618,6 +644,7 @@ impl Session {
             Track {
                 filled: Fixed::from_int(0),
                 done: false,
+                at: Instant::now(),
             },
         );
         match self.hub.place_order(o).await {

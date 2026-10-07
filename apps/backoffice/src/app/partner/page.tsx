@@ -30,7 +30,8 @@ export default function PartnerPage() {
                   <>
                     <div><Badge tone="success">{t("partner.online")}</Badge> <span className="text-muted-foreground">{s.server} · v{s.plugin}</span></div>
                     <div className="tabular-nums">{t("partner.orders")}: <b>{s.orders}</b> · {t("partner.fills")}: <b>{s.fills}</b> · {t("partner.rejects")}: <b className={s.rejects ? "text-red-600 dark:text-red-400" : ""}>{s.rejects}</b></div>
-                    <div>{t("partner.reconcile")}: {s.reconcile_ok == null ? "—" : s.reconcile_ok ? <Badge tone="success">OK</Badge> : <Badge tone="danger">diff</Badge>}</div>
+                    <div>{t("partner.reconcile")}: {s.reconcile_ok == null ? "—" : s.reconcile_ok ? <Badge tone="success">OK</Badge> : <Badge tone="danger">diff</Badge>}{s.fill_ms_p50 ? <span className="ml-3 text-muted-foreground">{t("partner.latency")}: {s.fill_ms_p50} / {s.fill_ms_p99} ms</span> : null}</div>
+                    {i.activity && <div className="text-muted-foreground">{t("partner.volume")}: 24h <b>{i.activity.h24.lots}</b> lot ({i.activity.h24.deals}) · 7d <b>{i.activity.d7.lots}</b> lot ({i.activity.d7.deals})</div>}
                   </>
                 ) : <Badge tone="muted">{t("partner.offline")}</Badge>}
               </div>

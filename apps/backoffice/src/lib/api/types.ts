@@ -685,7 +685,10 @@ export interface BridgeSession {
   fills: number;
   rejects: number;
   reconcile_ok: boolean | null;
+  fill_ms_p50?: number;
+  fill_ms_p99?: number;
 }
+export interface InstitutionActivity { deals: number; lots: number; revenue?: number; clientPnl: number }
 export interface Institution {
   id: string;
   name: string;
@@ -694,6 +697,7 @@ export interface Institution {
   ips: string[];
   createdNs: number;
   sessions: BridgeSession[];
+  activity?: { h24: InstitutionActivity; d7: InstitutionActivity } | null;
 }
 export interface InstitutionList {
   institutions: Institution[];

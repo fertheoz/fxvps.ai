@@ -4,7 +4,7 @@ import { Copy, KeyRound, Play, Plus, Rocket, Trash2 } from "lucide-react";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader } from "@/components/ui/primitives";
 import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
-import { useActor, useT } from "@/lib/hooks";
+import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { Institution } from "@/lib/api/types";
 import type { Group } from "@/lib/schemas";
 
@@ -57,6 +57,7 @@ const ago = (ms: number) => {
 
 function InstitutionTable({ list, onKey }: { list: Institution[]; onKey: (k: { id: string; key: string }) => void }) {
   const t = useT();
+  const f = useFormat();
   const actor = useActor();
   const mfa = useMfaOk();
   const rotate = useApiMutation((id: string) => api().rotateInstitutionKey(id, actor).then((r) => ({ id, key: r.key })), onKey);
@@ -66,10 +67,10 @@ function InstitutionTable({ list, onKey }: { list: Institution[]; onKey: (k: { i
       <CardHeader><CardTitle>{t("bridge.institutions")}</CardTitle></CardHeader>
       <table className="w-full text-sm" data-testid="bridge-table">
         <thead className="bg-muted/50 text-xs text-muted-foreground">
-          <tr>{[t("bridge.id"), t("bridge.account"), t("bridge.rate"), t("bridge.status"), t("bridge.server"), t("bridge.orders"), t("bridge.fills"), t("bridge.rejects"), t("bridge.reconcile"), ""].map((h, i) => <th key={i} className="whitespace-nowrap px-3 py-2 text-left font-medium">{h}</th>)}</tr>
+          <tr>{[t("bridge.id"), t("bridge.account"), t("bridge.rate"), t("bridge.status"), t("bridge.server"), t("bridge.orders"), t("bridge.fills"), t("bridge.rejects"), t("bridge.latency"), t("bridge.reconcile"), t("bridge.lots24"), t("bridge.revenue24"), t("bridge.revenue7"), ""].map((h, i) => <th key={i} className="whitespace-nowrap px-3 py-2 text-left font-medium">{h}</th>)}</tr>
         </thead>
         <tbody>
-          {list.length === 0 && <tr><td colSpan={10} className="px-3 py-6 text-center text-muted-foreground">{t("bridge.none")}</td></tr>}
+          {list.length === 0 && <tr><td colSpan={14} className="px-3 py-6 text-center text-muted-foreground">{t("bridge.none")}</td></tr>}
           {list.map((i) => {
             const s = i.sessions[0];
             const live = i.sessions.length > 0;
@@ -83,7 +84,11 @@ function InstitutionTable({ list, onKey }: { list: Institution[]; onKey: (k: { i
                 <td className="px-3">{s?.orders ?? "—"}</td>
                 <td className="px-3">{s?.fills ?? "—"}</td>
                 <td className={`px-3 ${s && s.rejects > 0 ? "text-red-600 dark:text-red-400" : ""}`}>{s?.rejects ?? "—"}</td>
+                <td className="px-3 whitespace-nowrap">{s?.fill_ms_p50 ? `${s.fill_ms_p50} / ${s.fill_ms_p99} ms` : "—"}</td>
                 <td className="px-3">{s?.reconcile_ok == null ? "—" : s.reconcile_ok ? <Badge tone="success">OK</Badge> : <Badge tone="danger">{t("bridge.diff")}</Badge>}</td>
+                <td className="px-3">{i.activity ? `${i.activity.h24.lots} (${i.activity.h24.deals})` : "—"}</td>
+                <td className={`px-3 ${(i.activity?.h24.revenue ?? 0) < 0 ? "text-red-600 dark:text-red-400" : ""}`}>{i.activity?.h24.revenue != null ? f.money(i.activity.h24.revenue, "USD") : "—"}</td>
+                <td className={`px-3 ${(i.activity?.d7.revenue ?? 0) < 0 ? "text-red-600 dark:text-red-400" : ""}`}>{i.activity?.d7.revenue != null ? f.money(i.activity.d7.revenue, "USD") : "—"}</td>
                 <td className="px-3 whitespace-nowrap">
                   {actor.can("lp.manage") && (
                     <>
