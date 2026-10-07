@@ -109,9 +109,9 @@ pub struct InstitutionReq {
     ips: Vec<String>,
 }
 
-fn validate(ctx_accounts: bool, r: &InstitutionReq) -> Result<(), ApiError> {
-    if !ctx_accounts {
-        return Err(ApiError::bad(format!("unknown account {:?}", r.account)));
+fn validate(account_problem: Option<String>, r: &InstitutionReq) -> Result<(), ApiError> {
+    if let Some(p) = account_problem {
+        return Err(ApiError::bad(p));
     }
     if let Some(rate) = r.orders_per_sec {
         if !(1..=1000).contains(&rate) {
@@ -126,11 +126,27 @@ fn validate(ctx_accounts: bool, r: &InstitutionReq) -> Result<(), ApiError> {
     Ok(())
 }
 
-async fn account_exists(ctx: &AdminCtx, account: &str) -> Result<bool, ApiError> {
+/// `None` = usable as an institution account; `Some(reason)` otherwise. The
+/// MT5 side nets positions per symbol, so the account must be in a NETTING
+/// group or the reconciliation can never agree.
+async fn account_problem(ctx: &AdminCtx, account: &str) -> Result<Option<String>, ApiError> {
     let Ok(no) = account.trim().parse::<u64>() else {
-        return Ok(false);
+        return Ok(Some(format!("unknown account {account:?}")));
     };
-    ctx.q(move |e| e.account(no).is_some()).await
+    ctx.q(move |e| {
+        let Some(a) = e.account(no) else {
+            return Some(format!("unknown account {no}"));
+        };
+        match e.group(&a.group) {
+            Some(g) if g.margin_mode == risk::MarginMode::Netting => None,
+            Some(g) => Some(format!(
+                "account {no} is in group {:?} (hedging); an institution account must be in a NETTING group",
+                g.name
+            )),
+            None => Some(format!("account {no}: unknown group {:?}", a.group)),
+        }
+    })
+    .await
 }
 
 pub async fn list(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
@@ -159,7 +175,7 @@ pub async fn create(
     {
         return Err(ApiError::bad("id: 2-40 chars, a-z 0-9 - _"));
     }
-    validate(account_exists(&ctx, &r.account).await?, &r)?;
+    validate(account_problem(&ctx, &r.account).await?, &r)?;
     let mut store = ctx.store.lock().await;
     let mut list = load(&ctx)?;
     if list.iter().any(|i| i.id == id) {
@@ -197,7 +213,7 @@ pub async fn update(
     Json(r): Json<InstitutionReq>,
 ) -> ApiResult {
     need(&actor, "lp.manage")?;
-    validate(account_exists(&ctx, &r.account).await?, &r)?;
+    validate(account_problem(&ctx, &r.account).await?, &r)?;
     let mut store = ctx.store.lock().await;
     let mut list = load(&ctx)?;
     let Some(inst) = list.iter_mut().find(|i| i.id == id) else {
