@@ -119,6 +119,7 @@ services:
       DENETCI_LP_FILES: /var/lib/fix-gateway/lp.json,/etc/fxvps/lp-sim-gateway.json
       DENETCI_PRIMARY: LMAX
       DENETCI_STAGING: SIM
+      DENETCI_LP_ACCOUNT: "663578833"
       DENETCI_STATUS_FILE: /var/lib/core-engine/denetim/denetim.durum
       RUST_LOG: info
     volumes:
