@@ -1723,10 +1723,57 @@ async fn alert_settings_put(
     {
         return Err(ApiError::bad("webhookUrl must be https"));
     }
-    let mut store = ctx.store.lock().await;
+    let stored_token = ctx.store.lock().await.state.alerts.telegram_token.clone();
     if a.telegram_token.is_empty() {
-        a.telegram_token = store.state.alerts.telegram_token.clone(); // keep the stored one
+        a.telegram_token = stored_token; // keep the stored one
     }
+    // Chat id left empty: ask Telegram who talked to the bot (the operator
+    // pressed Start) and use that private chat; then confirm with a message.
+    // The token never leaves the server.
+    let mut detected: Option<String> = None;
+    if !a.telegram_token.is_empty() && a.telegram_chat_id.is_empty() {
+        let url = format!(
+            "https://api.telegram.org/bot{}/getUpdates",
+            a.telegram_token
+        );
+        let found: Option<i64> = match ctx.http.get(&url).send().await {
+            Ok(r) => match r.json::<Value>().await {
+                Ok(v) => v["result"].as_array().and_then(|arr| {
+                    arr.iter().rev().find_map(|u| {
+                        u["message"]["chat"]["id"]
+                            .as_i64()
+                            .or(u["my_chat_member"]["chat"]["id"].as_i64())
+                    })
+                }),
+                Err(e) => {
+                    tracing::warn!(error = %e, "telegram getUpdates: bad response");
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "telegram getUpdates failed");
+                None
+            }
+        };
+        match found {
+            Some(id) => {
+                a.telegram_chat_id = id.to_string();
+                detected = Some(a.telegram_chat_id.clone());
+                let send = format!(
+                    "https://api.telegram.org/bot{}/sendMessage",
+                    a.telegram_token
+                );
+                let _ = ctx
+                    .http
+                    .post(&send)
+                    .json(&json!({"chat_id": id, "text": "fxvps.ai: Telegram bağlantısı kuruldu. Uyarılar ve günlük rapor bu sohbete gelecek."}))
+                    .send()
+                    .await;
+            }
+            None => tracing::warn!("telegram chat id not detected: no message to the bot yet"),
+        }
+    }
+    let mut store = ctx.store.lock().await;
     store.append(&actor, AdminCmd::AlertSettingsSaved { settings: a })?;
     let out = store.state.alerts.clone();
     drop(store);
@@ -1734,6 +1781,7 @@ async fn alert_settings_put(
     let mut v = json!(out);
     v["telegramToken"] = json!("");
     v["telegramTokenSet"] = json!(!out.telegram_token.is_empty());
+    v["telegramChatDetected"] = json!(detected);
     Ok(Json(v))
 }
 
