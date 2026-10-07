@@ -1,7 +1,7 @@
 "use client";
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Languages, Moon, UserCog } from "lucide-react";
+import { Settings2, Languages, Moon, UserCog } from "lucide-react";
 import { NAV } from "./nav";
 import { setPrefs, usePrefs } from "@/lib/prefs";
 import { useActor, useT } from "@/lib/hooks";
@@ -24,8 +24,18 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   const [q, setQ] = React.useState("");
   const [idx, setIdx] = React.useState(0);
 
+  const SETTING_LINKS: { key: import("@/lib/i18n").MessageKey; page: import("@/lib/i18n").MessageKey; href: string }[] = [
+    { key: "groups.weekendLeverage", page: "nav.groups", href: "/groups" },
+    { key: "groups.newsWindows", page: "nav.groups", href: "/groups" },
+    { key: "groups.maxSlippage", page: "nav.groups", href: "/groups" },
+    { key: "settings.fourEyes", page: "nav.settings", href: "/settings" },
+    { key: "denetim.autoheal", page: "nav.denetim", href: "/denetim" },
+    { key: "bridge.add", page: "nav.bridge", href: "/bridge" },
+  ];
   const cmds: Cmd[] = [
     ...NAV.filter((n) => canAccessRoute(actor.role, n.href)).map((n) => ({ id: n.href, label: t(n.key), group: t("palette.hint"), icon: n.icon, run: () => router.push(n.href) })),
+    // settings and fields that live inside pages ("weekend" -> Groups -> weekend leverage)
+    ...SETTING_LINKS.filter((l) => canAccessRoute(actor.role, l.href)).map((l) => ({ id: `s-${l.key}`, label: `${t(l.key)} · ${t(l.page)}`, group: t("palette.settings"), icon: Settings2, run: () => router.push(l.href) })),
     { id: "theme", label: t("common.theme"), group: "⚙", icon: Moon, run: () => setPrefs({ theme: prefs.theme === "dark" ? "light" : "dark" }) },
     { id: "lang", label: `${t("common.language")}: ${prefs.locale === "en" ? "Türkçe" : "English"}`, group: "⚙", icon: Languages, run: () => setPrefs({ locale: prefs.locale === "en" ? "tr" : "en" }) },
     ...(isLive() ? [] : ROLES).map((r) => ({ id: `role-${r}`, label: `${t("common.role")}: ${r}`, group: "⚙", icon: UserCog, run: () => setPrefs({ role: r }) })),

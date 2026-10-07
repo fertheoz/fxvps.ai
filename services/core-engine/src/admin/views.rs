@@ -639,6 +639,9 @@ pub fn group(g: &GroupConfig, all_symbols: &[String]) -> Value {
         "symbolMarkups": g.symbol_markup_points,
         "maxSlippagePoints": g.max_slippage_points,
         "weekendLeverage": g.weekend_leverage,
+        "leverageWindows": g.leverage_windows.iter().map(|w| json!({
+            "fromMs": w.from_ns / 1_000_000, "toMs": w.to_ns / 1_000_000, "leverage": w.leverage,
+        })).collect::<Vec<_>>(),
         "passPriceImprovement": g.pass_price_improvement,
         "swapMultiplier": g.swap_multiplier_pct as f64 / 100.0,
         "book": book(g.routing),

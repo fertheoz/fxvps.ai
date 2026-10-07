@@ -91,10 +91,38 @@ function GroupDialog({ group, onClose }: { group: Group; onClose: () => void }) 
         />
         <NumField label={t("groups.maxSlippage")} value={draft.maxSlippagePoints ?? 0} onChange={(v) => set("maxSlippagePoints", v > 0 ? v : null)} step={1} />
         <NumField label={t("groups.weekendLeverage")} value={draft.weekendLeverage ?? 0} onChange={(v) => set("weekendLeverage", v > 0 ? v : null)} step={1} />
+        <LeverageWindowsField value={draft.leverageWindows ?? []} onChange={(v) => set("leverageWindows", v)} />
         <SelectField label={t("groups.priceImprovement")} value={draft.passPriceImprovement ? "client" : "broker"} options={["client", "broker"] as const} onChange={(v) => set("passPriceImprovement", v === "client")} />
         <NumField label={t("groups.swapMult")} value={draft.swapMultiplier} onChange={(v) => set("swapMultiplier", v)} error={errors.swapMultiplier} step={0.1} />
       </div>
       <FieldError msg={errors._} />
     </Dialog>
+  );
+}
+
+/** News-event leverage caps: [from, to) in local time, applied as UTC instants by the engine. */
+function LeverageWindowsField({ value, onChange }: { value: { fromMs: number; toMs: number; leverage: number }[]; onChange: (v: { fromMs: number; toMs: number; leverage: number }[]) => void }) {
+  const t = useT();
+  const local = (ms: number) => {
+    const d = new Date(ms);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  const upd = (i: number, w: Partial<{ fromMs: number; toMs: number; leverage: number }>) => onChange(value.map((x, k) => (k === i ? { ...x, ...w } : x)));
+  return (
+    <div className="sm:col-span-2 space-y-2">
+      <div className="text-xs font-medium text-muted-foreground">{t("groups.newsWindows")}</div>
+      {value.map((w, i) => (
+        <div key={i} className="grid grid-cols-[1fr_1fr_6rem_auto] items-end gap-2" data-testid="leverage-window">
+          <label className="grid gap-1 text-sm"><span className="text-xs text-muted-foreground">{t("groups.newsFrom")}</span><input type="datetime-local" className="h-9 rounded-md border border-border bg-background px-2 text-sm" value={local(w.fromMs)} onChange={(e) => upd(i, { fromMs: new Date(e.target.value).getTime() })} /></label>
+          <label className="grid gap-1 text-sm"><span className="text-xs text-muted-foreground">{t("groups.newsTo")}</span><input type="datetime-local" className="h-9 rounded-md border border-border bg-background px-2 text-sm" value={local(w.toMs)} onChange={(e) => upd(i, { toMs: new Date(e.target.value).getTime() })} /></label>
+          <NumField label="1:N" value={w.leverage} onChange={(v) => upd(i, { leverage: v })} step={1} />
+          <Button type="button" variant="outline" size="sm" onClick={() => onChange(value.filter((_, k) => k !== i))}>×</Button>
+        </div>
+      ))}
+      <Button type="button" variant="outline" size="sm" onClick={() => { const from = Date.now() + 3_600_000; onChange([...value, { fromMs: from - (from % 60_000), toMs: from - (from % 60_000) + 1_800_000, leverage: 50 }]); }} data-testid="add-leverage-window">
+        + {t("groups.newsAdd")}
+      </Button>
+    </div>
   );
 }

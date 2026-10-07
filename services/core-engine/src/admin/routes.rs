@@ -1845,6 +1845,14 @@ async fn list_groups(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct LeverageWindowDto {
+    from_ms: u64,
+    to_ms: u64,
+    leverage: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GroupDto {
     currency: String,
     leverage: u32,
@@ -1876,6 +1884,9 @@ struct GroupDto {
     /// Leverage cap Friday 20:00 - Sunday 22:00 UTC (null/0 = none).
     #[serde(default)]
     weekend_leverage: Option<u32>,
+    /// News windows: leverage cap between two instants (ms since epoch).
+    #[serde(default)]
+    leverage_windows: Option<Vec<LeverageWindowDto>>,
     #[serde(default)]
     pass_price_improvement: Option<bool>,
     /// "symbol" (use the symbol's per-lot commission) | "per_lot" | "per_million"; value in minor units.
@@ -2017,6 +2028,26 @@ async fn save_group(
         cfg.symbol_markup_points = sm;
     }
     cfg.max_slippage_points = pts(g.max_slippage_points, "maxSlippagePoints")?;
+    if let Some(ws) = g.leverage_windows {
+        if ws.len() > 50 {
+            return Err(ApiError::bad("at most 50 leverage windows"));
+        }
+        let mut out = Vec::new();
+        for w in ws {
+            if w.to_ms <= w.from_ms || !(1..=1000).contains(&w.leverage) {
+                return Err(ApiError::bad(
+                    "leverageWindows: toMs must be after fromMs, leverage 1..1000",
+                ));
+            }
+            out.push(risk::LeverageWindow {
+                from_ns: w.from_ms.saturating_mul(1_000_000),
+                to_ns: w.to_ms.saturating_mul(1_000_000),
+                leverage: w.leverage,
+            });
+        }
+        out.sort_by_key(|w| w.from_ns);
+        cfg.leverage_windows = out;
+    }
     cfg.weekend_leverage = match g.weekend_leverage.filter(|v| *v > 0) {
         Some(v) if v > 1000 => return Err(ApiError::bad("weekendLeverage must be 1..=1000")),
         v => v,
