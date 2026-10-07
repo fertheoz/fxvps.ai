@@ -56,7 +56,9 @@ pozisyonu düşürür).
 | E | Sahte MT5 + senaryo koşucusu | `plugin/sim`, `plugin/tests` | ✅ |
 | F | Uçtan uca: C++ plugin+sahte MT5 ↔ gerçek köprü ↔ demo motor | `plugin/tests/e2e-sunucu.sh` | ✅ E1 1000/1000, E2 112 yoldaki emir, mutabakat OK |
 | G | WinHTTP taşıması + MT5 adaptör iskeleti (Windows derlemesi CI'da) | `plugin/win`, `plugin/mt5` | ✅ CI windows (MSVC /W4 /WX) |
-| H | Canlıya: kurum tanımı, nginx `/bridge`, demo kurumla duman testi | CT 970 | ⏳ |
+| H | Canlıya: `wss://trade.fxvps.ai/bridge`, kurum dosyası, `kurum-ekle.sh` | CT 970 | ✅ #129 #130 (kurum: 0) |
+| H2 | Windows'ta gerçek WinHTTP: canlı wss (TLS+kimlik reddi) + tünelle 200 emir | bu makine | ✅ 200/200 |
+| H3 | Gece uçtan uca sınavı 04:10 UTC → `kopru.durum` | CT 970 cron | ✅ #131 |
 | I | Konsol "Kurumlar" sayfası | backoffice | sonra |
 | J | Gerçek MT5 adaptörü + test MT5 sunucusunda kabul | SDK gelince | bekliyor |
 
@@ -97,8 +99,16 @@ Uçtan uca (CI, Linux):
   gerçek sunucuyla tekrar koşulur (kabul sınavı).
 - İmzalı DLL + kurulum kılavuzu.
 
-## 5. Açık dış işler
+## 5. İlk kurumu açmak (kurucu)
 
+1. Konsolda kurum hesabını aç: **netting** grubunda, ön teminatlı.
+2. Sunucuda: `./kurum-ekle.sh <kurum-id> <hesap> [emir/sn] [ip,...]` —
+   anahtarı bir kez gösterir, trading'i kesintisiz yeniden yükler.
+3. Kuruma: `plugin/mt5/fxvps-bridge.conf.example` + anahtar + kurulum notu.
+
+## 6. Açık dış işler
+
+- **MT5 Server API SDK + test sunucusu:** ilk kurumdan (bkz. §4).
 - **LMAX pozisyon sorgusu yetkisi:** AN isteğine `PosReqResult=3`
   (yetkisiz) dönüyor. LMAX destekten hesap 663578833 için "FIX
   RequestForPositions" izni istenmeli (kurucu).
