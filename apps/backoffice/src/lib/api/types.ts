@@ -716,4 +716,4 @@ export interface AuditStatus {
   openMismatches: { lp: string; symbol: string; diff: string }[];
   incidentsTotal: number; correctionsSent: number; resetMs: number | null; incidents: AuditIncident[];
 }
-export interface AuditView { status: AuditStatus | null; settings: AuditSettings; corrections: Record<string, unknown>[] }
+export interface AuditView { status: AuditStatus | null; settings: AuditSettings; corrections: Record<string, unknown>[]; ageMs?: number | null }

@@ -298,9 +298,11 @@ pub async fn audit_status(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResul
         .take(100)
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
-    Ok(Json(
-        json!({ "status": status, "settings": settings, "corrections": corrections }),
-    ))
+    Ok(Json(json!({
+        "status": status, "settings": settings, "corrections": corrections,
+        // age by the server clock: a skewed browser clock must not mark it silent
+        "ageMs": status["at"].as_u64().map(|at| (super::routes::now_ns() / 1_000_000).saturating_sub(at)),
+    })))
 }
 
 #[derive(Deserialize)]
