@@ -193,6 +193,21 @@ impl EngineHandle {
             .map_err(|e| e.to_string())?
     }
 
+    /// Synchronous read for non-async callers (also safe on a runtime worker:
+    /// a std channel, not a tokio one). `None` on timeout or a stopped engine.
+    pub fn read_sync<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Engine) -> T + Send + 'static,
+    ) -> Option<T> {
+        let (t, r) = std::sync::mpsc::channel();
+        self.tx
+            .send(Request::Read(Box::new(move |e| {
+                let _ = t.send(f(e));
+            })))
+            .ok()?;
+        r.recv_timeout(std::time::Duration::from_secs(2)).ok()
+    }
+
     /// Blocking variant for non-async callers.
     pub fn command_blocking(&self, cmd: Command) -> Result<Vec<Event>, String> {
         let (t, r) = oneshot::channel();
