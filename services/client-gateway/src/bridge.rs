@@ -235,8 +235,20 @@ pub async fn handler(
     if hub.core().is_none() {
         return (StatusCode::SERVICE_UNAVAILABLE, "no core").into_response();
     }
+    // same connection limits as the terminal: a hello flood cannot pile up sockets
+    let slot = match hub.conns.acquire(ip) {
+        Ok(s) => s,
+        Err(e) => {
+            hub.metrics.connections_rejected.inc();
+            tracing::debug!(?ip, ?e, "bridge connection limit");
+            return (StatusCode::TOO_MANY_REQUESTS, "too many connections").into_response();
+        }
+    };
     ws.max_message_size(64 * 1024)
-        .on_upgrade(move |socket| run(hub, bridge, socket, ip))
+        .on_upgrade(move |socket| async move {
+            let _slot = slot;
+            run(hub, bridge, socket, ip).await
+        })
 }
 
 /// Per-symbol data the session needs to convert lots <-> base units.
@@ -427,7 +439,31 @@ async fn run(hub: Arc<Hub>, bridge: Arc<Bridge>, socket: WebSocket, ip: Option<I
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(institution = %s.inst.id, n, "bridge lagged on account events");
+                    // events were dropped: a fill for a tracked order may be among
+                    // them, so re-read every open order from the engine's record
+                    tracing::warn!(institution = %s.inst.id, n, "bridge lagged on account events; resyncing");
+                    let open: Vec<String> = s.tracks.iter().filter(|(_, t)| !t.done).map(|(id, _)| id.clone()).collect();
+                    let mut outs = Vec::new();
+                    for id in open {
+                        if let Some(t) = s.tracks.get_mut(&id) {
+                            t.done = true; // replay() reports the final state or re-opens it
+                        }
+                        outs.extend(s.replay(&id).await);
+                    }
+                    bridge.stat(sid, |st| {
+                        for o in &outs {
+                            match o["t"].as_str() {
+                                Some("fill") if o["done"] == true => st.fills += 1,
+                                Some("reject") => st.rejects += 1,
+                                _ => {}
+                            }
+                        }
+                    });
+                    for out in outs {
+                        if send(&mut tx, out).await.is_err() {
+                            break;
+                        }
+                    }
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             },
