@@ -3,6 +3,7 @@
 //! order rate limiting, candle history, `/healthz` and `/metrics`.
 
 pub mod auth;
+pub mod bridge;
 pub mod candles;
 pub mod config;
 pub mod conflate;
@@ -28,6 +29,11 @@ pub use hub::Hub;
 /// Public router: `/ws`, `/healthz`, and `/metrics` unless `metrics_listen`
 /// moves it to a separate listener ([`metrics_router`]).
 pub fn router(hub: Arc<Hub>) -> Router {
+    router_with_bridge(hub, bridge::Bridge::from_env().map(Arc::new))
+}
+
+/// [`router`] with an explicit MT5 bridge (`/bridge`; `None` = disabled).
+pub fn router_with_bridge(hub: Arc<Hub>, bridge: Option<Arc<bridge::Bridge>>) -> Router {
     let mut r = Router::new()
         .route("/ws", get(ws_handler))
         .route("/healthz", get(|| async { "ok" }));
@@ -40,6 +46,11 @@ pub fn router(hub: Arc<Hub>) -> Router {
         r = r
             .route("/api/client/{*path}", axum::routing::any(client_api_proxy))
             .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024));
+    }
+    if let Some(b) = bridge {
+        r = r
+            .route("/bridge", get(bridge::handler))
+            .layer(axum::Extension(b));
     }
     r.with_state(hub)
 }
