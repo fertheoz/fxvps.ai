@@ -88,6 +88,18 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/reports/clients", get(client_flow))
         .route("/v1/lp/sessions", get(lp_sessions))
         .route("/v1/lp/config", get(lp_config_get).put(lp_config_put))
+        .route(
+            "/v1/bridge/institutions",
+            get(super::bridge_admin::list).post(super::bridge_admin::create),
+        )
+        .route(
+            "/v1/bridge/institutions/{id}",
+            put(super::bridge_admin::update).delete(super::bridge_admin::remove),
+        )
+        .route(
+            "/v1/bridge/institutions/{id}/rotate-key",
+            post(super::bridge_admin::rotate),
+        )
         .route("/v1/lp/sessions/{id}/reconnect", post(lp_reconnect))
         .route("/v1/lp/aggregation", get(lp_agg_get).put(lp_agg_put))
         .route("/v1/reports/lp", get(lp_report))
@@ -118,7 +130,7 @@ const ENGINE_TOPICS: [&str; 8] = [
 ];
 
 impl AdminCtx {
-    async fn q<T: Send + 'static>(
+    pub(super) async fn q<T: Send + 'static>(
         &self,
         f: impl FnOnce(&Engine) -> T + Send + 'static,
     ) -> Result<T, ApiError> {
@@ -197,7 +209,7 @@ fn day(ns: u64) -> u64 {
     ns / DAY_NS
 }
 
-fn now_ns() -> u64 {
+pub(super) fn now_ns() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)

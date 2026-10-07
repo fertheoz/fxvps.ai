@@ -51,32 +51,73 @@ fn default_rate() -> u32 {
     100
 }
 
-#[derive(Clone, Debug, Default)]
+/// Live view of one plugin session (console "Kurumlar").
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct SessionStat {
+    pub institution: String,
+    pub server: String,
+    pub plugin: String,
+    pub ip: Option<String>,
+    pub since_ms: u64,
+    pub last_ms: u64,
+    pub orders: u64,
+    pub fills: u64,
+    pub rejects: u64,
+    pub reconcile_ok: Option<bool>,
+}
+
+#[derive(Debug, Default)]
 pub struct Bridge {
-    institutions: HashMap<String, Institution>,
+    institutions: std::sync::RwLock<HashMap<String, Institution>>,
+    path: Option<std::path::PathBuf>,
+    sessions: std::sync::Mutex<HashMap<u64, SessionStat>>,
+    next: std::sync::atomic::AtomicU64,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 impl Bridge {
     pub fn new(list: Vec<Institution>) -> Bridge {
-        Bridge {
-            institutions: list.into_iter().map(|i| (i.id.clone(), i)).collect(),
+        let b = Bridge::default();
+        b.set(list);
+        b
+    }
+
+    fn set(&self, list: Vec<Institution>) {
+        if let Ok(mut m) = self.institutions.write() {
+            *m = list.into_iter().map(|i| (i.id.clone(), i)).collect();
+        }
+    }
+
+    fn read_file(path: &std::path::Path) -> std::io::Result<Vec<Institution>> {
+        match std::fs::read(path) {
+            Ok(b) => serde_json::from_slice(&b)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e),
         }
     }
 
     pub fn load(path: &std::path::Path) -> std::io::Result<Bridge> {
-        let list: Vec<Institution> = serde_json::from_slice(&std::fs::read(path)?)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        Ok(Bridge::new(list))
+        let mut b = Bridge::new(Bridge::read_file(path)?);
+        b.path = Some(path.to_path_buf());
+        Ok(b)
     }
 
-    /// `FXVPS_BRIDGE_FILE`; `None` = bridge disabled.
+    /// `FXVPS_BRIDGE_FILE`; `None` = bridge disabled. A missing file is an
+    /// empty list: the console creates it with the first institution.
     pub fn from_env() -> Option<Bridge> {
         let p = std::env::var("FXVPS_BRIDGE_FILE")
             .ok()
             .filter(|p| !p.trim().is_empty())?;
         match Bridge::load(std::path::Path::new(&p)) {
             Ok(b) => {
-                tracing::info!(institutions = b.institutions.len(), "MT5 bridge enabled");
+                tracing::info!(institutions = b.count(), "MT5 bridge enabled");
                 Some(b)
             }
             Err(e) => {
@@ -86,8 +127,56 @@ impl Bridge {
         }
     }
 
-    fn authenticate(&self, id: &str, key: &str, ip: Option<IpAddr>) -> Option<&Institution> {
-        let inst = self.institutions.get(id)?;
+    pub fn count(&self) -> usize {
+        self.institutions.read().map(|m| m.len()).unwrap_or(0)
+    }
+
+    /// Reloads the institution file on change and writes the live session
+    /// table next to it (`durum.json`) every two seconds.
+    pub fn spawn_tasks(self: &Arc<Self>) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let me = self.clone();
+        tokio::spawn(async move {
+            let status = path.with_file_name("durum.json");
+            let mut seen = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                tick.tick().await;
+                let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+                if mtime != seen {
+                    match Bridge::read_file(&path) {
+                        Ok(list) => {
+                            let n = list.len();
+                            me.set(list);
+                            seen = mtime;
+                            tracing::info!(institutions = n, "bridge institutions reloaded");
+                        }
+                        Err(e) => {
+                            tracing::error!(%e, "bridge institutions unreadable; keeping the old list")
+                        }
+                    }
+                }
+                let sessions: Vec<SessionStat> = me
+                    .sessions
+                    .lock()
+                    .map(|m| m.values().cloned().collect())
+                    .unwrap_or_default();
+                if let Some(dir) = status.parent().filter(|d| d.exists()) {
+                    let body = json!({"at": now_ms(), "sessions": sessions}).to_string();
+                    let tmp = dir.join("durum.json.tmp");
+                    if std::fs::write(&tmp, body).is_ok() {
+                        let _ = std::fs::rename(&tmp, &status);
+                    }
+                }
+            }
+        });
+    }
+
+    fn authenticate(&self, id: &str, key: &str, ip: Option<IpAddr>) -> Option<Institution> {
+        let m = self.institutions.read().ok()?;
+        let inst = m.get(id)?;
         let digest = hex(&Sha256::digest(key.as_bytes()));
         if !eq_ct(&digest, &inst.key_sha256.to_ascii_lowercase()) {
             return None;
@@ -95,7 +184,37 @@ impl Bridge {
         if !inst.ips.is_empty() && !ip.is_some_and(|ip| inst.ips.contains(&ip)) {
             return None;
         }
-        Some(inst)
+        Some(inst.clone())
+    }
+
+    fn open_session(&self, s: SessionStat) -> u64 {
+        let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut m) = self.sessions.lock() {
+            m.insert(id, s);
+        }
+        id
+    }
+
+    fn stat(&self, id: u64, f: impl FnOnce(&mut SessionStat)) {
+        if let Ok(mut m) = self.sessions.lock() {
+            if let Some(s) = m.get_mut(&id) {
+                f(s);
+            }
+        }
+    }
+
+    fn close_session(&self, id: u64) {
+        if let Ok(mut m) = self.sessions.lock() {
+            m.remove(&id);
+        }
+    }
+}
+
+/// Removes the session from the live table however the session ends.
+struct SessionGuard(Arc<Bridge>, u64);
+impl Drop for SessionGuard {
+    fn drop(&mut self) {
+        self.0.close_session(self.1);
     }
 }
 
@@ -166,7 +285,7 @@ async fn run(hub: Arc<Hub>, bridge: Arc<Bridge>, socket: WebSocket, ip: Option<I
     }
     let id = hello["institution"].as_str().unwrap_or_default();
     let key = hello["key"].as_str().unwrap_or_default();
-    let Some(inst) = bridge.authenticate(id, key, ip).cloned() else {
+    let Some(inst) = bridge.authenticate(id, key, ip) else {
         tracing::warn!(institution = id, ?ip, "bridge authentication failed");
         let _ = send(
             &mut tx,
@@ -183,6 +302,26 @@ async fn run(hub: Arc<Hub>, bridge: Arc<Bridge>, socket: WebSocket, ip: Option<I
         "bridge session up"
     );
 
+    let sid = bridge.open_session(SessionStat {
+        institution: inst.id.clone(),
+        server: hello["server"]
+            .as_str()
+            .unwrap_or_default()
+            .chars()
+            .take(64)
+            .collect(),
+        plugin: hello["plugin"]
+            .as_str()
+            .unwrap_or_default()
+            .chars()
+            .take(32)
+            .collect(),
+        ip: ip.map(|i| i.to_string()),
+        since_ms: now_ms(),
+        last_ms: now_ms(),
+        ..Default::default()
+    });
+    let _guard = SessionGuard(bridge.clone(), sid);
     // Subscribe before the welcome so nothing is missed.
     let mut quotes = hub.subscribe_quotes();
     let mut accounts = hub.subscribe_accounts();
@@ -237,7 +376,23 @@ async fn run(hub: Arc<Hub>, bridge: Arc<Bridge>, socket: WebSocket, ip: Option<I
                 last_seen = Instant::now();
                 match m {
                     Some(Ok(Message::Text(t))) => {
-                        for out in s.on_frame(&t).await {
+                        let outs = s.on_frame(&t).await;
+                        let is_order = serde_json::from_str::<Value>(&t).is_ok_and(|v| v["t"] == "order");
+                        bridge.stat(sid, |st| {
+                            st.last_ms = now_ms();
+                            if is_order {
+                                st.orders += 1;
+                            }
+                            for o in &outs {
+                                match o["t"].as_str() {
+                                    Some("reject") => st.rejects += 1,
+                                    Some("fill") if o["done"] == true => st.fills += 1,
+                                    Some("reconcile_result") => st.reconcile_ok = o["ok"].as_bool(),
+                                    _ => {}
+                                }
+                            }
+                        });
+                        for out in outs {
                             if send(&mut tx, out).await.is_err() { break; }
                         }
                     }
@@ -261,6 +416,11 @@ async fn run(hub: Arc<Hub>, bridge: Arc<Bridge>, socket: WebSocket, ip: Option<I
                     if let AccountEvent::Order(u) = &*ev {
                         if u.account_id == s.inst.account {
                             if let Some(out) = s.on_order_update(u) {
+                                bridge.stat(sid, |st| match out["t"].as_str() {
+                                    Some("fill") if out["done"] == true => st.fills += 1,
+                                    Some("reject") => st.rejects += 1,
+                                    _ => {}
+                                });
                                 if send(&mut tx, out).await.is_err() { break; }
                             }
                         }

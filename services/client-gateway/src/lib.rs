@@ -48,6 +48,7 @@ pub fn router_with_bridge(hub: Arc<Hub>, bridge: Option<Arc<bridge::Bridge>>) ->
             .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024));
     }
     if let Some(b) = bridge {
+        b.spawn_tasks();
         r = r
             .route("/bridge", get(bridge::handler))
             .layer(axum::Extension(b));

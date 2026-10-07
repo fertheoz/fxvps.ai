@@ -16,6 +16,7 @@ export class ForbiddenError extends Error {
   }
 }
 
+const inst: import("./types").Institution[] = [];
 const clone = <T,>(v: T): T => structuredClone(v);
 
 /** In-browser fake backend. State lives in memory; seeded deterministically. */
@@ -471,6 +472,15 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
 
     async listFixSessions() { tick(); return delay(s.fix); },
+    async listInstitutions() { return delay({ institutions: inst, endpoint: "wss://trade.fxvps.ai/bridge", statusAt: Date.now() }); },
+    async createInstitution(r) {
+      const i = { id: r.id ?? "kurum", name: r.name ?? "", account: r.account, ordersPerSec: r.ordersPerSec ?? 100, ips: r.ips ?? [], createdNs: Date.now() * 1e6, sessions: [] };
+      inst.push(i);
+      return delay({ institution: i, key: "fxk_mock_" + Math.random().toString(16).slice(2) });
+    },
+    async updateInstitution(id, r) { const i = inst.find((x) => x.id === id)!; Object.assign(i, { account: r.account, ordersPerSec: r.ordersPerSec ?? i.ordersPerSec, ips: r.ips ?? i.ips }); return delay(i); },
+    async rotateInstitutionKey() { return delay({ key: "fxk_mock_" + Math.random().toString(16).slice(2) }); },
+    async deleteInstitution(id) { inst.splice(inst.findIndex((x) => x.id === id), 1); return delay({ ok: true }); },
     async reconnect(id, actor) {
       guard(actor, "lp.reconnect");
       const f = s.fix.find((x) => x.id === id);

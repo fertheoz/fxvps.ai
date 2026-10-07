@@ -522,6 +522,13 @@ export interface AdminApi {
   applyPreset(presetId: string, groupId: string, actor: Actor): Promise<Group>;
 
   listFixSessions(): Promise<FixSession[]>;
+  /** MT5 plugin bridge institutions (+ live sessions). */
+  listInstitutions(): Promise<InstitutionList>;
+  /** Creates an institution; the key is returned once. */
+  createInstitution(req: InstitutionReq, actor: Actor): Promise<{ institution: Institution; key: string }>;
+  updateInstitution(id: string, req: InstitutionReq, actor: Actor): Promise<Institution>;
+  rotateInstitutionKey(id: string, actor: Actor): Promise<{ key: string }>;
+  deleteInstitution(id: string, actor: Actor): Promise<{ ok: boolean }>;
   reconnect(sessionId: string, actor: Actor): Promise<FixSession>;
   /** Managed fix-gateway config; passwords are never returned (`password_set` instead). */
   getLpConfig(): Promise<LpConfig | null>;
@@ -658,4 +665,38 @@ export interface LpConfig {
   enabled?: boolean;
   /** Failed logons in a row before a session stops retrying. */
   max_logon_failures?: number;
+}
+
+export interface BridgeSession {
+  institution: string;
+  server: string;
+  plugin: string;
+  ip: string | null;
+  since_ms: number;
+  last_ms: number;
+  orders: number;
+  fills: number;
+  rejects: number;
+  reconcile_ok: boolean | null;
+}
+export interface Institution {
+  id: string;
+  name: string;
+  account: string;
+  ordersPerSec: number;
+  ips: string[];
+  createdNs: number;
+  sessions: BridgeSession[];
+}
+export interface InstitutionList {
+  institutions: Institution[];
+  endpoint: string;
+  statusAt: number | null;
+}
+export interface InstitutionReq {
+  id?: string;
+  name?: string;
+  account: string;
+  ordersPerSec?: number;
+  ips?: string[];
 }
