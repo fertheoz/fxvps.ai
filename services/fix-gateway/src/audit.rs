@@ -329,6 +329,11 @@ impl Auditor {
         self.incident(now_ms, Kind::LpTradeUnseen, lp, symbol, None, d);
     }
 
+    /// Marks an ExecID (`lp:exec`) as seen on the wire (restored from disk at start-up).
+    pub fn mark_seen(&mut self, key: String) {
+        self.seen_exec.insert(key);
+    }
+
     /// The core rejected an order before it reached the LP (gateway / session).
     pub fn on_command_rejected(&mut self, cl: &str) {
         if let Some(t) = self.orders.get_mut(cl) {
