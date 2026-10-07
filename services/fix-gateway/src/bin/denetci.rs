@@ -8,6 +8,10 @@
 //! for symbol / contract sizes), DENETCI_PRIMARY (LMAX), DENETCI_STAGING (SIM),
 //! DENETCI_STATUS_FILE (OK/HATA line for the alert engine).
 //!
+//! DENETCI_LP_ACCOUNT (LMAX account id): every TRADES_EVERY the LP's own trade
+//! list (TradeCaptureReportRequest) is fetched and compared by ExecID with
+//! what we saw on the wire; trades from other channels join the LP net.
+//!
 //! Settings (console, `denetim/ayar.json`): `{"autoheal": false, "maxLots": 5,
 //! "maxPerMin": 5}`. Corrections are logged to `denetim/duzeltmeler.jsonl`.
 
@@ -25,9 +29,18 @@ fn now_ns() -> u64 {
     domain::now_ns()
 }
 
-/// Core symbol (EURUSD) -> (LP symbol, LP qty per engine lot).
-fn symbol_map(files: &[PathBuf]) -> HashMap<String, (String, Fixed)> {
+const TRADES_EVERY: Duration = Duration::from_secs(300);
+/// Overlap between consecutive trade-list windows (ExecIDs de-duplicate).
+const TRADES_OVERLAP_MS: u64 = 120_000;
+
+fn fix_ts(ms: u64) -> String {
+    fix_codec::time::utc_timestamp(std::time::UNIX_EPOCH + Duration::from_millis(ms))
+}
+
+/// Core symbol (EURUSD) -> (LP symbol, LP qty per engine lot); SecurityID -> LP symbol.
+fn symbol_map(files: &[PathBuf]) -> (HashMap<String, (String, Fixed)>, HashMap<String, String>) {
     let mut m = HashMap::new();
+    let mut by_id = HashMap::new();
     for f in files {
         let Ok(b) = std::fs::read(f) else {
             tracing::warn!(file = %f.display(), "LP config unreadable");
@@ -50,9 +63,38 @@ fn symbol_map(files: &[PathBuf]) -> HashMap<String, (String, Fixed)> {
             let per_lot = Fixed::from_parts(lot * 1_0000 / cs, 4);
             m.entry(lp_sym.replace('/', ""))
                 .or_insert((lp_sym.to_string(), per_lot));
+            if let Some(id) = i["security_id"].as_str() {
+                by_id.entry(id.to_string()).or_insert(lp_sym.to_string());
+            }
         }
     }
-    m
+    (m, by_id)
+}
+
+/// Fields of one TradeCaptureReport (AE), as the gateway publishes them.
+fn parse_ae(
+    fields: &[(u32, String)],
+    by_id: &HashMap<String, String>,
+) -> Option<(String, String, Side, Fixed, Fixed, bool)> {
+    let get = |t: u32| {
+        fields
+            .iter()
+            .find(|(k, _)| *k == t)
+            .map(|(_, v)| v.as_str())
+    };
+    let exec = get(17)?.to_string();
+    let symbol = get(48)
+        .and_then(|id| by_id.get(id).cloned())
+        .or_else(|| get(55).map(str::to_string))?;
+    let side = match get(54)? {
+        "1" => Side::Buy,
+        "2" => Side::Sell,
+        _ => return None,
+    };
+    let qty: Fixed = get(32)?.parse().ok()?;
+    let px: Fixed = get(31)?.parse().ok()?;
+    let last = get(912) == Some("Y");
+    Some((exec, symbol, side, qty, px, last))
 }
 
 /// The core's cumulative LP net per (LP, LP symbol) from the engine snapshot.
@@ -153,7 +195,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .split(',')
         .map(|s| PathBuf::from(s.trim()))
         .collect();
-    let map = symbol_map(&files);
+    let (map, by_id) = symbol_map(&files);
+    let lp_account = std::env::var("DENETCI_LP_ACCOUNT")
+        .ok()
+        .filter(|v| !v.is_empty());
     let cfg = AuditCfg {
         primary: env("DENETCI_PRIMARY", "LMAX"),
         staging: env("DENETCI_STAGING", "SIM")
@@ -174,6 +219,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     let mut sent: VecDeque<u64> = VecDeque::new(); // correction timestamps (rate limit)
     let mut seq = 0u64;
+    // LP trade list: window end of the last completed request; an open request
+    let mut trades_to_ms: Option<u64> = None;
+    let mut trades_open: Option<(String, u64)> = None; // (req id, window end)
+    let mut trades_tick = tokio::time::interval(TRADES_EVERY);
+    trades_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // a zero point taken earlier is re-applied quietly at start-up: from then
     // on the primary LP holds what the core booked at the primary and at the
     // staging LPs together (the staging legs were squared by hand)
@@ -207,8 +257,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         a.on_exec(&lp, &x, now_ns());
                     }
-                    Ok(GatewayEvent::CommandRejected { cl_ord_id, .. }) => a.on_command_rejected(&cl_ord_id),
+                    Ok(GatewayEvent::CommandRejected { cl_ord_id, reason }) => {
+                        if trades_open.as_ref().is_some_and(|(id, _)| *id == cl_ord_id) {
+                            tracing::error!(%reason, "trade list request refused");
+                            trades_open = None;
+                        } else {
+                            a.on_command_rejected(&cl_ord_id);
+                        }
+                    }
+                    Ok(GatewayEvent::LpMessage { msg_type, fields }) => {
+                        let lp = lp_of(&m.subject);
+                        let get = |t: u32| fields.iter().find(|(k, _)| *k == t).map(|(_, v)| v.as_str());
+                        let ours = trades_open.as_ref().is_some_and(|(id, _)| get(568) == Some(id.as_str()));
+                        match msg_type.as_str() {
+                            "AQ" if ours => {
+                                let ok = get(749) == Some("0") && get(750) == Some("0");
+                                if !ok {
+                                    tracing::error!(result = ?get(749), status = ?get(750), text = ?get(58), "trade list request rejected by the LP");
+                                    trades_open = None;
+                                } else if get(748) == Some("0") {
+                                    trades_to_ms = trades_open.take().map(|(_, to)| to);
+                                }
+                            }
+                            "AE" if ours => {
+                                if let Some((exec, symbol, side, qty, px, last)) = parse_ae(&fields, &by_id) {
+                                    a.on_lp_trade(&lp, &exec, &symbol, side, qty, px, now_ns() / 1_000_000);
+                                    if last {
+                                        trades_to_ms = trades_open.take().map(|(_, to)| to);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     _ => {}
+                }
+            }
+            _ = trades_tick.tick(), if lp_account.is_some() => {
+                let now_ms = now_ns() / 1_000_000;
+                if trades_open.as_ref().is_some_and(|(_, to)| now_ms.saturating_sub(*to) > 2 * TRADES_EVERY.as_millis() as u64) {
+                    tracing::warn!("trade list request without an answer; retrying");
+                    trades_open = None;
+                }
+                if trades_open.is_none() {
+                    let from = trades_to_ms
+                        .map(|t| t.saturating_sub(TRADES_OVERLAP_MS))
+                        .or_else(|| reset_at(&dir))
+                        .unwrap_or(a.started_ms);
+                    let to = now_ms.saturating_sub(2_000); // the LP's own clock may lag slightly
+                    if to > from {
+                        seq += 1;
+                        let id = format!("T{}", now_ms % 100_000_000 * 10 + seq % 10);
+                        let cmd = OrderCommand::Trades { req_id: id.clone(), from: fix_ts(from), to: fix_ts(to), account: lp_account.clone() };
+                        match client.request(format!("fx.lp.{primary}.orders"), serde_json::to_vec(&cmd)?.into()).await {
+                            Ok(r) if &r.payload[..] == b"ok" => trades_open = Some((id, to)),
+                            Ok(r) => tracing::error!(reply = %String::from_utf8_lossy(&r.payload), "trade list request refused"),
+                            Err(e) => tracing::error!(%e, "trade list request failed"),
+                        }
+                    }
                 }
             }
             _ = tick.tick() => {
@@ -279,6 +385,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let mut st = a.status(now_ms);
                 st["autoheal"] = json!(autoheal);
+                st["lpTradesTo"] = json!(trades_to_ms);
                 st["maxLots"] = json!(max_lots.to_string());
                 let tmp = dir.join("durum.json.tmp");
                 if std::fs::write(&tmp, st.to_string()).is_ok() {

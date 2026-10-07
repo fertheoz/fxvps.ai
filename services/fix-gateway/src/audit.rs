@@ -10,7 +10,7 @@
 //! and, per LP and symbol, the net the LP filled equals the net the core
 //! believes it holds. Latency (send -> ack, send -> fill) is measured per LP.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use domain::{ExecType, Execution, Fixed, Order, OrderStatus, Side};
 use serde::Serialize;
@@ -55,6 +55,9 @@ pub enum Kind {
     LimitBreach,
     /// Per LP/symbol net of LP fills differs from the core's record.
     NetMismatch,
+    /// The LP's trade list has a trade we never saw on our FIX session
+    /// (web / other channel). It is added to the LP net.
+    LpTradeUnseen,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -135,6 +138,9 @@ pub struct Auditor {
     /// Core net at start (baseline) and since when a mismatch has persisted.
     engine0: Option<BTreeMap<NetKey, Fixed>>,
     mismatch_since: HashMap<NetKey, u64>,
+    /// ExecIDs seen on the wire or in the LP's trade list.
+    seen_exec: HashSet<String>,
+    pub lp_trades_checked: u64,
     /// Last LP execution per (LP, symbol), ms: the core's record must be
     /// newer than this before the symbol is compared.
     last_exec_ms: HashMap<NetKey, u64>,
@@ -206,6 +212,9 @@ impl Auditor {
             .insert((lp.to_string(), x.symbol.clone()), now_ms);
         let trade = matches!(x.exec_type, ExecType::Trade);
         let last = x.last_qty.filter(|q| q.is_positive());
+        if trade && last.is_some() {
+            self.seen_exec.insert(format!("{lp}:{}", x.exec_id));
+        }
         if trade {
             if let Some(q) = last {
                 let k = (lp.to_string(), x.symbol.clone());
@@ -290,6 +299,34 @@ impl Auditor {
         for (k, d) in found {
             self.incident(now_ms, k, &tlp, &tsym, Some(&cl), d);
         }
+    }
+
+    /// One trade from the LP's own list (TradeCaptureReport). A trade we never
+    /// saw on the wire (web channel, another system) is an incident and joins
+    /// the LP net, so the net comparison and the corrections cover it.
+    pub fn on_lp_trade(
+        &mut self,
+        lp: &str,
+        exec_id: &str,
+        symbol: &str,
+        side: Side,
+        qty: Fixed,
+        px: Fixed,
+        now_ms: u64,
+    ) {
+        self.lp_trades_checked += 1;
+        let key = format!("{lp}:{exec_id}");
+        if !self.seen_exec.insert(key) {
+            return;
+        }
+        let k = (lp.to_string(), symbol.to_string());
+        let signed = if side == Side::Buy { qty } else { -qty };
+        let e = self.net.entry(k).or_insert(Fixed::from_int(0));
+        *e = *e + signed;
+        self.last_exec_ms
+            .insert((lp.to_string(), symbol.to_string()), now_ms);
+        let d = format!("{side:?} {qty} @ {px} (exec {exec_id}) not seen on our FIX session");
+        self.incident(now_ms, Kind::LpTradeUnseen, lp, symbol, None, d);
     }
 
     /// The core rejected an order before it reached the LP (gateway / session).
@@ -509,6 +546,7 @@ impl Auditor {
             "net": self.net.iter().map(|(k, v)| serde_json::json!({"lp": k.0, "symbol": k.1, "qty": v.to_string()})).collect::<Vec<_>>(),
             "openMismatches": open_mismatch,
             "incidentsTotal": self.total_incidents,
+            "lpTradesChecked": self.lp_trades_checked,
             "correctionsSent": self.corrections_sent,
             "resetMs": self.reset_ms,
             "incidents": self.incidents.iter().rev().take(100).collect::<Vec<_>>(),
@@ -744,6 +782,65 @@ mod tests {
         c2.insert(key("LMAX", "GBP/USD"), px("-1"));
         a.compare_at(&c2, 21_000, 21_000);
         assert_eq!(a.status(21_000)["ok"], true);
+    }
+
+    #[test]
+    fn lp_trade_list_finds_web_trades_and_ignores_what_we_saw() {
+        let mut a = Auditor::new(AuditCfg::default(), 0);
+        let core = BTreeMap::new();
+        a.compare(&core, 0);
+        a.on_order("LMAX", &order("LP-1", Side::Buy, "1", None), 0);
+        let mut x = exec(
+            Some("LP-1"),
+            Side::Buy,
+            Some(("1", "1.1")),
+            OrderStatus::Filled,
+        );
+        x.exec_id = "E1".into();
+        a.on_exec("LMAX", &x, MS);
+        // the LP's list: our fill (known) + a web trade (unseen)
+        a.on_lp_trade(
+            "LMAX",
+            "E1",
+            "EUR/USD",
+            Side::Buy,
+            px("1"),
+            px("1.1"),
+            2_000,
+        );
+        a.on_lp_trade(
+            "LMAX",
+            "W7",
+            "EUR/USD",
+            Side::Sell,
+            px("2"),
+            px("1.1"),
+            2_000,
+        );
+        a.on_lp_trade(
+            "LMAX",
+            "W7",
+            "EUR/USD",
+            Side::Sell,
+            px("2"),
+            px("1.1"),
+            3_000,
+        ); // repeated list: once
+        assert_eq!(a.total_incidents, 1);
+        assert_eq!(a.incidents[0].kind, Kind::LpTradeUnseen);
+        // the web trade is now part of the LP net: core (+1) vs LP (1 - 2 = -1)
+        let mut c = BTreeMap::new();
+        c.insert(key("LMAX", "EUR/USD"), px("1"));
+        a.compare_at(&c, 5_000, 5_000);
+        let fix = a.compare_at(&c, 12_000, 12_000);
+        assert_eq!(
+            fix,
+            vec![Correction {
+                lp: "LMAX".into(),
+                symbol: "EUR/USD".into(),
+                qty: px("2")
+            }]
+        );
     }
 
     #[test]

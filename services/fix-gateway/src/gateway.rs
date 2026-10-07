@@ -96,6 +96,16 @@ pub enum OrderCommand {
         #[serde(default)]
         fields: Vec<(u32, String)>,
     },
+    /// TradeCaptureReportRequest (AD): the LP answers with an ack (AQ) and one
+    /// TradeCaptureReport (AE) per trade in [`from`, `to`] (FIX UTC timestamps,
+    /// `YYYYMMDD-HH:MM:SS.sss`), published as [`GatewayEvent::LpMessage`].
+    Trades {
+        req_id: String,
+        from: String,
+        to: String,
+        #[serde(default)]
+        account: Option<String>,
+    },
 }
 
 impl OrderCommand {
@@ -104,6 +114,7 @@ impl OrderCommand {
             OrderCommand::Submit(o) | OrderCommand::Replace { order: o, .. } => &o.cl_ord_id,
             OrderCommand::Cancel { cl_ord_id, .. } => cl_ord_id,
             OrderCommand::Positions { req_id, .. } => req_id,
+            OrderCommand::Trades { req_id, .. } => req_id,
         }
     }
 }
@@ -606,6 +617,28 @@ fn to_body(cfg: &GatewayConfig, c: &OrderCommand) -> Result<Body, String> {
             }
             Body::Unknown {
                 msg_type: "AN".into(),
+                fields: f,
+            }
+        }
+        OrderCommand::Trades {
+            req_id,
+            from,
+            to,
+            account,
+        } => {
+            let mut f: Vec<(u32, Vec<u8>)> = vec![
+                (568, req_id.clone().into_bytes()), // TradeRequestID
+                (569, b"1".to_vec()),               // matched trades
+                (263, b"0".to_vec()),               // snapshot
+            ];
+            if let Some(a) = account {
+                f.push((1, a.clone().into_bytes()));
+            }
+            f.push((580, b"2".to_vec())); // NoDates
+            f.push((60, from.clone().into_bytes()));
+            f.push((60, to.clone().into_bytes()));
+            Body::Unknown {
+                msg_type: "AD".into(),
                 fields: f,
             }
         }

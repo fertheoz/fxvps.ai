@@ -411,9 +411,11 @@ impl<S: MessageStore> Session<S> {
                     )));
                 }
             }
-            // Position replies (RequestForPositionsAck / PositionReport) are
-            // delivered raw: the application decodes them (omnibus reconciliation).
-            Body::Unknown { ref msg_type, .. } if matches!(msg_type.as_str(), "AO" | "AP") => {
+            // Position / trade-capture replies (AO/AP, AQ/AE) are delivered raw:
+            // the application decodes them (reconciliation).
+            Body::Unknown { ref msg_type, .. }
+                if matches!(msg_type.as_str(), "AO" | "AP" | "AQ" | "AE") =>
+            {
                 out.push(Action::Deliver(Box::new(msg)))
             }
             Body::Unknown { ref msg_type, .. } => {
