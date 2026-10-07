@@ -90,6 +90,7 @@ function GroupDialog({ group, onClose }: { group: Group; onClose: () => void }) 
           onChange={(v) => set("symbolMarkups", parseSymbolMarkups(v))}
         />
         <NumField label={t("groups.maxSlippage")} value={draft.maxSlippagePoints ?? 0} onChange={(v) => set("maxSlippagePoints", v > 0 ? v : null)} step={1} />
+        <NumField label={t("groups.weekendLeverage")} value={draft.weekendLeverage ?? 0} onChange={(v) => set("weekendLeverage", v > 0 ? v : null)} step={1} />
         <SelectField label={t("groups.priceImprovement")} value={draft.passPriceImprovement ? "client" : "broker"} options={["client", "broker"] as const} onChange={(v) => set("passPriceImprovement", v === "client")} />
         <NumField label={t("groups.swapMult")} value={draft.swapMultiplier} onChange={(v) => set("swapMultiplier", v)} error={errors.swapMultiplier} step={0.1} />
       </div>

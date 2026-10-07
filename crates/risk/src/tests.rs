@@ -336,3 +336,37 @@ fn sessions_and_holidays() {
     .validate()
     .is_err());
 }
+
+#[test]
+fn weekend_window_boundaries() {
+    use crate::in_weekend_window;
+    let at = |y_m_d_h: u64| y_m_d_h * 1_000_000_000;
+    // 2026-10-09 is a Friday
+    let fri = 1_791_504_000u64; // 2026-10-09 00:00:00 UTC
+    assert!(!in_weekend_window(at(fri + 19 * 3600 + 3599)));
+    assert!(in_weekend_window(at(fri + 20 * 3600)));
+    assert!(in_weekend_window(at(fri + 86_400 + 12 * 3600))); // Saturday noon
+    assert!(in_weekend_window(at(fri + 2 * 86_400 + 21 * 3600 + 3599))); // Sunday 21:59
+    assert!(!in_weekend_window(at(fri + 2 * 86_400 + 22 * 3600))); // Sunday 22:00 open
+    assert!(!in_weekend_window(at(fri + 3 * 86_400 + 10 * 3600))); // Monday
+}
+
+#[test]
+fn leverage_at_takes_the_lowest_active_cap() {
+    let mut g = GroupConfig::retail("g", USD, Routing::BBook);
+    g.leverage = 500;
+    g.weekend_leverage = Some(100);
+    g.leverage_windows.push(crate::LeverageWindow {
+        from_ns: 10,
+        to_ns: 20,
+        leverage: 50,
+    });
+    let monday = (1_791_504_000u64 + 3 * 86_400) * 1_000_000_000;
+    let saturday = (1_791_504_000u64 + 86_400) * 1_000_000_000;
+    assert_eq!(g.leverage_at(monday), 500);
+    assert_eq!(g.leverage_at(saturday), 100);
+    assert_eq!(g.leverage_at(15), 50);
+    assert_eq!(g.leverage_at(20), 500, "window end is exclusive");
+    assert!(matches!(g.at(monday), std::borrow::Cow::Borrowed(_)));
+    assert_eq!(g.at(saturday).leverage, 100);
+}

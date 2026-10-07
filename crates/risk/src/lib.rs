@@ -354,6 +354,27 @@ pub struct GroupConfig {
     /// Swap scale in percent (100 = the symbol's swap, 0 = swap-free group).
     #[serde(default = "hundred_u32")]
     pub swap_multiplier_pct: u32,
+    /// Leverage cap from Friday 20:00 to Sunday 22:00 UTC (weekend gap risk).
+    #[serde(default)]
+    pub weekend_leverage: Option<u32>,
+    /// Ad-hoc caps (news events): `leverage` applies from `from_ns` to `to_ns`.
+    #[serde(default)]
+    pub leverage_windows: Vec<LeverageWindow>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub struct LeverageWindow {
+    pub from_ns: u64,
+    pub to_ns: u64,
+    pub leverage: u32,
+}
+
+/// Friday 20:00 UTC .. Sunday 22:00 UTC.
+pub fn in_weekend_window(now_ns: u64) -> bool {
+    let secs = now_ns / 1_000_000_000;
+    let day = (secs / 86_400 + 4) % 7; // 1970-01-01 was a Thursday; 0 = Sunday
+    let hour = (secs % 86_400) / 3_600;
+    matches!((day, hour), (5, 20..) | (6, _) | (0, ..22))
 }
 
 fn hundred_u32() -> u32 {
@@ -391,6 +412,8 @@ impl GroupConfig {
             pass_price_improvement: true,
             commission: None,
             swap_multiplier_pct: 100,
+            weekend_leverage: None,
+            leverage_windows: Vec::new(),
         }
     }
 
@@ -404,6 +427,31 @@ impl GroupConfig {
             Side::Buy => self.markup_ask_points.unwrap_or(self.markup_points),
             Side::Sell => self.markup_bid_points.unwrap_or(self.markup_points),
         }
+    }
+
+    /// Group leverage capped by the weekend / news windows active at `now_ns`.
+    pub fn leverage_at(&self, now_ns: u64) -> u32 {
+        let mut lev = self.leverage;
+        if let Some(w) = self.weekend_leverage.filter(|_| in_weekend_window(now_ns)) {
+            lev = lev.min(w);
+        }
+        for w in &self.leverage_windows {
+            if (w.from_ns..w.to_ns).contains(&now_ns) {
+                lev = lev.min(w.leverage);
+            }
+        }
+        lev.max(1)
+    }
+
+    /// This group as risk sees it at `now_ns` (time-windowed leverage).
+    pub fn at(&self, now_ns: u64) -> std::borrow::Cow<'_, GroupConfig> {
+        let lev = self.leverage_at(now_ns);
+        if lev == self.leverage {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut g = self.clone();
+        g.leverage = lev;
+        std::borrow::Cow::Owned(g)
     }
 
     pub fn effective_leverage(&self, spec: &SymbolSpec) -> u32 {
