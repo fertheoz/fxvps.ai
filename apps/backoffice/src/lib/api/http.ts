@@ -149,6 +149,7 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     listInstitutions: () => call("GET", "/v1/bridge/institutions"),
     getAudit: () => call("GET", "/v1/denetim"),
     saveAuditSettings: (s, actor) => call("PUT", "/v1/denetim", s, actor),
+    resetAudit: (actor) => call("POST", "/v1/denetim/reset", {}, actor),
     createInstitution: (r, actor) => call("POST", "/v1/bridge/institutions", r, actor),
     updateInstitution: (id, r, actor) => call("PUT", `/v1/bridge/institutions/${enc(id)}`, r, actor),
     rotateInstitutionKey: (id, actor) => call("POST", `/v1/bridge/institutions/${enc(id)}/rotate-key`, {}, actor),

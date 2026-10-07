@@ -475,6 +475,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     async listFixSessions() { tick(); return delay(s.fix); },
     async getAudit() { return delay({ status: null, settings: auditSettings, corrections: [] }); },
     async saveAuditSettings(s) { auditSettings = s; return delay(s); },
+    async resetAudit() { return delay({ resetAt: Date.now() }); },
     async listInstitutions() { return delay({ institutions: inst, endpoint: "wss://trade.fxvps.ai/bridge", statusAt: Date.now() }); },
     async createInstitution(r) {
       const i = { id: r.id ?? "kurum", name: r.name ?? "", account: r.account, ordersPerSec: r.ordersPerSec ?? 100, ips: r.ips ?? [], createdNs: Date.now() * 1e6, sessions: [] };

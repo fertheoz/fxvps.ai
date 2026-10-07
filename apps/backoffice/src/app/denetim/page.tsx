@@ -31,6 +31,8 @@ export default function DenetimPage() {
           {st && <span>{t("denetim.incidents")}: <b>{st.incidentsTotal}</b></span>}
           {st && <span>{t("denetim.corrections")}: <b>{st.correctionsSent}</b></span>}
           {st && <span>{t("denetim.autoheal")}: <Badge tone={st.autoheal ? "success" : "muted"}>{st.autoheal ? t("denetim.on") : t("denetim.off")}</Badge></span>}
+          {st?.resetMs && <span>{t("denetim.zeroAt")}: <b>{new Date(st.resetMs).toLocaleString()}</b></span>}
+          <ZeroPointButton />
         </CardContent>
       </Card>
 
@@ -104,6 +106,21 @@ export default function DenetimPage() {
         </Card>
       )}
     </div>
+  );
+}
+
+function ZeroPointButton() {
+  const t = useT();
+  const actor = useActor();
+  const mfa = useMfaOk();
+  const toast = useToast();
+  const reset = useApiMutation(() => api().resetAudit(actor), (r) => toast(`${t("denetim.zeroDone")} ${new Date(r.resetAt).toLocaleString()}`));
+  if (!actor.can("lp.manage")) return null;
+  return (
+    <Button size="sm" variant="outline" className="ml-auto" disabled={!mfa || reset.isPending} data-testid="zero-point"
+      onClick={() => { if (window.confirm(t("denetim.zeroConfirm"))) reset.mutate(undefined); }}>
+      {t("denetim.zero")}
+    </Button>
   );
 }
 

@@ -527,6 +527,8 @@ export interface AdminApi {
   /** Denetçi: LP/core reconciliation status, settings and corrections. */
   getAudit(): Promise<AuditView>;
   saveAuditSettings(s: AuditSettings, actor: Actor): Promise<AuditSettings>;
+  /** Zero point: the auditor closes its history now. */
+  resetAudit(actor: Actor): Promise<{ resetAt: number }>;
   /** Creates an institution; the key is returned once. */
   createInstitution(req: InstitutionReq, actor: Actor): Promise<{ institution: Institution; key: string }>;
   updateInstitution(id: string, req: InstitutionReq, actor: Actor): Promise<Institution>;
@@ -712,6 +714,6 @@ export interface AuditStatus {
   lps: Record<string, AuditLpStats>;
   net: { lp: string; symbol: string; qty: string }[];
   openMismatches: { lp: string; symbol: string; diff: string }[];
-  incidentsTotal: number; correctionsSent: number; incidents: AuditIncident[];
+  incidentsTotal: number; correctionsSent: number; resetMs: number | null; incidents: AuditIncident[];
 }
 export interface AuditView { status: AuditStatus | null; settings: AuditSettings; corrections: Record<string, unknown>[] }

@@ -141,6 +141,7 @@ pub struct Auditor {
     pub total_incidents: u64,
     pub corrections_sent: u64,
     pub started_ms: u64,
+    pub reset_ms: Option<u64>,
 }
 
 impl Auditor {
@@ -390,6 +391,47 @@ impl Auditor {
         out
     }
 
+    /// Zero point: from now on the primary LP is taken to hold exactly what
+    /// the core expects (both sides were flattened by hand); earlier
+    /// history is closed. Counters, latency and the incident log are kept.
+    pub fn reset(&mut self, engine: &BTreeMap<NetKey, Fixed>, now_ms: u64) {
+        let zero = Fixed::from_int(0);
+        let mut base: BTreeMap<NetKey, Fixed> = BTreeMap::new();
+        for ((lp, sym), v) in engine {
+            if *lp == self.cfg.primary || self.cfg.staging.contains(lp) {
+                let e = base
+                    .entry((self.cfg.primary.clone(), sym.clone()))
+                    .or_insert(zero);
+                *e = *e + *v;
+            }
+        }
+        let open: Vec<String> = base
+            .iter()
+            .filter(|(_, v)| !v.is_zero())
+            .map(|((_, s), v)| format!("{s} {v}"))
+            .collect();
+        self.engine0 = Some(base);
+        self.net.clear();
+        self.mismatch_since.clear();
+        self.reported.clear();
+        self.reset_ms = Some(now_ms);
+        tracing::warn!(?open, "denetim sıfır noktası");
+        if !open.is_empty() {
+            // not flat: still a valid zero point, but say so
+            self.incident(
+                now_ms,
+                Kind::NetMismatch,
+                &self.cfg.primary.clone(),
+                "*",
+                None,
+                format!(
+                    "zero point taken with open core exposure: {}",
+                    open.join(", ")
+                ),
+            );
+        }
+    }
+
     /// Records a correction order the auditor sent (tracked like any order).
     pub fn on_correction(&mut self, c: &Correction, cl_ord_id: &str, now_ns: u64) {
         let side = if c.qty.is_positive() {
@@ -439,6 +481,7 @@ impl Auditor {
             "openMismatches": open_mismatch,
             "incidentsTotal": self.total_incidents,
             "correctionsSent": self.corrections_sent,
+            "resetMs": self.reset_ms,
             "incidents": self.incidents.iter().rev().take(100).collect::<Vec<_>>(),
         })
     }
@@ -627,6 +670,29 @@ mod tests {
         assert_eq!(a.compare(&core, 8_000).len(), 1);
         assert_eq!(a.compare(&core, 9_000).len(), 1, "still proposed");
         assert_eq!(a.total_incidents, 1, "reported once");
+    }
+
+    #[test]
+    fn zero_point_closes_history_and_tracks_from_there() {
+        let mut a = Auditor::new(AuditCfg::default(), 0);
+        let mut core = BTreeMap::new();
+        core.insert(key("LMAX", "GBP/USD"), px("-3"));
+        core.insert(key("SIM", "GBP/USD"), px("-1"));
+        a.compare(&core, 0);
+        assert_eq!(a.compare(&core, 7_000).len(), 1, "old mismatch");
+        // everything was closed by hand on both sides; the core shows flat
+        // nets per LP that still sum the old legs (closes went to LMAX)
+        core.insert(key("LMAX", "GBP/USD"), px("1"));
+        a.reset(&core, 8_000);
+        assert!(
+            a.compare(&core, 20_000).is_empty(),
+            "flat after the zero point"
+        );
+        assert_eq!(a.status(20_000)["ok"], true);
+        // a new order the LP never fills shows up again
+        core.insert(key("LMAX", "GBP/USD"), px("2"));
+        a.compare(&core, 21_000);
+        assert_eq!(a.compare(&core, 28_000).len(), 1);
     }
 
     #[test]
