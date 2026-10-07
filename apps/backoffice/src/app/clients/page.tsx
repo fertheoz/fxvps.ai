@@ -18,6 +18,11 @@ export default function ClientsPage() {
   const f = useFormat();
   const { data = [] } = useApiQuery("listClients", [{}], { live: 5000 });
   const [kyc, setKyc] = React.useState<string>("all");
+  // Institution (MT5 bridge) accounts are professional counterparties, not
+  // retail clients: they live in their own view, linked to the bridge page.
+  const [kind, setKind] = React.useState<"clients" | "institutions">("clients");
+  const { data: inst } = useApiQuery("listInstitutions", [], { live: 10000 });
+  const institutionOf = React.useMemo(() => new Map((inst?.institutions ?? []).map((i) => [i.account, i])), [inst]);
   const router = useRouter();
   const [opening, setOpening] = React.useState(false);
   const actor = useActor();
@@ -25,21 +30,25 @@ export default function ClientsPage() {
 
   // Order masters followed by their sub-accounts (tree view).
   const ordered = React.useMemo(() => {
-    const filtered = data.filter((c) => kyc === "all" || c.kyc === kyc);
+    const filtered = data.filter((c) => (kyc === "all" || c.kyc === kyc) && institutionOf.has(c.id) === (kind === "institutions"));
     const masters = filtered.filter((c) => c.parentId === null);
     const out: Client[] = [];
     for (const m of masters) out.push(m, ...filtered.filter((c) => c.parentId === m.id));
     out.push(...filtered.filter((c) => c.parentId !== null && !masters.some((m) => m.id === c.parentId)));
     return out;
-  }, [data, kyc]);
+  }, [data, kyc, kind, institutionOf]);
 
   const columns = React.useMemo(() => [
     col.accessor("login", { header: t("clients.login"), cell: (c) => <span className="tabular-nums font-medium">{c.getValue()}</span> }),
     col.accessor("name", {
       header: t("clients.name"),
-      cell: (c) => c.row.original.parentId
-        ? <span className="flex items-center gap-1 pl-3 text-muted-foreground"><CornerDownRight className="h-3 w-3" />{c.getValue()}</span>
-        : c.getValue(),
+      cell: (c) => {
+        const i = institutionOf.get(c.row.original.id);
+        if (i) return <span className="flex items-center gap-2">{c.getValue()}<Badge tone="info">{t("clients.institution")} · {i.id}</Badge></span>;
+        return c.row.original.parentId
+          ? <span className="flex items-center gap-1 pl-3 text-muted-foreground"><CornerDownRight className="h-3 w-3" />{c.getValue()}</span>
+          : c.getValue();
+      },
     }),
     col.accessor("group", { header: t("clients.group"), cell: (c) => <span className="text-xs">{c.getValue()}</span> }),
     col.accessor("country", { header: t("clients.country") }),
@@ -56,7 +65,7 @@ export default function ClientsPage() {
         return <Badge tone={v < 50 ? "danger" : v < 100 ? "warning" : "muted"}>{f.num(v, 0)}%</Badge>;
       },
     }),
-  ], [t, f]);
+  ], [t, f, institutionOf]);
 
   return (
     <div data-testid="page-clients">
@@ -67,11 +76,15 @@ export default function ClientsPage() {
         onRowClick={(c) => router.push(`/clients/card/?login=${c.login}`)}
         getRowId={(c) => c.id}
         testId="clients-table"
-        toolbar={
+        toolbar={<>
+          <Select value={kind} onChange={(e) => setKind(e.target.value as "clients" | "institutions")} aria-label={t("clients.kind")} data-testid="clients-kind">
+            <option value="clients">{t("clients.kind.clients")}</option>
+            <option value="institutions">{t("clients.kind.institutions")} ({institutionOf.size})</option>
+          </Select>
           <Select value={kyc} onChange={(e) => setKyc(e.target.value)} aria-label={t("clients.kyc")}>
             <option value="all">{t("clients.kyc")}: {t("common.all")}</option>
             {KycStatus.options.map((k) => <option key={k} value={k}>{k}</option>)}
-          </Select>
+          </Select></>
         }
       />
       <OpenAccountDialog open={opening} onClose={() => setOpening(false)} onOpened={() => setOpening(false)} />
