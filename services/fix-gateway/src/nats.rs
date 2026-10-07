@@ -35,6 +35,8 @@ pub const REPLAY: Duration = Duration::from_secs(120);
 pub const ORDER_TIMEOUT: Duration = Duration::from_secs(3);
 /// A session table older than this is reported as "gateway unreachable".
 pub const STATUS_STALE: Duration = Duration::from_secs(5);
+/// Interval of the last-quote re-publication (see `serve_gateway`).
+pub const REPUBLISH: Duration = Duration::from_secs(5);
 
 pub fn prefix(lp: &str) -> String {
     let token: String = lp
@@ -110,8 +112,26 @@ pub async fn serve_gateway(
 
     let quotes = format!("{pre}.quotes");
     let evs = format!("{pre}.events");
+    // Last quote per symbol, re-published every REPUBLISH: a core that just
+    // took over (blue/green) or a symbol that rarely ticks (EUR/ILS) still
+    // gets its current price within seconds instead of at the next tick.
+    let mut last: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+    let mut republish = tokio::time::interval(REPUBLISH);
+    republish.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let result = loop {
-        match events.recv().await {
+        let next = tokio::select! {
+            ev = events.recv() => ev,
+            _ = republish.tick() => {
+                for p in last.values() {
+                    if let Err(e) = client.publish(quotes.clone(), p.clone().into()).await {
+                        warn!(error = %e, "NATS quote re-publish failed");
+                        break;
+                    }
+                }
+                continue;
+            }
+        };
+        match next {
             Ok(ev) => {
                 let Ok(payload) = serde_json::to_vec(&ev) else {
                     continue;
@@ -119,7 +139,8 @@ pub async fn serve_gateway(
                 if matches!(ev, GatewayEvent::SessionStats { .. }) {
                     continue; // carried by the status heartbeat
                 }
-                if matches!(ev, GatewayEvent::Quote(_)) {
+                if let GatewayEvent::Quote(q) = &ev {
+                    last.insert(q.symbol.clone(), payload.clone());
                     if let Err(e) = client.publish(quotes.clone(), payload.into()).await {
                         warn!(error = %e, "NATS quote publish failed");
                     }
