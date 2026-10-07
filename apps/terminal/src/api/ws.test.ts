@@ -155,18 +155,16 @@ describe('WsTradingApi against the client-gateway protocol', () => {
     api.setRetryEvery(0);
     // gateway down: every new socket fails at once
     FakeWs.server = () => undefined;
-    let refuse = true;
     FakeWs.last!.close(1006, 'gone');
     for (let i = 0; i < 12; i++) {
       await vi.advanceTimersByTimeAsync(300);
-      if (refuse) FakeWs.last?.close(1006, 'refused');
+      FakeWs.last?.close(1006, 'refused');
     }
     expect(lastConn()).toMatchObject({ state: 'disconnected' });
     const sockets = FakeWs.last;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(FakeWs.last).toBe(sockets); // no more automatic attempts
     // lightning: the gateway is back, one click reconnects
-    refuse = false;
     FakeWs.server = gateway;
     api.reconnectNow();
     await vi.advanceTimersByTimeAsync(10);
