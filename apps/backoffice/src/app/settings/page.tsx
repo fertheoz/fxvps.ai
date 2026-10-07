@@ -50,7 +50,14 @@ function SettingsForm({ initial }: { initial: Settings }) {
       <CardContent className="grid gap-3 sm:grid-cols-2">
         <TextField label={t("settings.brokerName")} value={draft.brokerName} onChange={(v) => set("brokerName", v)} error={errors.brokerName} disabled={!editable} />
         <SelectField label={t("settings.baseCurrency")} value={draft.baseCurrency} options={Object.keys(CURRENCY_MINOR_DIGITS)} onChange={(v) => set("baseCurrency", v)} disabled={!editable} />
-        <NumField label={`${t("settings.fourEyes")} (minor units)`} value={draft.fourEyesThreshold} onChange={(v) => set("fourEyesThreshold", v)} error={errors.fourEyesThreshold} step={1} disabled={!editable} />
+        <NumField
+          label={`${t("settings.fourEyes")} (${draft.baseCurrency})`}
+          value={draft.fourEyesThreshold / 10 ** (CURRENCY_MINOR_DIGITS[draft.baseCurrency] ?? 2)}
+          onChange={(v) => set("fourEyesThreshold", Math.round(v * 10 ** (CURRENCY_MINOR_DIGITS[draft.baseCurrency] ?? 2)))}
+          error={errors.fourEyesThreshold}
+          step={1}
+          disabled={!editable}
+        />
         <NumField label={t("settings.sessionTimeout")} value={draft.sessionTimeoutMin} onChange={(v) => set("sessionTimeoutMin", v)} error={errors.sessionTimeoutMin} step={1} disabled={!editable} />
         <SelectField label={t("settings.requireMfa")} value={draft.requireMfa ? "yes" : "no"} options={["yes", "no"] as const} onChange={(v) => set("requireMfa", v === "yes")} disabled={!editable} />
         <SelectField label={t("settings.defaultBook")} value={draft.defaultBook} options={Book.options} onChange={(v) => set("defaultBook", v)} disabled={!editable} />
