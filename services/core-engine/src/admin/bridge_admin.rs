@@ -322,7 +322,13 @@ pub async fn audit_settings(
     }
     let d = audit_dir(&ctx);
     std::fs::create_dir_all(&d).map_err(|e| ApiError::internal(e.to_string()))?;
-    let v = json!({"autoheal": s.autoheal, "maxLots": s.max_lots, "maxPerMin": s.max_per_min});
+    let mut v: Value = std::fs::read(d.join("ayar.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(json!({}));
+    v["autoheal"] = json!(s.autoheal);
+    v["maxLots"] = json!(s.max_lots);
+    v["maxPerMin"] = json!(s.max_per_min);
     std::fs::write(d.join("ayar.json"), v.to_string())
         .map_err(|e| ApiError::internal(e.to_string()))?;
     ctx.store.lock().await.append(
@@ -336,4 +342,28 @@ pub async fn audit_settings(
     )?;
     ctx.notify(&["getAudit", "listAudit"]);
     Ok(Json(v))
+}
+
+/// Zero point: the auditor closes its history at this moment (both sides
+/// were flattened by hand). Recorded in the admin audit log with the time.
+pub async fn audit_reset(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "lp.manage")?;
+    let d = audit_dir(&ctx);
+    std::fs::create_dir_all(&d).map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut v: Value = std::fs::read(d.join("ayar.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(json!({"autoheal": false, "maxLots": 5, "maxPerMin": 5}));
+    let at = super::routes::now_ns() / 1_000_000;
+    v["resetAt"] = json!(at);
+    std::fs::write(d.join("ayar.json"), v.to_string())
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    ctx.store.lock().await.append(
+        &actor,
+        AdminCmd::LpConfigSaved {
+            details: format!("denetçi sıfır noktası {at}"),
+        },
+    )?;
+    ctx.notify(&["getAudit", "listAudit"]);
+    Ok(Json(json!({ "resetAt": at })))
 }

@@ -92,6 +92,12 @@ fn engine_net(
     Some(out)
 }
 
+/// `resetAt` (ms) of the console's zero-point button, if any.
+fn reset_at(dir: &Path) -> Option<u64> {
+    let v: Value = serde_json::from_slice(&std::fs::read(dir.join("ayar.json")).ok()?).ok()?;
+    v["resetAt"].as_u64()
+}
+
 fn settings(dir: &Path) -> (bool, Fixed, usize) {
     let v: Value = std::fs::read(dir.join("ayar.json"))
         .ok()
@@ -161,6 +167,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     let mut sent: VecDeque<u64> = VecDeque::new(); // correction timestamps (rate limit)
     let mut seq = 0u64;
+    // a zero point taken before this start is not re-applied
+    let mut applied_reset = reset_at(&dir);
     let lp_of = |subject: &str| subject.split('.').nth(2).unwrap_or("").to_string();
 
     loop {
@@ -199,6 +207,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 a.tick(now);
                 let mut corrections: Vec<Correction> = Vec::new();
                 if let Some(core) = engine_net(&data, &map, &primary) {
+                    let r = reset_at(&dir);
+                    if r.is_some() && r != applied_reset {
+                        applied_reset = r;
+                        a.reset(&core, now_ms);
+                        append(&dir.join("duzeltmeler.jsonl"), &json!({"ts": now_ms, "event": "zero_point"}));
+                    }
                     corrections = a.compare(&core, now_ms);
                 }
                 let (autoheal, max_lots, per_min) = settings(&dir);
