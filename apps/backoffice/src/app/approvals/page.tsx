@@ -53,7 +53,10 @@ export default function ApprovalsPage() {
                   {a.status !== "pending_approval" ? (
                     <Badge tone={a.status === "applied" ? "success" : "danger"}>{a.status}{a.decidedBy ? ` · ${a.decidedBy}` : ""}</Badge>
                   ) : mine(a) ? (
-                    <Badge tone="warning">{t("approvals.own")}</Badge>
+                    <>
+                      <Badge tone="warning">{t("approvals.own")}</Badge>
+                      <Button size="sm" variant="outline" onClick={() => setRejecting(a)} disabled={!actor.can("balance.approve")} data-testid="withdraw"><X className="h-3.5 w-3.5" />{t("approvals.withdraw")}</Button>
+                    </>
                   ) : (
                     <>
                       <Button size="sm" variant="outline" onClick={() => setRejecting(a)} disabled={!actor.can("balance.approve")}><X className="h-3.5 w-3.5" />{t("approvals.reject")}</Button>

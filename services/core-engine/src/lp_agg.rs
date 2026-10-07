@@ -98,9 +98,17 @@ pub struct AggConfig {
     /// Price-sanity guard: an LP whose mid deviates from the reference LP's
     /// mid by more than this many points is ignored for the symbol (quotes
     /// and orders) until it comes back. 0 = off. Reference = enabled LP with
-    /// the lowest priority number that quotes the symbol.
-    #[serde(default)]
+    /// the lowest priority number that quotes the symbol. Default 100 points
+    /// (10 pips on 5-digit FX): a stale or broken LP can never price clients
+    /// off-market just because nobody saved a policy.
+    #[serde(default = "default_deviation")]
     pub max_deviation_points: i64,
+}
+
+pub const DEFAULT_DEVIATION_POINTS: i64 = 100;
+
+fn default_deviation() -> i64 {
+    DEFAULT_DEVIATION_POINTS
 }
 
 impl Default for AggConfig {
@@ -108,7 +116,7 @@ impl Default for AggConfig {
         AggConfig {
             mode: AggMode::BestPrice,
             lps: Vec::new(),
-            max_deviation_points: 0,
+            max_deviation_points: DEFAULT_DEVIATION_POINTS,
         }
     }
 }
