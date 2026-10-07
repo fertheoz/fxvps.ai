@@ -47,11 +47,11 @@ function mainPoint(style: ChartStyle, b: Bar) {
 }
 import { TIMEFRAMES, TIMEFRAME_SECONDS, type Bar, type Position } from '@fxvps/trading-core';
 import { getApi, trade } from '../store/api';
-import { selectOrders, selectPositions, useTerminal, type Indicators } from '../store/terminal';
+import { selectActiveAccount, selectOrders, selectPositions, useTerminal, type Indicators } from '../store/terminal';
 import { useT } from '../hooks';
 import { applyTick } from '@fxvps/trading-core';
 import { bollinger, ema, rsi, sma } from '@fxvps/trading-core';
-import { formatPrice, lotsToVolume, roundPrice, volumeToLots } from '@fxvps/trading-core';
+import { buildRates, formatMoney, formatPrice, lotsToVolume, profitMinor, roundPrice, volumeToLots } from '@fxvps/trading-core';
 import { isTauri, openChartWindow } from '../native';
 import { dragProtection, hitLine } from '../lib/chartDrag';
 import { ShapesPrimitive, timeAtX, type ShapeGeometry } from '../lib/chartShapes';
@@ -359,6 +359,33 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     }
   }, [quote, timeframe, loading, chartStyle]);
 
+  // "TP #12 · +11.55 USD": profit/loss if the position closes at that level
+  // (gross: excl. commission and swap), in the account currency.
+  const protTitle = (kind: 'sl' | 'tp', positionId: string, price: number, withPrice = false) => {
+    const base = `${kind.toUpperCase()} #${positionId}${withPrice && spec ? ` ${formatPrice(price, spec.digits)}` : ''}`;
+    const st = useTerminal.getState();
+    const acc = selectActiveAccount(st);
+    const pos = acc ? (st.positions[acc.id] ?? []).find((x) => x.id === positionId) : undefined;
+    if (!spec || !acc || !pos) return base;
+    try {
+      const m = profitMinor(spec, pos.side, pos.volume, pos.openPrice, price, acc.currency, buildRates(st.symbols, st.quotes));
+      return Number.isFinite(m) ? `${base} · ${m > 0 ? '+' : ''}${formatMoney(m)} ${acc.currency}` : base;
+    } catch {
+      return base; // no conversion rate yet
+    }
+  };
+
+  // keep the amounts current for cross-currency symbols (rates move with quotes)
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      for (const l of protRef.current) {
+        if (dragRef.current?.line === l.line) continue;
+        l.line.applyOptions({ title: protTitle(l.kind, l.positionId, l.line.options().price) });
+      }
+    }, 2000);
+    return () => window.clearInterval(id);
+  });
+
   // position & order lines
   useEffect(() => {
     const series = candleRef.current;
@@ -374,11 +401,11 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       if (p.symbol !== spec.name) continue;
       add(p.openPrice, p.side === 'buy' ? up : down, `${p.side.toUpperCase()} ${volumeToLots(p.volume)}`);
       if (p.sl !== undefined) {
-        add(p.sl, down, `SL #${p.id}`, LineStyle.Dashed);
+        add(p.sl, down, protTitle('sl', p.id, p.sl), LineStyle.Dashed);
         protRef.current.push({ line: linesRef.current[linesRef.current.length - 1]!, positionId: p.id, kind: 'sl' });
       }
       if (p.tp !== undefined) {
-        add(p.tp, up, `TP #${p.id}`, LineStyle.Dashed);
+        add(p.tp, up, protTitle('tp', p.id, p.tp), LineStyle.Dashed);
         protRef.current.push({ line: linesRef.current[linesRef.current.length - 1]!, positionId: p.id, kind: 'tp' });
       }
     }
@@ -393,7 +420,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       add(o.price, '#f59e0b', `${o.side.toUpperCase()} ${o.type.replace('_', ' ').toUpperCase()} ${volumeToLots(o.volume)}`, LineStyle.Dotted);
       if (o.limitPrice !== undefined) add(o.limitPrice, '#f59e0b', `LMT #${o.id}`, LineStyle.SparseDotted);
     }
-  }, [positions, orders, objects, spec, loading, theme, chartGen]);
+  }, [positions, orders, objects, spec, loading, theme, chartGen]); // eslint-disable-line react-hooks/exhaustive-deps -- protTitle reads the store at call time
 
   // Drag SL/TP lines -> modifyPosition (server-side protection).
   const lineAt = (clientY: number) => {
@@ -422,7 +449,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       const p = candleRef.current.coordinateToPrice(ev.clientY - el.getBoundingClientRect().top);
       if (p === null) return;
       d.price = p;
-      d.line.applyOptions({ price: p, title: `${d.kind.toUpperCase()} #${d.positionId} ${formatPrice(p, spec.digits)}` });
+      d.line.applyOptions({ price: p, title: protTitle(d.kind, d.positionId, p, true) });
     };
     const up = () => {
       window.removeEventListener('mousemove', move);
@@ -436,7 +463,10 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       const pos = acc ? (st.positions[acc] ?? []).find((x) => x.id === d.positionId) : undefined;
       const q = st.quotes[spec.name];
       const prot = pos && q ? dragProtection(pos, d.kind, d.price, spec.digits, q) : undefined;
-      const restore = () => d.line.applyOptions({ price: pos?.[d.kind] ?? d.price, title: `${d.kind.toUpperCase()} #${d.positionId}` });
+      const restore = () => {
+        const back = pos?.[d.kind] ?? d.price;
+        d.line.applyOptions({ price: back, title: protTitle(d.kind, d.positionId, back) });
+      };
       if (!acc || !pos || !prot) {
         restore();
         if (pos) st.toast('error', t('toast.rejected', { error: `invalid ${d.kind.toUpperCase()}` }));
