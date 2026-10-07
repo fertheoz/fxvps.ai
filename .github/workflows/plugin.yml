@@ -1,0 +1,39 @@
+name: mt5-plugin
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "plugin/**"
+      - ".github/workflows/plugin.yml"
+  pull_request:
+    paths:
+      - "plugin/**"
+      - ".github/workflows/plugin.yml"
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (gcc, -Werror)
+        run: cmake -S plugin -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+      - name: Build
+        run: cmake --build build -j
+      - name: Core scenarios
+        run: ctest --test-dir build --output-on-failure
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (MSVC x64, /W4 /WX)
+        run: cmake -S plugin -B build -A x64
+      - name: Build (core + WinHTTP transport + probe)
+        run: cmake --build build --config Release
+      - name: Core scenarios
+        run: ctest --test-dir build -C Release --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge_probe-win-x64
+          path: build/Release/bridge_probe.exe

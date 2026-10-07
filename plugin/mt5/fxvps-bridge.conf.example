@@ -1,0 +1,18 @@
+# fxvps MT5 bridge plugin
+institution = kurum1
+key = <fxvps konsolundan alınan kurum anahtarı>
+server = MT5-Live-1
+# iki uç: mavi/yeşil; sırayla denenir
+endpoints = wss://bridge.fxvps.ai/bridge, wss://bridge2.fxvps.ai/bridge
+# köprüye devredilen gruplar ('*' joker); diğerleri MT5'te kalır
+groups = real\*, pro\ecn
+# fxvps bağlantısı yokken: reject (istek reddedilir) | local (MT5 kendisi işler)
+fallback = reject
+# sembol adları farklıysa
+strip_suffix = .pro
+symbol.GOLD = XAUUSD
+# süreler (ms)
+heartbeat_ms = 1000
+dead_ms = 3500
+answer_timeout_ms = 60000
+reconcile_every_ms = 60000
