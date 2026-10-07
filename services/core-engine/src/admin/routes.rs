@@ -100,6 +100,10 @@ pub fn router() -> Router<AdminCtx> {
             "/v1/bridge/institutions/{id}/rotate-key",
             post(super::bridge_admin::rotate),
         )
+        .route(
+            "/v1/denetim",
+            get(super::bridge_admin::audit_status).put(super::bridge_admin::audit_settings),
+        )
         .route("/v1/lp/sessions/{id}/reconnect", post(lp_reconnect))
         .route("/v1/lp/aggregation", get(lp_agg_get).put(lp_agg_put))
         .route("/v1/reports/lp", get(lp_report))

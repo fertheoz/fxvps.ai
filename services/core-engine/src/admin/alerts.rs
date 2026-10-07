@@ -319,6 +319,33 @@ pub fn infra_conditions(ctx: &AdminCtx, now_ms: u64, grace_ms: u64) -> Vec<Condi
             }
         }
     }
+    // Denetçi (fix-gateway `denetci`): open LP/core mismatch, or the auditor stopped.
+    if let Ok(path) = std::env::var("CORE_AUDIT_STATUS_FILE") {
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            let fresh = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|d| d.as_secs() < 60);
+            if !s.starts_with("OK") {
+                out.push(Condition {
+                    kind: "audit",
+                    target: "mismatch".into(),
+                    severity: Severity::Critical,
+                    title: "LP and core positions differ".into(),
+                    detail: s.trim().chars().take(300).collect(),
+                });
+            } else if !fresh {
+                out.push(Condition {
+                    kind: "audit",
+                    target: "silent".into(),
+                    severity: Severity::Warning,
+                    title: "Auditor (denetçi) not reporting".into(),
+                    detail: s.trim().chars().take(200).collect(),
+                });
+            }
+        }
+    }
     if let Ok(path) = std::env::var("CORE_BACKUP_STATUS_FILE") {
         match std::fs::read_to_string(&path) {
             Ok(s) => {

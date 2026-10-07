@@ -106,6 +106,29 @@ services:
   # core-data/writer.lock serves (WS 8088|8089, admin 8090|8091), the other
   # waits warm (journal replayed) and takes over within ~1 s when the active
   # one stops — deploys swap colours (dagit.sh), nginx follows the open port.
+  # Denetçi: LP <-> core reconciliation per order (fix_gateway::audit); autoheal
+  # is switched on in the console (MT5 Bridge -> Denetim), off by default.
+  denetci:
+    image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-fix-gateway:${FIXVPS_TAG:-latest}
+    network_mode: host
+    entrypoint: ["/app/denetci"]
+    command: []
+    environment:
+      NATS_URL: nats://127.0.0.1:4222
+      DENETCI_DATA: /var/lib/core-engine
+      DENETCI_LP_FILES: /var/lib/fix-gateway/lp.json,/etc/fxvps/lp-sim-gateway.json
+      DENETCI_PRIMARY: LMAX
+      DENETCI_STAGING: SIM
+      DENETCI_STATUS_FILE: /var/lib/core-engine/denetim/denetim.durum
+      RUST_LOG: info
+    volumes:
+      - "./fix-store:/var/lib/fix-gateway:ro"
+      - "./core-data:/var/lib/core-engine"
+      - "./lp-sim-gateway.json:/etc/fxvps/lp-sim-gateway.json:ro"
+    depends_on: [nats]
+    restart: unless-stopped
+    logging: *logs
+
   trading-blue: &trading
     image: ${FIXVPS_TAG_PREFIX:-ghcr.io/fertheoz/fxvps}-client-gateway:${FIXVPS_TAG:-latest}
     network_mode: host
@@ -122,6 +145,7 @@ services:
       # Backup / load-test status watched by the alert engine; journal auto-compaction.
       CORE_BACKUP_STATUS_FILE: /var/lib/fxvps-yedek/yedek.durum
       CORE_LOADTEST_STATUS_FILE: /var/lib/fxvps-yedek/yuk.durum
+      CORE_AUDIT_STATUS_FILE: /var/lib/core-engine/denetim/denetim.durum
       CORE_LOADTEST_RESULT_FILE: /var/lib/fxvps-yedek/yuk-sinavi/latest.json
       CORE_LP_SIM_URL: http://127.0.0.1:9882
       CORE_JOURNAL_COMPACT_MB: "256"

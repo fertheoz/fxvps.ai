@@ -524,6 +524,9 @@ export interface AdminApi {
   listFixSessions(): Promise<FixSession[]>;
   /** MT5 plugin bridge institutions (+ live sessions). */
   listInstitutions(): Promise<InstitutionList>;
+  /** Denetçi: LP/core reconciliation status, settings and corrections. */
+  getAudit(): Promise<AuditView>;
+  saveAuditSettings(s: AuditSettings, actor: Actor): Promise<AuditSettings>;
   /** Creates an institution; the key is returned once. */
   createInstitution(req: InstitutionReq, actor: Actor): Promise<{ institution: Institution; key: string }>;
   updateInstitution(id: string, req: InstitutionReq, actor: Actor): Promise<Institution>;
@@ -700,3 +703,15 @@ export interface InstitutionReq {
   ordersPerSec?: number;
   ips?: string[];
 }
+
+export interface AuditSettings { autoheal: boolean; maxLots: number; maxPerMin: number }
+export interface AuditLpStats { orders: number; fills: number; rejects: number; partial: number; ack_ms_p50: number; ack_ms_p99: number; fill_ms_p50: number; fill_ms_p99: number }
+export interface AuditIncident { ts_ms: number; kind: string; lp: string; symbol: string; cl_ord_id: string | null; detail: string }
+export interface AuditStatus {
+  at: number; startedMs: number; ok: boolean; inFlight: number; autoheal: boolean;
+  lps: Record<string, AuditLpStats>;
+  net: { lp: string; symbol: string; qty: string }[];
+  openMismatches: { lp: string; symbol: string; diff: string }[];
+  incidentsTotal: number; correctionsSent: number; incidents: AuditIncident[];
+}
+export interface AuditView { status: AuditStatus | null; settings: AuditSettings; corrections: Record<string, unknown>[] }
