@@ -1,0 +1,2 @@
+# MT5 köprüsü gece sınavı (plugin C++ + /bridge uçtan uca)
+10 4 * * * root bash /opt/fxvps.ai/plugin/tests/e2e-gece.sh >/var/log/fxvps-kopru.log 2>&1
