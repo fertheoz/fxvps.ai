@@ -638,6 +638,7 @@ pub fn group(g: &GroupConfig, all_symbols: &[String]) -> Value {
         "markupAskPoints": g.markup_ask_points,
         "symbolMarkups": g.symbol_markup_points,
         "maxSlippagePoints": g.max_slippage_points,
+        "weekendLeverage": g.weekend_leverage,
         "passPriceImprovement": g.pass_price_improvement,
         "swapMultiplier": g.swap_multiplier_pct as f64 / 100.0,
         "book": book(g.routing),

@@ -1856,6 +1856,9 @@ struct GroupDto {
     symbol_markups: Option<BTreeMap<String, i64>>,
     #[serde(default)]
     max_slippage_points: Option<i64>,
+    /// Leverage cap Friday 20:00 - Sunday 22:00 UTC (null/0 = none).
+    #[serde(default)]
+    weekend_leverage: Option<u32>,
     #[serde(default)]
     pass_price_improvement: Option<bool>,
     /// "symbol" (use the symbol's per-lot commission) | "per_lot" | "per_million"; value in minor units.
@@ -1997,6 +2000,10 @@ async fn save_group(
         cfg.symbol_markup_points = sm;
     }
     cfg.max_slippage_points = pts(g.max_slippage_points, "maxSlippagePoints")?;
+    cfg.weekend_leverage = match g.weekend_leverage.filter(|v| *v > 0) {
+        Some(v) if v > 1000 => return Err(ApiError::bad("weekendLeverage must be 1..=1000")),
+        v => v,
+    };
     if let Some(p) = g.pass_price_improvement {
         cfg.pass_price_improvement = p;
     }

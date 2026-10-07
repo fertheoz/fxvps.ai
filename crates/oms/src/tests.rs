@@ -1501,3 +1501,116 @@ fn client_deviation_tightens_the_cap() {
     h.order(o);
     assert_eq!(h.router.take()[0].limit, Some(px("1.09450")));
 }
+
+/// A-book gap: the stop-out close fills at the LP even worse than the quote;
+/// the balance goes negative only after that fill, and NBP restores zero
+/// (the broker book carries the shortfall).
+#[test]
+fn abook_gap_stop_out_and_nbp() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 0;
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "1000");
+    h.market(1, "x", Side::Buy, "0.5"); // margin 550
+    let open = h.router.take();
+    h.cmd(Command::LpFill {
+        lp_order_id: open[0].lp_order_id,
+        exec_id: "o1".into(),
+        volume: qty("0.5"),
+        price: px("1.10010"),
+    });
+    assert_eq!(h.pos(1).len(), 1);
+    // weekend gap: 200 pips down -> equity 1000 - 1000.5 < 0, far below stop-out
+    let ev = h.quote("EURUSD", "1.08000", "1.08010");
+    assert!(ev
+        .iter()
+        .any(|e| matches!(e, Event::StopOut { account: 1, .. })));
+    let close = h.router.take();
+    assert_eq!(close.len(), 1, "stop-out goes to the LP");
+    assert!(
+        close[0].limit.is_none(),
+        "stop-out is never bounded by the slippage guard"
+    );
+    // no compensation before the LP fill
+    assert!(!ev
+        .iter()
+        .any(|e| matches!(e, Event::NegativeBalanceCompensated { .. })));
+    // LP fills even lower (thin market after the gap)
+    let ev = h.cmd(Command::LpFill {
+        lp_order_id: close[0].lp_order_id,
+        exec_id: "c1".into(),
+        volume: qty("0.5"),
+        price: px("1.07900"),
+    });
+    assert!(h.pos(1).is_empty());
+    let comp = ev.iter().find_map(|e| match e {
+        Event::NegativeBalanceCompensated { account: 1, amount } => Some(*amount),
+        _ => None,
+    });
+    // loss (1.10010 - 1.07900) * 50 000 = 1055 -> balance -55 -> compensated 55
+    assert_eq!(comp, Some(usd("55")));
+    assert_eq!(h.bal(1), usd("0"));
+}
+
+#[test]
+fn abook_stop_out_rejected_by_lp_is_retried() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 0;
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "1000");
+    h.market(1, "x", Side::Buy, "0.5");
+    let open = h.router.take();
+    h.cmd(Command::LpFill {
+        lp_order_id: open[0].lp_order_id,
+        exec_id: "o1".into(),
+        volume: qty("0.5"),
+        price: px("1.10010"),
+    });
+    h.quote("EURUSD", "1.08200", "1.08210");
+    let close = h.router.take();
+    assert_eq!(close.len(), 1);
+    // LP has no liquidity right after the gap
+    h.cmd(Command::LpReject {
+        lp_order_id: close[0].lp_order_id,
+        reason: "no liquidity".into(),
+    });
+    assert_eq!(h.pos(1).len(), 1, "position still open");
+    // next tick: stop-out fires again
+    let ev = h.quote("EURUSD", "1.08190", "1.08200");
+    assert!(ev
+        .iter()
+        .any(|e| matches!(e, Event::StopOut { account: 1, .. })));
+    assert_eq!(h.router.take().len(), 1, "a new LP close order");
+}
+
+/// Weekend leverage cap: Friday 20:00 UTC the margin of open positions rises
+/// (500:1 -> 100:1); an account that cannot carry it gets the margin call
+/// before the gap, not after.
+#[test]
+fn weekend_leverage_raises_margin_before_the_gap() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("w", USD, Routing::BBook);
+    g.esma = None;
+    g.leverage = 500;
+    g.weekend_leverage = Some(100);
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "w", "1000");
+    let friday = 1_791_504_000u64 * 1_000_000_000; // 2026-10-09 00:00 UTC
+    h.ts = friday + 19 * 3_600 * 1_000_000_000;
+    h.market(1, "x", Side::Buy, "1"); // 500:1 -> margin 220
+    let r = h.e.account_risk(1).unwrap();
+    assert!(!r.is_margin_call(h.e.group("w").unwrap()));
+    h.ts = friday + 20 * 3_600 * 1_000_000_000;
+    let ev = h.quote("EURUSD", "1.10000", "1.10010");
+    // 100:1 -> margin 1100 > equity ~1000: margin call before the weekend
+    assert!(ev.contains(&Event::MarginCall { account: 1 }));
+    // new orders are checked against the weekend leverage too
+    let (ev, _) = h.order(NewOrder::market(1, "y", "EURUSD", Side::Buy, qty("1")));
+    assert!(ev.iter().any(|e| matches!(e, Event::OrderRejected { .. })));
+}

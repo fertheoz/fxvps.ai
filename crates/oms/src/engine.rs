@@ -324,7 +324,8 @@ impl Engine {
                 &self.st.quotes,
             )?)?;
         }
-        let margin = risk::total_margin(g, &self.st.symbols, views, &self.st.quotes)?;
+        let margin =
+            risk::total_margin(&g.at(self.st.now), &self.st.symbols, views, &self.st.quotes)?;
         AccountRisk::new(balance, floating, margin)
     }
 
@@ -905,7 +906,7 @@ impl Engine {
         };
         let _ = spec;
         risk::pre_trade_check(
-            g,
+            &g.at(self.st.now),
             &self.st.symbols,
             self.ledger.balance(acc.ledger_id, g.currency),
             &views,
