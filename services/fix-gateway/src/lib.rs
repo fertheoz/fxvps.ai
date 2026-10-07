@@ -3,6 +3,7 @@
 //! into [`domain::Execution`], published on a tokio broadcast channel (and NATS with the
 //! `nats` feature). Internal components submit [`OrderCommand`]s.
 
+pub mod audit;
 pub mod config;
 pub mod gateway;
 pub mod managed;

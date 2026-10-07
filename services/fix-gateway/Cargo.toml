@@ -10,6 +10,11 @@ publish.workspace = true
 name = "fix-gateway"
 path = "src/main.rs"
 
+[[bin]]
+name = "denetci"
+path = "src/bin/denetci.rs"
+required-features = ["nats"]
+
 [features]
 default = []
 nats = ["dep:async-nats", "dep:time", "dep:futures-util"]

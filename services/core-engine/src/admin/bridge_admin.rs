@@ -273,3 +273,67 @@ pub async fn remove(
     ctx.notify(&["listInstitutions", "listAudit"]);
     Ok(Json(json!({ "ok": true })))
 }
+
+// ---- Denetçi (auditor) -------------------------------------------------------
+
+fn audit_dir(ctx: &AdminCtx) -> PathBuf {
+    ctx.data_dir.join("denetim")
+}
+
+pub async fn audit_status(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "lp.view")?;
+    let d = audit_dir(&ctx);
+    let status: Value = std::fs::read(d.join("durum.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(json!(null));
+    let settings: Value = std::fs::read(d.join("ayar.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(json!({"autoheal": false, "maxLots": 5, "maxPerMin": 5}));
+    let corrections: Vec<Value> = std::fs::read_to_string(d.join("duzeltmeler.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .rev()
+        .take(100)
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    Ok(Json(
+        json!({ "status": status, "settings": settings, "corrections": corrections }),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditSettings {
+    autoheal: bool,
+    max_lots: f64,
+    max_per_min: u32,
+}
+
+pub async fn audit_settings(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(s): Json<AuditSettings>,
+) -> ApiResult {
+    need(&actor, "lp.manage")?;
+    if !(0.0..=100.0).contains(&s.max_lots) || s.max_per_min > 60 {
+        return Err(ApiError::bad("maxLots 0..100, maxPerMin 0..60"));
+    }
+    let d = audit_dir(&ctx);
+    std::fs::create_dir_all(&d).map_err(|e| ApiError::internal(e.to_string()))?;
+    let v = json!({"autoheal": s.autoheal, "maxLots": s.max_lots, "maxPerMin": s.max_per_min});
+    std::fs::write(d.join("ayar.json"), v.to_string())
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    ctx.store.lock().await.append(
+        &actor,
+        AdminCmd::LpConfigSaved {
+            details: format!(
+                "denetçi: autoheal {}, max {} lots, {}/min",
+                s.autoheal, s.max_lots, s.max_per_min
+            ),
+        },
+    )?;
+    ctx.notify(&["getAudit", "listAudit"]);
+    Ok(Json(v))
+}
