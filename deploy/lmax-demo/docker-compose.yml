@@ -147,6 +147,7 @@ services:
       CORE_BACKUP_STATUS_FILE: /var/lib/fxvps-yedek/yedek.durum
       CORE_LOADTEST_STATUS_FILE: /var/lib/fxvps-yedek/yuk.durum
       CORE_AUDIT_STATUS_FILE: /var/lib/core-engine/denetim/denetim.durum
+      CORE_BRIDGE_TEST_STATUS_FILE: /var/lib/fxvps-yedek/kopru.durum
       CORE_LOADTEST_RESULT_FILE: /var/lib/fxvps-yedek/yuk-sinavi/latest.json
       CORE_LP_SIM_URL: http://127.0.0.1:9882
       CORE_JOURNAL_COMPACT_MB: "256"
