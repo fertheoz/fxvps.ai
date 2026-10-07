@@ -411,6 +411,11 @@ impl<S: MessageStore> Session<S> {
                     )));
                 }
             }
+            // Position replies (RequestForPositionsAck / PositionReport) are
+            // delivered raw: the application decodes them (omnibus reconciliation).
+            Body::Unknown { ref msg_type, .. } if matches!(msg_type.as_str(), "AO" | "AP") => {
+                out.push(Action::Deliver(Box::new(msg)))
+            }
             Body::Unknown { ref msg_type, .. } => {
                 let rej = Reject {
                     ref_seq_num: msg.header.msg_seq_num,
