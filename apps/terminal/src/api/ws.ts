@@ -194,6 +194,8 @@ export class WsTradingApi implements TradingApi {
   private pingTimer: ReturnType<typeof setInterval> | undefined;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Auto-reconnect interval after the quick retries (ms; 0 = manual only). */
+  private retryEveryMs = 3000;
   private pingSent = new Map<bigint, number>();
   private pingNonce = 0n;
   private state: ConnectionState = 'disconnected';
@@ -770,11 +772,28 @@ export class WsTradingApi implements TradingApi {
     this.sendSubscribe([...all]);
   }
 
+  /** User-chosen retry interval (ms) once the quick retries are spent; 0 = manual only. */
+  setRetryEvery(ms: number): void {
+    this.retryEveryMs = Math.max(0, ms);
+  }
+
+  /** Reconnects now unless already connected or connecting (lightning button, back online, tab visible). */
+  reconnectNow(): void {
+    if (this.state === 'connected' || this.state === 'connecting') return;
+    this.attempt = 0;
+    clearTimeout(this.reconnectTimer);
+    void this.connect().catch(() => undefined);
+  }
+
   private scheduleReconnect(): void {
-    this.setState('reconnecting');
-    // Blue/green hand-overs take ~1 s: retry quickly first, then back off.
+    // Blue/green hand-overs take ~1 s: retry quickly first, then the user's interval.
     const n = this.attempt++;
-    const backoff = n < 10 ? 300 : Math.min(30_000, 500 * 2 ** (n - 10));
+    if (n >= 10 && this.retryEveryMs <= 0) {
+      this.setState('disconnected');
+      return;
+    }
+    this.setState('reconnecting');
+    const backoff = n < 10 ? 300 : this.retryEveryMs;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => void this.connect().catch(() => undefined), backoff);
   }

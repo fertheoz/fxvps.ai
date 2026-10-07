@@ -120,6 +120,8 @@ export interface TerminalState {
   /** Draw the ask price as a second line (candles follow the bid). */
   showAskLine: boolean;
   oneClickVolume: number;
+  /** Auto-reconnect interval (ms) after the quick retries; 0 = manual (lightning button). */
+  reconnectEveryMs: number;
   /** Max slippage for market orders in pips (0 = no client limit). */
   maxDeviationPips: number;
   // UI (transient)
@@ -176,6 +178,7 @@ export interface TerminalState {
   deleteTemplate(id: string): void;
   toggleAskLine(): void;
   setOneClickVolume(v: number): void;
+  setReconnectEvery(ms: number): void;
   setMaxDeviationPips(v: number): void;
   setToolboxTab(t: ToolboxTab): void;
   openTicket(preset?: Partial<TicketPreset>): void;
@@ -246,6 +249,7 @@ export const useTerminal = create<TerminalState>()(
       indicatorSettings: DEFAULT_INDICATOR_SETTINGS,
       showAskLine: false,
       oneClickVolume: 10,
+      reconnectEveryMs: 3000,
       maxDeviationPips: 0,
       toolboxTab: 'positions',
       ticket: null,
@@ -502,6 +506,9 @@ export const useTerminal = create<TerminalState>()(
       setOneClickVolume(oneClickVolume) {
         set({ oneClickVolume });
       },
+      setReconnectEvery(reconnectEveryMs) {
+        set({ reconnectEveryMs: Math.max(0, reconnectEveryMs) });
+      },
       setMaxDeviationPips(v) {
         set({ maxDeviationPips: Number.isFinite(v) && v > 0 ? v : 0 });
       },
@@ -567,6 +574,7 @@ export const useTerminal = create<TerminalState>()(
         indicatorSettings: s.indicatorSettings,
         showAskLine: s.showAskLine,
         oneClickVolume: s.oneClickVolume,
+        reconnectEveryMs: s.reconnectEveryMs,
         maxDeviationPips: s.maxDeviationPips,
         activeAccountId: s.activeAccountId,
       }),

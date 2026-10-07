@@ -149,6 +149,32 @@ describe('WsTradingApi against the client-gateway protocol', () => {
     api.disconnect();
   });
 
+  it('manual retry policy: quick retries, then waits for the lightning button', async () => {
+    const { api, lastConn } = setup();
+    await api.connect();
+    api.setRetryEvery(0);
+    // gateway down: every new socket fails at once
+    FakeWs.server = () => undefined;
+    let refuse = true;
+    FakeWs.last!.close(1006, 'gone');
+    for (let i = 0; i < 12; i++) {
+      await vi.advanceTimersByTimeAsync(300);
+      if (refuse) FakeWs.last?.close(1006, 'refused');
+    }
+    expect(lastConn()).toMatchObject({ state: 'disconnected' });
+    const sockets = FakeWs.last;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeWs.last).toBe(sockets); // no more automatic attempts
+    // lightning: the gateway is back, one click reconnects
+    refuse = false;
+    FakeWs.server = gateway;
+    api.reconnectNow();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(FakeWs.last).not.toBe(sockets);
+    expect(lastConn()).toMatchObject({ state: 'connected' });
+    api.disconnect();
+  });
+
   it('rejects a bad token without reconnecting', async () => {
     const { api, lastConn } = setup('bad');
     await expect(api.connect()).rejects.toThrow(/UNAUTHENTICATED/);
