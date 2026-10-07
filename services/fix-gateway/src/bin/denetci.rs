@@ -219,8 +219,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     let mut sent: VecDeque<u64> = VecDeque::new(); // correction timestamps (rate limit)
     let mut seq = 0u64;
+    // Wire ExecIDs survive restarts (else the LP's list re-reports our own
+    // older fills as unseen), as does the end of the last trade-list window.
+    let seen_file = dir.join("exec_gorulen.txt");
+    let cutoff = now_ns() / 1_000_000 - 72 * 3_600_000;
+    let mut kept = Vec::new();
+    for line in std::fs::read_to_string(&seen_file)
+        .unwrap_or_default()
+        .lines()
+    {
+        if let Some((ts, key)) = line.split_once(' ') {
+            if ts.parse::<u64>().is_ok_and(|t| t >= cutoff) {
+                a.mark_seen(key.to_string());
+                kept.push(line.to_string());
+            }
+        }
+    }
+    let _ = std::fs::write(
+        &seen_file,
+        kept.join("\n") + if kept.is_empty() { "" } else { "\n" },
+    );
+    tracing::info!(seen = kept.len(), "wire ExecIDs restored");
     // LP trade list: window end of the last completed request; an open request
-    let mut trades_to_ms: Option<u64> = None;
+    let mut trades_to_ms: Option<u64> = std::fs::read(dir.join("durum.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v["lpTradesTo"].as_u64());
     let mut trades_open: Option<(String, u64)> = None; // (req id, window end)
     let mut trades_tick = tokio::time::interval(TRADES_EVERY);
     trades_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -253,6 +277,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     "side": format!("{:?}", x.side), "qty": q.to_string(), "price": px.to_string(),
                                     "cl_ord_id": x.cl_ord_id,
                                 }));
+                            }
+                        }
+                        if matches!(x.exec_type, domain::ExecType::Trade) && x.last_qty.is_some_and(|q| q.is_positive()) {
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&seen_file) {
+                                let _ = writeln!(f, "{} {lp}:{}", now_ns() / 1_000_000, x.exec_id);
                             }
                         }
                         a.on_exec(&lp, &x, now_ns());
