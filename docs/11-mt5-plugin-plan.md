@@ -50,12 +50,12 @@ pozisyonu düşürür).
 | # | İş | Yer | Durum |
 |---|---|---|---|
 | A | Protokol belgesi + plan | `docs/10`, `docs/11` | ✅ |
-| B | Köprü sunucusu `/bridge` (kurum kimliği, fiyat akışı, emir, dolum, mutabakat, kota) | `services/client-gateway/src/bridge.rs` | ⏳ |
-| C | Kurum kayıtları (dosya; anahtar SHA-256 özetiyle) | `FXVPS_BRIDGE_FILE` | ⏳ |
-| D | Plugin çekirdeği C++ | `plugin/core` | ⏳ |
-| E | Sahte MT5 + senaryo koşucusu | `plugin/sim`, `plugin/tests` | ⏳ |
-| F | Uçtan uca: C++ plugin+sahte MT5 ↔ gerçek köprü ↔ demo motor | CI işi `plugin-e2e` | ⏳ |
-| G | WinHTTP taşıması + MT5 adaptör iskeleti (Windows derlemesi CI'da) | `plugin/win`, `plugin/mt5` | ⏳ |
+| B | Köprü sunucusu `/bridge` (kurum kimliği, fiyat akışı, emir, dolum, mutabakat, kota) | `services/client-gateway/src/bridge.rs` | ✅ #127 |
+| C | Kurum kayıtları (dosya; anahtar SHA-256 özetiyle) | `FXVPS_BRIDGE_FILE` | ✅ #127 |
+| D | Plugin çekirdeği C++ | `plugin/core` | ✅ 89/89 kontrol (ASan+UBSan) |
+| E | Sahte MT5 + senaryo koşucusu | `plugin/sim`, `plugin/tests` | ✅ |
+| F | Uçtan uca: C++ plugin+sahte MT5 ↔ gerçek köprü ↔ demo motor | `plugin/tests/e2e-sunucu.sh` | ✅ E1 1000/1000, E2 112 yoldaki emir, mutabakat OK |
+| G | WinHTTP taşıması + MT5 adaptör iskeleti (Windows derlemesi CI'da) | `plugin/win`, `plugin/mt5` | ✅ CI windows (MSVC /W4 /WX) |
 | H | Canlıya: kurum tanımı, nginx `/bridge`, demo kurumla duman testi | CT 970 | ⏳ |
 | I | Konsol "Kurumlar" sayfası | backoffice | sonra |
 | J | Gerçek MT5 adaptörü + test MT5 sunucusunda kabul | SDK gelince | bekliyor |
@@ -86,7 +86,8 @@ Sunucu (Rust, `cargo test`):
 
 Uçtan uca (CI, Linux):
 19. **E1** C++ plugin + sahte MT5 (100 login, 3 grup) ↔ `client-gateway --demo` `/bridge`: 1.000 emir, hepsi onaylanır, MT5 netleri = kurum neti.
-20. **E2** Köprü yeniden başlatılır (süreç öldürülür, yeniden açılır) → plugin yeniden bağlanır, bekleyen emirler çift yürütülmeden tamamlanır.
+20. **E2** Emirler yoldayken bağlantı kesilir → plugin yeniden bağlanır, bekleyen emirler aynı kimlikle gönderilir, hiçbiri iki kez yürütülmez. (Demo motor diske yazmadığı için süreç yeniden başlatma burada sınanmaz; motorun journal'dan dönüşü mavi/yeşil devirde ölçüldü.)
+21. **S15** Yoldaki emir varken mutabakat ertelenir (yanlış alarm yok).
 
 ## 4. Sonraki adımlar (SDK gelince)
 

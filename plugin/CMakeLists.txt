@@ -1,0 +1,47 @@
+cmake_minimum_required(VERSION 3.16)
+project(fxvps_mt5_plugin CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(FXVPS_PLUGIN_VERSION "0.1.0" CACHE STRING "plugin version")
+option(FXVPS_MT5_SDK "build the MT5 Server API adapter (needs the MetaQuotes SDK)" OFF)
+set(MT5_SDK_DIR "" CACHE PATH "MetaQuotes MT5 Server API SDK root")
+
+if(MSVC)
+  add_compile_options(/W4 /WX /permissive- /utf-8)
+else()
+  add_compile_options(-Wall -Wextra -Werror -Wno-missing-field-initializers)
+endif()
+add_compile_definitions(FXVPS_PLUGIN_VERSION="${FXVPS_PLUGIN_VERSION}")
+
+add_library(fxvps_core STATIC core/decimal.cpp core/json.cpp core/bridge.cpp)
+target_include_directories(fxvps_core PUBLIC core)
+find_package(Threads REQUIRED)
+target_link_libraries(fxvps_core PUBLIC Threads::Threads)
+
+enable_testing()
+add_executable(test_core tests/test_core.cpp)
+target_link_libraries(test_core fxvps_core)
+target_compile_definitions(test_core PRIVATE FXVPS_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME core COMMAND test_core)
+
+if(WIN32)
+  # WinHTTP WebSocket transport (TLS by the OS)
+  add_library(fxvps_win STATIC win/ws_winhttp.cpp)
+  target_link_libraries(fxvps_win PUBLIC fxvps_core winhttp)
+  add_executable(bridge_probe win/probe.cpp)
+  target_link_libraries(bridge_probe fxvps_win)
+else()
+  # plain-TCP WebSocket client for Linux end-to-end tests
+  add_library(fxvps_posix STATIC net/ws_posix.cpp)
+  target_link_libraries(fxvps_posix PUBLIC fxvps_core)
+  add_executable(e2e tests/e2e.cpp)
+  target_link_libraries(e2e fxvps_posix)
+endif()
+
+if(FXVPS_MT5_SDK)
+  # The MT5 server loads the plugin as a DLL; see mt5/README.md.
+  add_library(fxvps_mt5 SHARED mt5/plugin.cpp)
+  target_include_directories(fxvps_mt5 PRIVATE ${MT5_SDK_DIR}/Include)
+  target_link_libraries(fxvps_mt5 PRIVATE fxvps_win)
+endif()
