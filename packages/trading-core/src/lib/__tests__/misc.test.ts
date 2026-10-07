@@ -42,6 +42,15 @@ describe('vwapFill', () => {
     expect(f.filled).toBe(30);
     expect(f.avgPrice).toBe(1.1);
   });
+  it('ignores levels beyond the fill guard (stale far orders in a deep book)', () => {
+    const deep = [
+      { price: 4108.9, volume: 100 },
+      { price: 5304.57, volume: 5000 }, // 29 % away: never fillable
+    ];
+    const f = vwapFill('buy', 1000, [], deep, 2);
+    expect(f).toEqual({ filled: 100, avgPrice: 4108.9, worstPrice: 4108.9, levelsUsed: 1 });
+    expect(vwapFill('buy', 1000, [], deep, 2, 0).filled).toBe(1000);
+  });
 });
 
 describe('bars', () => {
