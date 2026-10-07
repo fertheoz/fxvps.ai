@@ -473,6 +473,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
 
     async listFixSessions() { tick(); return delay(s.fix); },
+    async getPartnerOverview() { return delay({ institutions: inst, accounts: [], positions: [], deals: [], endpoint: "wss://trade.fxvps.ai/bridge", statusAt: Date.now() }); },
     async getAudit() { return delay({ status: null, settings: auditSettings, corrections: [] }); },
     async saveAuditSettings(s) { auditSettings = s; return delay(s); },
     async resetAudit() { return delay({ resetAt: Date.now() }); },

@@ -80,6 +80,35 @@ fn status(ctx: &AdminCtx) -> Value {
         .unwrap_or(json!({"sessions": []}))
 }
 
+const DAY_NS: u64 = 86_400_000_000_000;
+
+/// `{h24, d7}` activity per institution account (engine query).
+async fn activities(
+    ctx: &AdminCtx,
+    list: &[Institution],
+) -> Result<std::collections::HashMap<String, Value>, ApiError> {
+    let accounts: Vec<(String, u64)> = list
+        .iter()
+        .filter_map(|i| i.account.parse().ok().map(|n| (i.id.clone(), n)))
+        .collect();
+    let now = super::routes::now_ns();
+    ctx.q(move |e| {
+        accounts
+            .into_iter()
+            .map(|(id, n)| {
+                (
+                    id,
+                    json!({
+                        "h24": super::views::account_activity(e, n, now.saturating_sub(DAY_NS)),
+                        "d7": super::views::account_activity(e, n, now.saturating_sub(7 * DAY_NS)),
+                    }),
+                )
+            })
+            .collect()
+    })
+    .await
+}
+
 fn view(i: &Institution, st: &Value) -> Value {
     let sessions: Vec<&Value> = st["sessions"]
         .as_array()
@@ -152,7 +181,16 @@ async fn account_problem(ctx: &AdminCtx, account: &str) -> Result<Option<String>
 pub async fn list(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "lp.view")?;
     let st = status(&ctx);
-    let list: Vec<Value> = load(&ctx)?.iter().map(|i| view(i, &st)).collect();
+    let insts = load(&ctx)?;
+    let act = activities(&ctx, &insts).await?;
+    let list: Vec<Value> = insts
+        .iter()
+        .map(|i| {
+            let mut v = view(i, &st);
+            v["activity"] = act.get(&i.id).cloned().unwrap_or(Value::Null);
+            v
+        })
+        .collect();
     Ok(Json(json!({
         "institutions": list,
         "endpoint": std::env::var("CORE_BRIDGE_PUBLIC_URL").unwrap_or_else(|_| "wss://trade.fxvps.ai/bridge".into()),
@@ -384,4 +422,72 @@ pub async fn audit_reset(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult
     )?;
     ctx.notify(&["getAudit", "listAudit"]);
     Ok(Json(json!({ "resetAt": at })))
+}
+
+// ---- Partner (institution) overview -----------------------------------------
+
+/// What an institution's own staff may see: its institutions (by tenant
+/// accounts), the account snapshots, open positions and recent deals. An
+/// operator without a tenant (admin) sees all institutions.
+pub async fn partner_overview(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "partner.view")?;
+    let allowed = super::routes::tenant_logins(&ctx, &actor).await?;
+    let st = status(&ctx);
+    let insts: Vec<Institution> = load(&ctx)?
+        .into_iter()
+        .filter(|i| {
+            allowed.as_ref().is_none_or(|set| {
+                i.account
+                    .parse::<u64>()
+                    .ok()
+                    .is_some_and(|n| set.contains(&n))
+            })
+        })
+        .collect();
+    let accounts: Vec<u64> = insts
+        .iter()
+        .filter_map(|i| i.account.parse().ok())
+        .collect();
+    let admin_state = ctx.view_state().await;
+    let (accs, positions, deals) = ctx
+        .q(move |e| {
+            let accs: Vec<Value> = accounts
+                .iter()
+                .filter_map(|id| super::views::client(e, *id, &admin_state))
+                .collect();
+            let positions: Vec<Value> = accounts
+                .iter()
+                .flat_map(|id| e.positions_of(*id))
+                .map(|p| super::views::position(e, p))
+                .collect();
+            let deals: Vec<Value> = match super::views::trades(e) {
+                Value::Array(rows) => rows
+                    .into_iter()
+                    .filter(|r| r["login"].as_u64().is_some_and(|l| accounts.contains(&l)))
+                    .rev()
+                    .take(100)
+                    .collect(),
+                _ => Vec::new(),
+            };
+            (accs, positions, deals)
+        })
+        .await?;
+    let act = activities(&ctx, &insts).await?;
+    Ok(Json(json!({
+        "institutions": insts.iter().map(|i| {
+            let mut v = view(i, &st);
+            // the partner sees its volume, not our revenue
+            let mut a = act.get(&i.id).cloned().unwrap_or(Value::Null);
+            for w in ["h24", "d7"] {
+                if let Some(o) = a[w].as_object_mut() { o.remove("revenue"); }
+            }
+            v["activity"] = a;
+            v
+        }).collect::<Vec<_>>(),
+        "accounts": accs,
+        "positions": positions,
+        "deals": deals,
+        "endpoint": std::env::var("CORE_BRIDGE_PUBLIC_URL").unwrap_or_else(|_| "wss://trade.fxvps.ai/bridge".into()),
+        "statusAt": st["at"],
+    })))
 }

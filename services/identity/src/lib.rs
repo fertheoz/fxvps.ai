@@ -35,7 +35,9 @@ use mail::Mailer;
 use store::{AuditEvent, Store};
 
 /// Roles understood by the platform.
-pub const ROLES: &[&str] = &["client", "admin", "dealer", "risk", "support", "readonly"];
+pub const ROLES: &[&str] = &[
+    "client", "admin", "dealer", "risk", "support", "readonly", "partner",
+];
 
 /// Access token claims (RS256). client-gateway reads `sub`, `exp`, `accounts`,
 /// and validates `iss` / `aud`.

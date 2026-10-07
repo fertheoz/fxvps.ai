@@ -1,6 +1,6 @@
 /** Role-based access control for the back office. Pure functions; unit tested. */
 
-export const ROLES = ["admin", "dealer", "risk", "support", "readonly"] as const;
+export const ROLES = ["admin", "dealer", "risk", "support", "readonly", "partner"] as const;
 export type Role = (typeof ROLES)[number];
 
 export const PERMISSIONS = [
@@ -29,6 +29,7 @@ export const PERMISSIONS = [
   "users.edit",
   "settings.view",
   "settings.edit",
+  "partner.view",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -50,7 +51,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "dashboard.view", "clients.view", "clients.edit", "balance.deposit", "balance.withdraw",
     "positions.view", "reports.view", "audit.view",
   ],
-  readonly: VIEW_ALL.filter((p) => p !== "users.view" && p !== "settings.view"),
+  readonly: VIEW_ALL.filter((p) => p !== "users.view" && p !== "settings.view" && p !== "partner.view"),
+  partner: ["partner.view"],
 };
 
 export function can(role: Role, permission: Permission): boolean {
@@ -70,6 +72,7 @@ export const ROUTE_PERMISSIONS: Record<string, Permission> = {
   "/lp": "lp.view",
   "/bridge": "lp.view",
   "/denetim": "lp.view",
+  "/partner": "partner.view",
   "/reports": "reports.view",
   "/audit": "audit.view",
   "/users": "users.view",

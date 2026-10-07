@@ -452,16 +452,24 @@ pub async fn link_account(store: &dyn Store, email: &str, account: &str) -> Resu
 /// Adds the `admin` role to an existing user (one-time bootstrap, G14).
 /// Returns `Ok(false)` when the user already had it.
 pub async fn grant_admin(store: &dyn Store, email: &str) -> Result<bool, String> {
+    grant_role(store, email, "admin").await
+}
+
+/// Adds a back-office role (`crate::ROLES`) to a user; `Ok(false)` = already had it.
+pub async fn grant_role(store: &dyn Store, email: &str, role: &str) -> Result<bool, String> {
+    if !crate::ROLES.contains(&role) {
+        return Err(format!("unknown role {role}"));
+    }
     let email = email.trim().to_lowercase();
     let mut u = store
         .user_by_email(&email)
         .await
         .map_err(|e| format!("{e:?}"))?
         .ok_or_else(|| format!("no user with email {email}"))?;
-    if u.roles.iter().any(|r| r == "admin") {
+    if u.roles.iter().any(|r| r == role) {
         return Ok(false);
     }
-    u.roles.push("admin".into());
+    u.roles.push(role.to_string());
     store.update_user(&u).await.map_err(|e| format!("{e:?}"))?;
     Ok(true)
 }

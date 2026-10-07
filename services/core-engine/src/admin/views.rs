@@ -1078,6 +1078,41 @@ impl RevenueTotals {
 /// totals overall and since `since_ns`: the markup of closing A-book deals (LP result
 /// minus client result), the result of closing B-book deals (the broker is the
 /// counterparty) and commission. `lp` is our own result at the LP.
+/// Activity of one account since `since_ns`: deals, lots, our revenue
+/// (A-book: LP spread + commission; B-book: client loss + commission + swap)
+/// and the client's realized P&L, in account-currency minor units.
+pub fn account_activity(e: &Engine, account: u64, since_ns: u64) -> Value {
+    let a_book = e
+        .account(account)
+        .and_then(|a| e.group(&a.group))
+        .is_some_and(|g| g.routing == Routing::ABook);
+    let (mut deals, mut lots, mut revenue, mut client) = (0u64, 0i64, 0i128, 0i128);
+    for d in e
+        .deals()
+        .iter()
+        .filter(|d| d.account == account && d.ts >= since_ns)
+    {
+        deals += 1;
+        lots += d.volume.raw();
+        if d.entry == oms::DealEntry::Out {
+            revenue += d.broker_pnl;
+            client += d.pnl.minor;
+        }
+        revenue -= d.commission.minor;
+        client += d.commission.minor;
+        if !a_book && d.lp_price.is_none() {
+            revenue -= d.swap;
+        }
+        client += d.swap;
+    }
+    json!({
+        "deals": deals,
+        "lots": lots as f64 / 1e8,
+        "revenue": minor(revenue),
+        "clientPnl": minor(client),
+    })
+}
+
 pub fn revenue(e: &Engine, since_ns: u64) -> Value {
     let (mut all, mut recent) = (RevenueTotals::default(), RevenueTotals::default());
     let mut rows = Vec::new();
