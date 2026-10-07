@@ -129,15 +129,16 @@ pub struct PeerIp(pub Option<IpAddr>);
 /// The client's IP: the socket peer, or, when the socket peer is our own
 /// reverse proxy on loopback, the address Cloudflare reports in
 /// `CF-Connecting-IP` (port 443 only accepts Cloudflare, so it cannot be
-/// forged; `X-Forwarded-For` can). Without the header behind the proxy: `None`
-/// (per-IP limits then do not apply, instead of counting everyone as one IP).
+/// forged; `X-Forwarded-For` can). Without the header the socket peer stays
+/// (local development, tests).
 pub fn peer_ip(socket: Option<IpAddr>, headers: &HeaderMap) -> Option<IpAddr> {
     match socket {
         Some(ip) if !ip.is_loopback() => Some(ip),
-        _ => headers
+        other => headers
             .get("cf-connecting-ip")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse().ok()),
+            .and_then(|v| v.trim().parse().ok())
+            .or(other),
     }
 }
 
@@ -229,7 +230,7 @@ mod peer_ip_tests {
         let lo: IpAddr = "127.0.0.1".parse().unwrap();
         assert_eq!(
             peer_ip(Some(lo), &h),
-            None,
+            Some(lo),
             "X-Forwarded-For is never trusted"
         );
         h.insert("cf-connecting-ip", "203.0.113.5".parse().unwrap());
