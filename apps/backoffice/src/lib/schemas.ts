@@ -48,6 +48,8 @@ export const Group = z
     passPriceImprovement: z.preprocess((v) => v ?? true, z.boolean()),
     /** Leverage cap Friday 20:00 - Sunday 22:00 UTC (null = none). */
     weekendLeverage: z.preprocess((v) => (v === undefined || v === 0 ? null : v), z.number().int().min(1).max(1000).nullable()),
+    /** News windows: leverage cap between two instants (ms since epoch). */
+    leverageWindows: z.preprocess((v) => v ?? [], z.array(z.object({ fromMs: z.number().int(), toMs: z.number().int(), leverage: z.number().int().min(1).max(1000) }).refine((w) => w.toMs > w.fromMs, { message: "end must be after start" })).max(50)),
   })
   .refine((g) => g.stopOutPct < g.marginCallPct, {
     message: "Stop-out level must be below margin call level",
