@@ -12,8 +12,8 @@ export default function DenetimPage() {
   const t = useT();
   const { data } = useApiQuery("getAudit", [], { live: 2000 });
   const st = data?.status ?? null;
-  const now = useNow(2000);
-  const fresh = st ? now - st.at < 15_000 : false;
+  // freshness by the server clock (ageMs); the browser clock may be off
+  const fresh = st ? (data?.ageMs ?? 0) < 15_000 : false;
   return (
     <div data-testid="page-denetim" className="space-y-4">
       <PageHeader title={t("denetim.title")} />
@@ -122,18 +122,6 @@ function ZeroPointButton() {
       {t("denetim.zero")}
     </Button>
   );
-}
-
-/** Wall clock refreshed every `ms` (render stays pure). */
-function useNow(ms: number): number {
-  const [now, setNow] = React.useState(0);
-  React.useEffect(() => {
-    const tick = () => setNow(Date.now());
-    const id = window.setInterval(tick, ms);
-    const first = window.setTimeout(tick, 0);
-    return () => { window.clearInterval(id); window.clearTimeout(first); };
-  }, [ms]);
-  return now;
 }
 
 function SettingsCard() {

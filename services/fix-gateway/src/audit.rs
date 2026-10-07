@@ -135,6 +135,9 @@ pub struct Auditor {
     /// Core net at start (baseline) and since when a mismatch has persisted.
     engine0: Option<BTreeMap<NetKey, Fixed>>,
     mismatch_since: HashMap<NetKey, u64>,
+    /// Last LP execution per (LP, symbol), ms: the core's record must be
+    /// newer than this before the symbol is compared.
+    last_exec_ms: HashMap<NetKey, u64>,
     reported: HashMap<NetKey, Fixed>,
     stats: BTreeMap<String, LpStats>,
     incidents: VecDeque<Incident>,
@@ -199,6 +202,8 @@ impl Auditor {
     /// An execution report from `lp`.
     pub fn on_exec(&mut self, lp: &str, x: &Execution, now_ns: u64) {
         let now_ms = now_ns / 1_000_000;
+        self.last_exec_ms
+            .insert((lp.to_string(), x.symbol.clone()), now_ms);
         let trade = matches!(x.exec_type, ExecType::Trade);
         let last = x.last_qty.filter(|q| q.is_positive());
         if trade {
@@ -332,6 +337,17 @@ impl Auditor {
     /// observed on the wire since. Returns the corrections (signed LP qty to
     /// trade at the primary) for mismatches that settled.
     pub fn compare(&mut self, engine: &BTreeMap<NetKey, Fixed>, now_ms: u64) -> Vec<Correction> {
+        self.compare_at(engine, u64::MAX, now_ms)
+    }
+
+    /// [`Auditor::compare`] with the time the core's record was written
+    /// (`engine_ms`): symbols with LP activity after it are not judged yet.
+    pub fn compare_at(
+        &mut self,
+        engine: &BTreeMap<NetKey, Fixed>,
+        engine_ms: u64,
+        now_ms: u64,
+    ) -> Vec<Correction> {
         let zero = Fixed::from_int(0);
         let primary = self.cfg.primary.clone();
         let base = self
@@ -364,7 +380,8 @@ impl Auditor {
             }
             let held =
                 base.get(&k).copied().unwrap_or(zero) + self.net.get(&k).copied().unwrap_or(zero);
-            if expected == held || self.in_flight(&primary, &sym) {
+            let stale = self.last_exec_ms.get(&k).is_some_and(|t| *t > engine_ms);
+            if expected == held || stale || self.in_flight(&primary, &sym) {
                 self.mismatch_since.remove(&k);
                 if expected == held {
                     self.reported.remove(&k);
@@ -693,6 +710,28 @@ mod tests {
         core.insert(key("LMAX", "GBP/USD"), px("2"));
         a.compare(&core, 21_000);
         assert_eq!(a.compare(&core, 28_000).len(), 1);
+    }
+
+    #[test]
+    fn a_stale_core_record_is_not_judged() {
+        let mut a = Auditor::new(AuditCfg::default(), 0);
+        let core = BTreeMap::new();
+        a.compare_at(&core, 0, 0);
+        // LP filled at 1 s; the core's snapshot is still from 0.5 s
+        let mut x = exec(None, Side::Sell, Some(("1", "1.32")), OrderStatus::Filled);
+        x.symbol = "GBP/USD".into();
+        a.on_exec("LMAX", &x, 1_000 * MS);
+        a.compare_at(&core, 500, 2_000);
+        a.compare_at(&core, 500, 20_000);
+        assert_eq!(
+            a.total_incidents, 1,
+            "only the foreign fill, no net mismatch on a stale record"
+        );
+        // the core's record catches up with the fill
+        let mut c2 = BTreeMap::new();
+        c2.insert(key("LMAX", "GBP/USD"), px("-1"));
+        a.compare_at(&c2, 21_000, 21_000);
+        assert_eq!(a.status(21_000)["ok"], true);
     }
 
     #[test]

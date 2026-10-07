@@ -60,8 +60,15 @@ fn engine_net(
     data: &Path,
     map: &HashMap<String, (String, Fixed)>,
     primary: &str,
-) -> Option<BTreeMap<NetKey, Fixed>> {
-    let b = std::fs::read(data.join("snapshot.json")).ok()?;
+) -> Option<(BTreeMap<NetKey, Fixed>, u64)> {
+    let path = data.join("snapshot.json");
+    let written_ms = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let b = std::fs::read(&path).ok()?;
     let v: Value = serde_json::from_slice(&b).ok()?;
     let orders = &v["state"]["lp_orders"];
     let list: Vec<&Value> = match orders {
@@ -89,7 +96,7 @@ fn engine_net(
             .or_insert(Fixed::from_int(0));
         *e = *e + signed;
     }
-    Some(out)
+    Some((out, written_ms))
 }
 
 /// `resetAt` (ms) of the console's zero-point button, if any.
@@ -206,14 +213,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let now_ms = now / 1_000_000;
                 a.tick(now);
                 let mut corrections: Vec<Correction> = Vec::new();
-                if let Some(core) = engine_net(&data, &map, &primary) {
+                if let Some((core, written_ms)) = engine_net(&data, &map, &primary) {
                     let r = reset_at(&dir);
                     if r.is_some() && r != applied_reset {
                         applied_reset = r;
                         a.reset(&core, now_ms);
                         append(&dir.join("duzeltmeler.jsonl"), &json!({"ts": now_ms, "event": "zero_point"}));
                     }
-                    corrections = a.compare(&core, now_ms);
+                    corrections = a.compare_at(&core, written_ms, now_ms);
                 }
                 let (autoheal, max_lots, per_min) = settings(&dir);
                 while sent.front().is_some_and(|t| now_ms.saturating_sub(*t) > 60_000) {
