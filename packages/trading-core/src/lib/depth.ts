@@ -15,8 +15,18 @@ export interface VwapFill {
  * Walk the book for a market order of `volume`.
  * Buys consume asks (ascending), sells consume bids (descending).
  */
-export function vwapFill(side: Side, volume: number, bids: DepthLevel[], asks: DepthLevel[], digits: number): VwapFill {
-  const book = side === 'buy' ? [...asks].sort((a, b) => a.price - b.price) : [...bids].sort((a, b) => b.price - a.price);
+/** Levels further than this from the top of the book are not fillable: the
+ *  engine's circuit breaker (0.5 % of the requested price) never lets an order
+ *  reach them, so the ladder must not pretend they fill. */
+export const FILL_GUARD_BPS = 50;
+
+export function vwapFill(side: Side, volume: number, bids: DepthLevel[], asks: DepthLevel[], digits: number, guardBps = FILL_GUARD_BPS): VwapFill {
+  let book = side === 'buy' ? [...asks].sort((a, b) => a.price - b.price) : [...bids].sort((a, b) => b.price - a.price);
+  const top = book[0]?.price;
+  if (top !== undefined && guardBps > 0) {
+    const limit = top * (guardBps / 10_000);
+    book = book.filter((l) => Math.abs(l.price - top) <= limit);
+  }
   let remaining = volume;
   let notional = big(0);
   let filled = 0;
