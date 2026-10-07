@@ -103,23 +103,23 @@ export function DepthOfMarket() {
             <span>{t('dom.price')}</span>
             <span className="text-right">{t('dom.size')}</span>
           </div>
-          <div className="flex-1 overflow-auto num">
+          <div className="flex-1 overflow-auto num text-[11px] leading-none">
             {d &&
               [...d.asks].reverse().map((l) => (
-                <div key={`a${l.price}`} className="relative grid grid-cols-2 px-2 h-5 items-center">
+                <div key={`a${l.price}`} className="relative grid grid-cols-2 px-2 h-4 items-center">
                   <div className="absolute inset-y-0.5 right-0 bg-down-bg" style={{ width: `${(l.volume / maxVol) * 100}%` }} />
                   <span className="relative text-down">{formatPrice(l.price, spec.digits)}</span>
                   <span className="relative text-right">{volumeToLots(l.volume)}</span>
                 </div>
               ))}
             {d && d.asks[0] && d.bids[0] && (
-              <div className="px-2 h-5 flex items-center justify-center text-[10px] text-muted border-y border-line">
+              <div className="px-2 h-4 flex items-center justify-center text-[10px] text-muted border-y border-line">
                 spread {pipsBetween(d.asks[0].price, d.bids[0].price, spec)} pip
               </div>
             )}
             {d &&
               d.bids.map((l) => (
-                <div key={`b${l.price}`} className="relative grid grid-cols-2 px-2 h-5 items-center">
+                <div key={`b${l.price}`} className="relative grid grid-cols-2 px-2 h-4 items-center">
                   <div className="absolute inset-y-0.5 right-0 bg-up-bg" style={{ width: `${(l.volume / maxVol) * 100}%` }} />
                   <span className="relative text-up">{formatPrice(l.price, spec.digits)}</span>
                   <span className="relative text-right">{volumeToLots(l.volume)}</span>
