@@ -586,6 +586,16 @@ impl CoreApi for InProcessCore {
     }
 
     fn account_group(&self, account: &str) -> Option<String> {
+        // Live: accounts opened (or moved) after start-up must see their group's
+        // quotes; the start-up map is only the fallback.
+        if let Some(no) = self.names.number(account) {
+            if let Some(g) = self
+                .engine
+                .read_sync(move |e| e.account(no).map(|a| a.group.clone()))
+            {
+                return g;
+            }
+        }
         self.account_groups.get(account).cloned()
     }
 
