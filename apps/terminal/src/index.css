@@ -135,3 +135,11 @@ input::-webkit-outer-spin-button,
 input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
 [cmdk-item][data-selected='true'] { background: var(--hover); }
+
+/* Lightning reconnect button: glows while the gateway is unreachable. */
+@keyframes reconnect-glow {
+  0%, 100% { opacity: 0.45; filter: drop-shadow(0 0 0 rgb(251 191 36 / 0)); }
+  50% { opacity: 1; filter: drop-shadow(0 0 6px rgb(251 191 36 / 0.9)); }
+}
+.reconnect-glow { animation: reconnect-glow 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .reconnect-glow { animation: none; } }

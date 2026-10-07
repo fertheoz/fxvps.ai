@@ -3,7 +3,7 @@ import { useTerminal } from '../store/terminal';
 import { formatMoney } from '@fxvps/trading-core';
 import type { ConnectionState } from '@fxvps/trading-core';
 import { useState } from 'react';
-import { isGatewayApi } from '../store/api';
+import { isGatewayApi, reconnectNow } from '../store/api';
 import { defaultGateway, loadGateway } from '../store/connection';
 import { UserMenu } from './Auth';
 import { ConnectDialog } from './ConnectDialog';
@@ -164,8 +164,48 @@ export function TopBar() {
           <span className={`w-2 h-2 rounded-full ${connColor[conn]}`} />
           <span className="text-muted">{t(`conn.${conn}`)}</span>
           {conn === 'connected' && latency !== undefined && <span className="num text-muted">{latency}ms</span>}
+          {conn !== 'connected' && isGatewayApi() && <ReconnectControls conn={conn} />}
         </div>
       </div>
     </header>
+  );
+}
+
+const RETRY_CHOICES = [1000, 3000, 10000, 30000, 0] as const;
+
+/** Lightning: reconnect now (glows while offline); clock: auto-retry interval. */
+function ReconnectControls({ conn }: { conn: ConnectionState }) {
+  const t = useT();
+  const every = useTerminal((s) => s.reconnectEveryMs);
+  const setEvery = useTerminal((s) => s.setReconnectEvery);
+  const busy = conn === 'connecting' || conn === 'reconnecting';
+  return (
+    <span className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={reconnectNow}
+        disabled={conn === 'connecting'}
+        title={t('conn.reconnectNow')}
+        aria-label={t('conn.reconnectNow')}
+        data-testid="reconnect-now"
+        className={`w-6 h-6 grid place-items-center rounded text-amber-400 hover:bg-panel-2 ${busy ? 'animate-spin' : 'reconnect-glow'}`}
+      >
+        {busy ? '↻' : '⚡'}
+      </button>
+      <select
+        value={every}
+        onChange={(e) => setEvery(Number(e.target.value))}
+        title={t('conn.retryEvery')}
+        aria-label={t('conn.retryEvery')}
+        data-testid="reconnect-every"
+        className="h-6 rounded border border-line bg-panel text-[11px] text-muted px-1"
+      >
+        {RETRY_CHOICES.map((ms) => (
+          <option key={ms} value={ms}>
+            {ms ? `⏱ ${ms / 1000}s` : `⏱ ${t('conn.retryOff')}`}
+          </option>
+        ))}
+      </select>
+    </span>
   );
 }

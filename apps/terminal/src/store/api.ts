@@ -44,6 +44,28 @@ export function isGatewayApi(a: TradingApi | null = api): boolean {
   return a instanceof WsTradingApi;
 }
 
+/** Lightning button / back online / tab visible: reconnect the gateway now. */
+export function reconnectNow(): void {
+  if (api instanceof WsTradingApi) api.reconnectNow();
+}
+
+let wired = false;
+/** Keeps the gateway's retry policy in sync with the store and reconnects on
+ *  network / visibility recovery (no page refresh needed). */
+function wireReconnect(instance: TradingApi): void {
+  if (!(instance instanceof WsTradingApi)) return;
+  instance.setRetryEvery(useTerminal.getState().reconnectEveryMs);
+  if (wired || typeof window === 'undefined') return;
+  wired = true;
+  useTerminal.subscribe((s, prev) => {
+    if (s.reconnectEveryMs !== prev.reconnectEveryMs && api instanceof WsTradingApi) api.setRetryEvery(s.reconnectEveryMs);
+  });
+  window.addEventListener('online', reconnectNow);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') reconnectNow();
+  });
+}
+
 export function getApi(): TradingApi {
   if (!api) throw new Error('TradingApi not initialised');
   return api;
@@ -52,6 +74,7 @@ export function getApi(): TradingApi {
 /** Wire an API into the store. Returns a teardown function. */
 export async function bootstrap(instance: TradingApi): Promise<() => void> {
   api = instance;
+  wireReconnect(instance);
   const store = useTerminal.getState();
   const offEvents = instance.onEvent((e) => useTerminal.getState().applyEvent(e));
   await instance.connect();
