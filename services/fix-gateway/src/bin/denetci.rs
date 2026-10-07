@@ -174,8 +174,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     let mut sent: VecDeque<u64> = VecDeque::new(); // correction timestamps (rate limit)
     let mut seq = 0u64;
-    // a zero point taken before this start is not re-applied
-    let mut applied_reset = reset_at(&dir);
+    // a zero point taken earlier is re-applied quietly at start-up: from then
+    // on the primary LP holds what the core booked at the primary and at the
+    // staging LPs together (the staging legs were squared by hand)
+    let mut applied_reset: Option<u64> = None;
+    let mut first_apply = true;
     let lp_of = |subject: &str| subject.split('.').nth(2).unwrap_or("").to_string();
 
     loop {
@@ -217,9 +220,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let r = reset_at(&dir);
                     if r.is_some() && r != applied_reset {
                         applied_reset = r;
-                        a.reset(&core, now_ms);
-                        append(&dir.join("duzeltmeler.jsonl"), &json!({"ts": now_ms, "event": "zero_point"}));
+                        a.reset_with(&core, now_ms, first_apply);
+                        if first_apply {
+                            a.reset_ms = r;
+                        } else {
+                            append(&dir.join("duzeltmeler.jsonl"), &json!({"ts": now_ms, "event": "zero_point"}));
+                        }
                     }
+                    first_apply = false;
                     corrections = a.compare_at(&core, written_ms, now_ms);
                 }
                 let (autoheal, max_lots, per_min) = settings(&dir);

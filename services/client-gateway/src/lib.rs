@@ -126,14 +126,51 @@ pub fn metrics_router(hub: Arc<Hub>) -> Router {
 /// Peer IP when the server runs with connect info ([`serve`]).
 pub struct PeerIp(pub Option<IpAddr>);
 
+/// The client's IP: the socket peer, or, when the socket peer is our own
+/// reverse proxy on loopback, the address Cloudflare reports in
+/// `CF-Connecting-IP` (port 443 only accepts Cloudflare, so it cannot be
+/// forged; `X-Forwarded-For` can). Without the header behind the proxy: `None`
+/// (per-IP limits then do not apply, instead of counting everyone as one IP).
+pub fn peer_ip(socket: Option<IpAddr>, headers: &HeaderMap) -> Option<IpAddr> {
+    match socket {
+        Some(ip) if !ip.is_loopback() => Some(ip),
+        _ => headers
+            .get("cf-connecting-ip")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse().ok()),
+    }
+}
+
+#[cfg(test)]
+mod peer_ip_tests {
+    use super::*;
+
+    #[test]
+    fn direct_socket_wins_proxy_uses_cloudflare_header_only() {
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "9.9.9.9, 1.1.1.1".parse().unwrap());
+        let direct: IpAddr = "10.0.0.7".parse().unwrap();
+        assert_eq!(peer_ip(Some(direct), &h), Some(direct));
+        let lo: IpAddr = "127.0.0.1".parse().unwrap();
+        assert_eq!(
+            peer_ip(Some(lo), &h),
+            None,
+            "X-Forwarded-For is never trusted"
+        );
+        h.insert("cf-connecting-ip", "203.0.113.5".parse().unwrap());
+        assert_eq!(peer_ip(Some(lo), &h), "203.0.113.5".parse().ok());
+        assert_eq!(peer_ip(None, &h), "203.0.113.5".parse().ok());
+    }
+}
+
 impl<S: Send + Sync> FromRequestParts<S> for PeerIp {
     type Rejection = std::convert::Infallible;
     async fn from_request_parts(p: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        Ok(PeerIp(
-            p.extensions
-                .get::<ConnectInfo<SocketAddr>>()
-                .map(|c| c.0.ip()),
-        ))
+        let socket = p
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|c| c.0.ip());
+        Ok(PeerIp(peer_ip(socket, &p.headers)))
     }
 }
 

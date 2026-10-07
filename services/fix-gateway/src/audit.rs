@@ -216,7 +216,10 @@ impl Auditor {
         }
         let cl = x.cl_ord_id.clone().unwrap_or_default();
         let Some(t) = self.orders.get_mut(&cl) else {
-            if trade && last.is_some() {
+            // orders the core sent before this auditor started are ours, not foreign
+            let ours_at_start =
+                cl.starts_with(&self.cfg.prefix) && now_ms.saturating_sub(self.started_ms) < 60_000;
+            if trade && last.is_some() && !ours_at_start {
                 let detail = format!(
                     "{:?} {} @ {} (cl_ord_id {:?}, order {})",
                     x.side,
@@ -412,6 +415,12 @@ impl Auditor {
     /// the core expects (both sides were flattened by hand); earlier
     /// history is closed. Counters, latency and the incident log are kept.
     pub fn reset(&mut self, engine: &BTreeMap<NetKey, Fixed>, now_ms: u64) {
+        self.reset_with(engine, now_ms, false)
+    }
+
+    /// [`Auditor::reset`]; `quiet` = re-applying a zero point taken earlier
+    /// (process restart): no log line, no incident for open exposure.
+    pub fn reset_with(&mut self, engine: &BTreeMap<NetKey, Fixed>, now_ms: u64, quiet: bool) {
         let zero = Fixed::from_int(0);
         let mut base: BTreeMap<NetKey, Fixed> = BTreeMap::new();
         for ((lp, sym), v) in engine {
@@ -431,6 +440,9 @@ impl Auditor {
         self.net.clear();
         self.mismatch_since.clear();
         self.reported.clear();
+        if quiet {
+            return;
+        }
         self.reset_ms = Some(now_ms);
         tracing::warn!(?open, "denetim sıfır noktası");
         if !open.is_empty() {
