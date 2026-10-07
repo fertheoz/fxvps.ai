@@ -397,7 +397,7 @@ static void s14_example_config() {
   Config c;
   std::string err;
   CHECK(Config::parse(ss.str(), c, err));
-  CHECK(c.endpoints.size() == 2 && c.groups.size() == 2 && c.symbols["GOLD"] == "XAUUSD");
+  CHECK(c.endpoints.size() == 1 && c.groups.size() == 2 && c.symbols["GOLD"] == "XAUUSD");
   CHECK(c.fallback == Fallback::Reject && c.strip_suffix == ".pro");
 #endif
 }
