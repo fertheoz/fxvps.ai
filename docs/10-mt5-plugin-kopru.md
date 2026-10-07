@@ -42,10 +42,11 @@ tamamen hazırlanır ve sahte bir MT5 istemcisiyle uçtan uca sınanır.
 
 ## 2. Köprü protokolü
 
-Taşıma: mevcut istemci protokolünün (protobuf, `fxvps_client_v1.proto`)
-yanına ayrı bir `fxvps_bridge_v1.proto`; TLS üzerinden WebSocket (aynı nginx,
-mavi/yeşil arkasında). FIX değil: iki ucu da biz yazıyoruz, protobuf daha az
-iş ve daha hızlı.
+Taşıma: TLS üzerinden WebSocket, **JSON metin çerçeveleri (protokol v1)** —
+aynı nginx, mavi/yeşil arkasında (`wss://trade.fxvps.ai/bridge`). FIX değil
+(iki ucu da biz yazıyoruz); protobuf da değil: plugin Windows'un WinHTTP'si
+dışında hiçbir kütüphane taşımasın diye. Güncel mesaj tablosu:
+[11-mt5-plugin-plan.md](11-mt5-plugin-plan.md) §1 (aşağıdaki tablo ilk taslaktır).
 
 | Yön | Mesaj | İçerik |
 |---|---|---|
@@ -77,7 +78,7 @@ Kurallar:
    kurum_hesabı, markup_profili, kota (emir/sn, açık lot), düşüş_modu }`.
    Kurum hesabı mevcut hesap tipidir; teminat ön yatırımla tutulur, risk
    motoru marjı bu hesaba uygular (kurumun müşterilerinin değil).
-2. **bridge-gateway servisi** + `fxvps_bridge_v1.proto`.
+2. **Köprü kapısı**: client-gateway içinde `/bridge` (ayrı servis gerekmedi).
 3. **Mutabakat:** gece nöbetine kurum katmanı: MT5'in net pozisyonu
    (`BridgeReconcile`) ↔ kurum hesabı ↔ LMAX omnibus.
 4. **Konsol → Kurumlar:** kurum açma, anahtar üretme, sembol eşleme,

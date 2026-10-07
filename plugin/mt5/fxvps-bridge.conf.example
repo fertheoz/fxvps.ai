@@ -2,8 +2,8 @@
 institution = kurum1
 key = <fxvps konsolundan alınan kurum anahtarı>
 server = MT5-Live-1
-# iki uç: mavi/yeşil; sırayla denenir
-endpoints = wss://bridge.fxvps.ai/bridge, wss://bridge2.fxvps.ai/bridge
+# uç(lar) virgülle, sırayla denenir (mavi/yeşil sunucu tarafında)
+endpoints = wss://trade.fxvps.ai/bridge
 # köprüye devredilen gruplar ('*' joker); diğerleri MT5'te kalır
 groups = real\*, pro\ecn
 # fxvps bağlantısı yokken: reject (istek reddedilir) | local (MT5 kendisi işler)
