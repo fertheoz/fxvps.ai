@@ -117,6 +117,8 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     listFunding: (status = "open") => call("GET", `/v1/funding?status=${enc(status)}`),
     decideFunding: (id, decision, note, actor) => call("POST", `/v1/funding/${enc(id)}/decide`, { decision, note }, actor),
     ibReport: (from, to) => call("GET", `/v1/reports/ib${from || to ? `?from=${from ?? ""}&to=${to ?? ""}` : ""}`),
+    ibPayoutPreview: (ib, to) => call("GET", `/v1/accounts/${ib}/ib/payout?to=${enc(to)}`),
+    ibPayout: (ib, to, actor) => call("POST", `/v1/accounts/${ib}/ib/payout`, { to }, actor),
     transactions: (from, to) => call("GET", `/v1/reports/transactions${from || to ? `?from=${from ?? ""}&to=${to ?? ""}` : ""}`),
     bestExecution: (from, to) => call("GET", `/v1/reports/best-execution${from || to ? `?from=${from ?? ""}&to=${to ?? ""}` : ""}`),
     auditChain: () => call("GET", "/v1/audit/chain"),

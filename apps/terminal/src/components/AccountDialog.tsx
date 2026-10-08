@@ -7,7 +7,7 @@ import { Modal } from './Dialogs';
 import { StatementTab } from './StatementTab';
 import { CopyTab } from './CopyTab';
 import { IbTab } from './IbTab';
-import { sendPendingReferral } from '../lib/referral';
+import { ReferralBanner } from './ReferralBanner';
 
 type Tab = 'funding' | 'verification' | 'copy' | 'ib' | 'statement';
 const DOC_KINDS = ['id_front', 'id_back', 'proof_of_address', 'selfie', 'other'] as const;
@@ -34,7 +34,6 @@ export function AccountDialog() {
       setMe(m);
       setError(null);
       if (!account && m.accounts[0]) setAccount(m.accounts[0].externalId);
-      if (m.accounts[0]) void sendPendingReferral(m.accounts[0].externalId);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -119,6 +118,7 @@ export function AccountDialog() {
             <span>{t('acct.kyc')}: <span className={acc.kyc === 'approved' ? 'text-up' : acc.kyc === 'rejected' ? 'text-down' : 'text-fg'}>{t(`acct.kyc.${acc.kyc}`)}</span></span>
           </div>
         )}
+        {me && acc && <ReferralBanner key={acc.externalId} account={acc.externalId} />}
 
         {tab === 'funding' && me && acc && (
           <>

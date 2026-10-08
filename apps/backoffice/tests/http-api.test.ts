@@ -79,6 +79,15 @@ describe("HTTP AdminApi adapter", () => {
     expect(headers(calls[0]!).authorization).toBeUndefined();
   });
 
+  it("asks the server for IB payouts: only the IB and the last day travel, never an amount", async () => {
+    const { fn, calls } = fakeFetch(() => ({ body: { ib: 9, from: null, to: "2026-09-30", paidThrough: null, amount: 175, currency: "USD", pending: null, op: { id: "op-5", status: "pending_approval", newBalance: 0, newCredit: 0 } } }));
+    const api = createHttpApi("http://x", () => "t", { fetchImpl: fn });
+    expect((await api.ibPayoutPreview(9, "2026-09-30")).amount).toBe(175);
+    expect((await api.ibPayout(9, "2026-09-30", actor)).op.status).toBe("pending_approval");
+    expect(calls.map((c) => `${c.init.method} ${c.url}`)).toEqual(["GET http://x/v1/accounts/9/ib/payout?to=2026-09-30", "POST http://x/v1/accounts/9/ib/payout"]);
+    expect(JSON.parse(calls[1]!.init.body as string)).toEqual({ to: "2026-09-30" });
+  });
+
   it("turns error bodies into ApiError (403 carries the permission)", async () => {
     const { fn } = fakeFetch(() => ({ status: 403, body: { error: { code: "forbidden", message: "missing permission balance.credit", permission: "balance.credit" } } }));
     const api = createHttpApi("http://x", () => "t", { fetchImpl: fn });

@@ -520,11 +520,11 @@ pub fn funding(admin: &AdminState, status: Option<&str>) -> Value {
     )
 }
 
-/// Introducing brokers: linked clients' lots, commission and A-book markup in
-/// `[from, to)` and the IB's payout at its share.
 /// IB accrual for deals in [from, to): share of the clients' commission and
 /// A-book markup, per-lot rebate on closing deals, and overrides that sub-IBs'
-/// revenue pays up the chain (at most three levels).
+/// revenue pays up the chain (at most three levels). A deal counts for the IB
+/// (and the chain above it) the client was linked to when the deal happened;
+/// revenue in a currency other than the IB's is not shared (no conversion).
 pub fn ib_report(e: &Engine, admin: &AdminState, from: u64, to: u64) -> Value {
     #[derive(Default)]
     struct Acc {
@@ -537,12 +537,17 @@ pub fn ib_report(e: &Engine, admin: &AdminState, from: u64, to: u64) -> Value {
         overrides: i128,
     }
     let plan = |ib: u64| admin.ib_plan.get(&ib).cloned().unwrap_or_default();
+    let ccy_of = |acc: u64| {
+        e.account(acc)
+            .and_then(|a| e.group(&a.group))
+            .map(|g| g.currency)
+    };
     let mut by: BTreeMap<u64, Acc> = BTreeMap::new();
     for (client, ib) in &admin.ib_of {
         by.entry(*ib).or_default().clients.insert(*client);
     }
     for d in e.deals().iter().filter(|d| d.ts >= from && d.ts < to) {
-        let Some(ib) = admin.ib_of.get(&d.account).copied() else {
+        let Some(ib) = admin.ib_at(d.account, d.ts) else {
             continue;
         };
         let markup = if d.entry == oms::DealEntry::Out && d.lp_price.is_some() {
@@ -551,25 +556,30 @@ pub fn ib_report(e: &Engine, admin: &AdminState, from: u64, to: u64) -> Value {
             0
         };
         let base = -d.commission.minor + markup;
+        let same_ccy = |x: u64| ccy_of(x) == Some(d.commission.currency);
         let a = by.entry(ib).or_default();
         a.deals += 1;
         a.lots += qty_f(d.volume);
-        a.commission += -d.commission.minor;
-        a.markup += markup;
+        if same_ccy(ib) {
+            a.commission += -d.commission.minor;
+            a.markup += markup;
+        }
         if d.entry == oms::DealEntry::Out {
             a.rebate +=
                 plan(ib).per_lot_cents as i128 * d.volume.raw() as i128 / money::SCALE as i128;
         }
+        // the chain as it stood at the deal's time; every IB is paid once
+        let mut seen = std::collections::BTreeSet::from([d.account, ib]);
         let mut cur = ib;
         for _ in 0..3 {
-            let Some(parent) = admin.ib_of.get(&cur).copied() else {
+            let Some(parent) = admin.ib_at(cur, d.ts) else {
                 break;
             };
-            if parent == ib || parent == d.account {
+            if !seen.insert(parent) {
                 break;
             }
             let pct = plan(parent).override_pct as i128;
-            if pct > 0 {
+            if pct > 0 && same_ccy(parent) {
                 by.entry(parent).or_default().overrides += base * pct / 100;
             }
             cur = parent;
@@ -580,11 +590,9 @@ pub fn ib_report(e: &Engine, admin: &AdminState, from: u64, to: u64) -> Value {
         .map(|(ib, a)| {
             let pct = admin.ib_share.get(&ib).copied().unwrap_or(0) as i128;
             let p = plan(ib);
-            let ccy = e
-                .account(ib)
-                .and_then(|acc| e.group(&acc.group))
-                .map(|g| g.currency.to_string());
+            let ccy = ccy_of(ib).map(|c| c.to_string());
             let share = (a.commission + a.markup) * pct / 100;
+            let paid_from = admin.ib_paid_from(ib);
             json!({
                 "ib": ib,
                 "name": admin.profiles.get(&ib).map(|p| p.name.clone()),
@@ -603,6 +611,9 @@ pub fn ib_report(e: &Engine, admin: &AdminState, from: u64, to: u64) -> Value {
                 "rebate": minor(a.rebate),
                 "override": minor(a.overrides),
                 "payout": minor(share + a.rebate + a.overrides),
+                // last UTC day paid out, and a payout waiting for approval
+                "paidThrough": (paid_from > 0).then(|| iso((paid_from - 1) * 86_400_000_000_000)[..10].to_string()),
+                "payoutPending": admin.ib_payout_pending(ib).map(|o| o.id.clone()),
             })
         })
         .collect();

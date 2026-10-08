@@ -73,9 +73,19 @@ export function clientApiBase(): string | null {
   }
 }
 
+/** Error answer of the client API (`status` 0 = no answer). */
+export class ClientApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ClientApiError';
+    this.status = status;
+  }
+}
+
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   const base = clientApiBase();
-  if (!base) throw new Error('no gateway');
+  if (!base) throw new ClientApiError(0, 'no gateway');
   const token = (loadGateway() ?? defaultGateway())?.token || sessionToken();
   const res = await fetch(`${base}${path}`, {
     ...init,
@@ -89,7 +99,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
     } catch {
       /* non-JSON */
     }
-    throw new Error(message);
+    throw new ClientApiError(res.status, message);
   }
   return (await res.json()) as T;
 }
@@ -152,6 +162,8 @@ export interface IbDashboard {
   perLotCents: number;
   overridePct: number;
   clients: number;
+  /** Last UTC day paid out (YYYY-MM-DD). */
+  paidThrough?: string | null;
   thisMonth: IbPeriod | null;
   lastMonth: IbPeriod | null;
   payouts: { amount: number; currency: string; reason: string; status: string; requestedAt: string }[];
@@ -187,7 +199,7 @@ export const clientApi = {
   sentiment: () => call<Sentiment[]>('/sentiment'),
   ib: () => call<{ ibs: IbDashboard[] }>('/ib'),
   ibLink: (account: string, code: string) =>
-    call<{ ok: boolean }>('/ib/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account, code }) }),
+    call<{ ok: boolean; already?: boolean }>('/ib/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account, code }) }),
   statement: (account: string, from: string, to: string) =>
     call<Statement>(`/statement?account=${encodeURIComponent(account)}${from ? `&from=${from}` : ''}${to ? `&to=${to}` : ''}`),
   copy: () => call<CopyOverview>('/copy'),

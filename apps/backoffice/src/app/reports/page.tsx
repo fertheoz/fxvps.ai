@@ -3,7 +3,7 @@ import * as React from "react";
 import { createColumnHelper } from "@tanstack/react-table";
 import { Download } from "lucide-react";
 import { DataTable } from "@/components/ui/data-table";
-import { Badge, Button, PageHeader, Pnl, Stat, Tabs } from "@/components/ui/primitives";
+import { Badge, Button, Dialog, PageHeader, Pnl, Stat, Tabs } from "@/components/ui/primitives";
 import { BookBadge, SideBadge, ToxicityBadge } from "@/components/badges";
 import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
 import { useToast } from "@/components/shell/providers";
@@ -175,7 +175,8 @@ export default function ReportsPage() {
     ibc.accessor("rebate", { header: t("ib.rebate"), cell: (c) => f.money(c.getValue() ?? 0, c.row.original.currency ?? "USD") }),
     ibc.accessor("override", { header: t("ib.override"), cell: (c) => f.money(c.getValue() ?? 0, c.row.original.currency ?? "USD") }),
     ibc.accessor("payout", { header: t("ib.payout"), cell: (c) => <Pnl value={c.getValue()}>{f.money(c.getValue(), c.row.original.currency ?? "USD")}</Pnl> }),
-    ibc.display({ id: "pay", header: "", cell: (c) => <IbPayButton row={c.row.original} from={range.from} to={range.to} /> }),
+    ibc.accessor("paidThrough", { header: t("ib.paidThrough"), cell: (c) => c.getValue() ?? "—" }),
+    ibc.display({ id: "pay", header: "", cell: (c) => <IbPayButton row={c.row.original} to={range.to} /> }),
   ];
   const tradeCols = [
     tc.accessor("closedAt", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
@@ -288,34 +289,59 @@ export default function ReportsPage() {
   );
 }
 
-/** Books the IB payout for the selected period as a deposit through the
- * four-eyes balance-op flow; the key makes paying one period twice a no-op. */
-function IbPayButton({ row, from, to }: { row: IbRow; from: string; to: string }) {
+/** Today (UTC) as YYYY-MM-DD: only days before it can be paid out. */
+const todayUtc = () => new Date().toISOString().slice(0, 10);
+
+/** IB payout up to the range's "to" day. The server works out the amount from
+ * the IB's paid-through date (never the table's figure), books it through the
+ * four-eyes flow and moves paid-through only once the deposit is applied. */
+function IbPayButton({ row, to }: { row: IbRow; to: string }) {
   const t = useT();
+  const f = useFormat();
   const actor = useActor();
   const mfa = useMfaOk();
   const toast = useToast();
+  const [open, setOpen] = React.useState(false);
+  const preview = useApiQuery("ibPayoutPreview", [row.ib, to], { enabled: open });
   const pay = useApiMutation(
-    () =>
-      api().balanceOp(
-        {
-          clientId: String(row.ib),
-          type: "deposit",
-          amount: row.payout,
-          currency: (row.currency ?? "USD") as never,
-          reason: `IB payout ${from}..${to}`,
-          idempotencyKey: `ibpay:${row.ib}:${from}:${to}`,
-        },
-        actor,
-      ),
-    () => toast(t("ib.payRequested")),
+    () => api().ibPayout(row.ib, to, actor),
+    (r) => {
+      setOpen(false);
+      toast(r.op.status === "applied" ? t("ib.payApplied") : t("ib.payQueued"));
+    },
   );
-  if (!actor.can("balance.deposit") || row.payout <= 0) return null;
+  if (!actor.can("balance.deposit")) return null;
+  if (row.payoutPending) return <Badge tone="muted" title={row.payoutPending} data-testid={`ib-pay-pending-${row.ib}`}>{t("ib.payAwaiting")}</Badge>;
+  const closed = !!to && to < todayUtc();
+  const p = preview.data;
   return (
-    <Button size="sm" variant="outline" disabled={!mfa || !from || !to || pay.isPending} title={!from || !to ? t("ib.payPeriod") : undefined}
-      onClick={() => { if (window.confirm(`${t("ib.payConfirm")} #${row.ib}: ${row.payout / 100} ${row.currency ?? "USD"} (${from}..${to})`)) pay.mutate(undefined); }}
-      data-testid={`ib-pay-${row.ib}`}>
-      {t("ib.pay")}
-    </Button>
+    <>
+      <Button size="sm" variant="outline" disabled={!mfa || !closed} title={closed ? undefined : t("ib.payPeriod")} onClick={() => setOpen(true)} data-testid={`ib-pay-${row.ib}`}>
+        {t("ib.pay")}
+      </Button>
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title={`${t("ib.payTitle")} #${row.ib}`}
+        footer={<>
+          <Button variant="outline" onClick={() => setOpen(false)}>{t("common.cancel")}</Button>
+          <Button onClick={() => pay.mutate(undefined)} disabled={!p || p.amount <= 0 || !!p.pending || pay.isPending} data-testid={`ib-pay-confirm-${row.ib}`}>{t("common.confirm")}</Button>
+        </>}
+      >
+        {preview.error ? (
+          <p className="text-sm text-red-600 dark:text-red-400">{preview.error.message}</p>
+        ) : !p ? (
+          <p className="text-sm text-muted-foreground">…</p>
+        ) : (
+          <div className="grid gap-2 text-sm" data-testid={`ib-pay-preview-${row.ib}`}>
+            <p>{p.from ?? t("ib.payFromStart")} … {p.to}</p>
+            <p><strong>{f.money(p.amount, p.currency)}</strong></p>
+            {p.pending && <p className="text-xs text-amber-600 dark:text-amber-400">{t("ib.payAwaiting")} ({p.pending})</p>}
+            {!p.pending && p.amount <= 0 && <p className="text-xs text-muted-foreground">{t("ib.payNothing")}</p>}
+            <p className="text-xs text-muted-foreground">{t("ib.payHint")}</p>
+          </div>
+        )}
+      </Dialog>
+    </>
   );
 }

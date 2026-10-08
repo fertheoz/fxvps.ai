@@ -49,6 +49,7 @@ export function IbTab({ acc }: { acc: ClientAccount }) {
       )}
       <div className="text-muted">
         {t('ib.terms')}: {ib.sharePct}% · {formatMoney(ib.perLotCents)} {acc.currency}/lot{ib.overridePct ? ` · override ${ib.overridePct}%` : ''} · {t('ib.clients')}: {ib.clients}
+        {ib.paidThrough ? ` · ${t('ib.paidThrough')}: ${ib.paidThrough}` : ''}
       </div>
       <div className="grid grid-cols-2 gap-2">
         {period(t('ib.thisMonth'), ib.thisMonth)}

@@ -4,7 +4,7 @@
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use axum::Router;
-use core_engine::admin::auth::{sign_hs256, unix_now, Authenticator, Claims, Role};
+use core_engine::admin::auth::{sign_hs256, unix_now, Actor, Authenticator, Claims, Role};
 use core_engine::admin::{self, store, AdminConfig};
 use core_engine::{recover, spawn, EngineHandle, Settings};
 use http_body_util::BodyExt;
@@ -2089,5 +2089,414 @@ async fn statement_email_status_and_test_send() {
         .await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
     assert_eq!(v["error"]["code"], "mail_not_configured");
+    t.stop();
+}
+
+const DAY: u64 = 86_400_000_000_000;
+
+fn today() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
+        / DAY
+}
+
+/// UTC day number -> `YYYY-MM-DD`.
+fn date(day: u64) -> String {
+    admin::views::iso(day * DAY)[..10].to_string()
+}
+
+/// Engine and admin journals as a running system would have left them, with
+/// the given timestamps (so deals can fall on days that are already over).
+fn write_journals(
+    dir: &Path,
+    engine: Vec<(u64, Command)>,
+    admin_cmds: Vec<(u64, store::AdminCmd)>,
+) {
+    use std::io::Write;
+    let mut f = std::fs::File::create(dir.join("journal.jsonl")).unwrap();
+    for (i, (ts, cmd)) in engine.into_iter().enumerate() {
+        let env = oms::Envelope {
+            seq: i as u64 + 1,
+            ts,
+            cmd,
+        };
+        writeln!(f, "{}", serde_json::to_string(&env).unwrap()).unwrap();
+    }
+    let mut f = std::fs::File::create(store::journal_path(dir)).unwrap();
+    let actor = Actor {
+        sub: "seed".into(),
+        name: "seed".into(),
+        role: Role::Admin,
+        mfa_ok: true,
+    };
+    for (i, (ts, cmd)) in admin_cmds.into_iter().enumerate() {
+        let r = store::AdminRecord {
+            seq: i as u64 + 1,
+            ts,
+            actor: actor.clone(),
+            cmd,
+        };
+        writeln!(f, "{}", serde_json::to_string(&r).unwrap()).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn ib_set_validates_first_and_refuses_loops_and_other_currencies() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), true).await;
+    let a = admin_t();
+    t.h.command(Command::SetGroup(GroupConfig::retail(
+        "e",
+        Currency::EUR,
+        Routing::BBook,
+    )))
+    .await
+    .unwrap();
+    for (acc, group) in [(9u64, "b"), (10, "b"), (11, "e")] {
+        t.h.command(Command::OpenAccount {
+            account: acc,
+            group: group.into(),
+        })
+        .await
+        .unwrap();
+    }
+    let patch = |id: u64, body: Value| {
+        let a = a.clone();
+        let t = &t;
+        async move {
+            t.req(
+                Method::PATCH,
+                &format!("/v1/accounts/{id}/ib"),
+                Some(&a),
+                Some(body),
+                &[],
+            )
+            .await
+        }
+    };
+    assert_eq!(patch(10, json!({"code": "SUB-1"})).await.0, StatusCode::OK);
+    // a refused request changes nothing (the share used to be written first)
+    assert_eq!(
+        patch(9, json!({"sharePct": 40, "code": "SUB-1"})).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        patch(9, json!({"sharePct": 40, "code": "a b"})).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    // revenue is shared as is: the IB must use the client's currency
+    assert_eq!(
+        patch(11, json!({"sharePct": 40, "ibAccount": 9})).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let (_, c) = t.get("/v1/accounts/9", &a).await;
+    assert_eq!(c["ibSharePct"], 0);
+    let (_, c) = t.get("/v1/accounts/11", &a).await;
+    assert_eq!(c["ibSharePct"], 0);
+    assert_eq!(c["ibAccount"], Value::Null);
+    // 8 -> 10 -> 9: closing the chain back on itself is refused
+    assert_eq!(patch(8, json!({"ibAccount": 10})).await.0, StatusCode::OK);
+    assert_eq!(patch(10, json!({"ibAccount": 9})).await.0, StatusCode::OK);
+    assert_eq!(
+        patch(9, json!({"ibAccount": 8})).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        patch(9, json!({"ibAccount": 10})).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let (_, c) = t.get("/v1/accounts/9", &a).await;
+    assert_eq!(c["ibAccount"], Value::Null);
+    t.stop();
+}
+
+#[tokio::test]
+async fn ib_referral_needs_a_fresh_account_and_no_loop() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), true).await;
+    let a = admin_t();
+    t.h.command(Command::SetGroup(GroupConfig::retail(
+        "e",
+        Currency::EUR,
+        Routing::BBook,
+    )))
+    .await
+    .unwrap();
+    for (acc, group) in [(9u64, "b"), (10, "b"), (11, "e")] {
+        t.h.command(Command::OpenAccount {
+            account: acc,
+            group: group.into(),
+        })
+        .await
+        .unwrap();
+    }
+    for (acc, code) in [(9u64, "NINE"), (10, "TEN"), (11, "EURO")] {
+        let (s, _) = t
+            .req(
+                Method::PATCH,
+                &format!("/v1/accounts/{acc}/ib"),
+                Some(&a),
+                Some(json!({ "code": code })),
+                &[],
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK);
+    }
+    let link = |acc: &'static str, code: &'static str| {
+        let t = &t;
+        let tok = client_token(&[acc]);
+        async move {
+            t.req(
+                Method::POST,
+                "/v1/client/ib/link",
+                Some(&tok),
+                Some(json!({ "account": acc, "code": code })),
+                &[],
+            )
+            .await
+        }
+    };
+    // 8 already traded (setup): an existing client is not attached afterwards
+    let (s, v) = link("8", "NINE").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["error"]["code"], "has_trades");
+    // another currency, own code
+    assert_eq!(link("7", "EURO").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(link("9", "NINE").await.0, StatusCode::BAD_REQUEST);
+    let (s, v) = link("7", "NINE").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["ok"], true);
+    assert_eq!(link("7", "TEN").await.1["already"], true);
+    // 9 joins 10; 10 joining 9 would close a loop
+    assert_eq!(link("9", "TEN").await.0, StatusCode::OK);
+    assert_eq!(link("10", "NINE").await.0, StatusCode::BAD_REQUEST);
+    let (_, c) = t.get("/v1/accounts/10", &a).await;
+    assert_eq!(c["ibAccount"], Value::Null);
+    // dashboard: a non-IB gets an empty list straight away, the IB its clients
+    let (s, v) = t.get("/v1/client/ib", &client_token(&["7"])).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["ibs"], json!([]));
+    let (_, v) = t.get("/v1/client/ib", &client_token(&["9"])).await;
+    assert_eq!(v["ibs"][0]["ib"], 9);
+    assert_eq!(v["ibs"][0]["clients"], 1);
+    t.stop();
+}
+
+#[tokio::test]
+async fn ib_link_history_override_loop_and_payouts() {
+    let dir = tempfile::tempdir().unwrap();
+    let today = today();
+    // deals of 8 and 10 three days ago, 1 lot each at 3.50 USD commission
+    let old = (today - 3) * DAY + 12 * 3_600_000_000_000;
+    let mut eu = SymbolSpec::fx("EURUSD", Currency::EUR, Currency::USD, 5);
+    eu.commission_per_lot = Money::parse("3.5", Currency::USD).unwrap();
+    let usd = |v: &str| Money::parse(v, Currency::USD).unwrap();
+    let mut engine = vec![
+        Command::AddSymbol(eu),
+        Command::SetGroup(GroupConfig::retail("b", Currency::USD, Routing::BBook)),
+        Command::Quote {
+            symbol: "EURUSD".into(),
+            bid: px("1.1"),
+            ask: px("1.1001"),
+        },
+    ];
+    for acc in [8u64, 9, 10, 11, 12] {
+        engine.push(Command::OpenAccount {
+            account: acc,
+            group: "b".into(),
+        });
+    }
+    for acc in [8u64, 10] {
+        engine.push(Command::Deposit {
+            account: acc,
+            amount: usd("10000"),
+            key: format!("d{acc}"),
+        });
+        engine.push(Command::PlaceOrder(NewOrder::market(
+            acc,
+            "p",
+            "EURUSD",
+            Side::Buy,
+            qty("1"),
+        )));
+    }
+    let linked = |account: u64, ib: u64| store::AdminCmd::IbLinked {
+        account,
+        ib: Some(ib),
+        dated: false,
+    };
+    let plan = |account: u64, override_pct: u8| store::AdminCmd::IbPlanSet {
+        account,
+        plan: store::IbPlan {
+            override_pct,
+            ..Default::default()
+        },
+    };
+    let later = old + 3_600_000_000_000;
+    write_journals(
+        dir.path(),
+        engine.into_iter().map(|c| (old, c)).collect(),
+        vec![
+            (
+                later,
+                store::AdminCmd::SettingsSaved {
+                    settings: store::SettingsRec {
+                        four_eyes_threshold: 100,
+                        ..Default::default()
+                    },
+                },
+            ),
+            // links from before link history: they count from the start, even
+            // though this record is younger than the deal
+            (later, linked(8, 9)),
+            (
+                later,
+                store::AdminCmd::IbShareSet {
+                    account: 9,
+                    pct: 50,
+                },
+            ),
+            // 9 -> 11 -> 12 -> 11: a loop from old data
+            (later, linked(9, 11)),
+            (later, linked(11, 12)),
+            (later, linked(12, 11)),
+            (later, plan(11, 10)),
+            (later, plan(12, 10)),
+        ],
+    );
+    let t = T::start(dir.path(), false).await;
+    let a = admin_t();
+    // 10 joins 9 now: its deal from three days ago is not 9's
+    let (s, v) = t
+        .req(
+            Method::PATCH,
+            "/v1/accounts/10/ib",
+            Some(&a),
+            Some(json!({"ibAccount": 9})),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (_, r) = t.get("/v1/reports/ib", &a).await;
+    let row = |ib: u64| {
+        r["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["ib"] == ib)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(row(9)["clients"], 2);
+    assert_eq!(row(9)["deals"], 1);
+    assert_eq!(row(9)["commission"], 350);
+    assert_eq!(row(9)["payout"], 175);
+    // each IB above is paid once per deal (11 used to be paid twice)
+    assert_eq!(row(11)["override"], 35);
+    assert_eq!(row(12)["override"], 35);
+
+    let yesterday = date(today - 1);
+    let preview = |ib: u64, to: String| {
+        let a = a.clone();
+        let t = &t;
+        async move {
+            t.get(&format!("/v1/accounts/{ib}/ib/payout?to={to}"), &a)
+                .await
+        }
+    };
+    let pay = |ib: u64, to: String, tok: String| {
+        let t = &t;
+        async move {
+            t.req(
+                Method::POST,
+                &format!("/v1/accounts/{ib}/ib/payout"),
+                Some(&tok),
+                Some(json!({ "to": to })),
+                &[],
+            )
+            .await
+        }
+    };
+    // only a day that is over can be paid
+    assert_eq!(
+        pay(9, date(today), a.clone()).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let (s, p) = preview(9, yesterday.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{p}");
+    assert_eq!(p["amount"], 175);
+    assert_eq!(p["from"], Value::Null);
+    assert_eq!(p["to"], yesterday.as_str());
+    assert_eq!(p["currency"], "USD");
+    // above the four-eyes threshold: queued, nothing paid through yet
+    let (s, v) = pay(9, yesterday.clone(), a.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["op"]["status"], "pending_approval");
+    let first = v["op"]["id"].as_str().unwrap().to_string();
+    let (_, r) = t.get("/v1/reports/ib", &a).await;
+    let r9 = r["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["ib"] == 9)
+        .unwrap()
+        .clone();
+    assert_eq!(r9["payoutPending"], first.as_str());
+    assert_eq!(r9["paidThrough"], Value::Null);
+    // no second request while one waits
+    let (s, v) = pay(9, yesterday.clone(), a.clone()).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    // rejected: the period stays open and can be requested again
+    let (s, _) = t
+        .req(
+            Method::POST,
+            &format!("/v1/approvals/{first}/reject"),
+            Some(&a),
+            Some(json!({"reason": "check"})),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, p) = preview(9, yesterday.clone()).await;
+    assert_eq!(p["pending"], Value::Null);
+    assert_eq!(p["amount"], 175);
+    let (s, v) = pay(9, yesterday.clone(), a.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["op"]["status"], "pending_approval");
+    assert_eq!(v["op"]["replayed"], false);
+    let second = v["op"]["id"].as_str().unwrap().to_string();
+    assert_ne!(first, second);
+    // approved by a second user: paid, and paid through yesterday
+    let (s, v) = t
+        .req(
+            Method::POST,
+            &format!("/v1/approvals/{second}/approve"),
+            Some(&token("bob", Role::Admin)),
+            None,
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (_, c) = t.get("/v1/accounts/9", &a).await;
+    assert_eq!(c["balance"], 175);
+    let (_, p) = preview(9, yesterday.clone()).await;
+    assert_eq!(p["paidThrough"], yesterday.as_str());
+    assert_eq!(p["amount"], 0);
+    let (s, v) = pay(9, yesterday.clone(), a.clone()).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["error"]["code"], "already_paid");
+    // below the threshold: applied at once
+    let (s, v) = pay(11, yesterday.clone(), a.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["op"]["status"], "applied");
+    assert_eq!(v["amount"], 35);
+    let (_, c) = t.get("/v1/accounts/11", &a).await;
+    assert_eq!(c["balance"], 35);
+    // replaying the admin journal gives the same paid-through marks
+    let st = store::replay(dir.path()).unwrap();
+    assert_eq!(st.ib_paid_to.get(&9), Some(&today));
+    assert_eq!(st.ib_paid_to.get(&11), Some(&today));
     t.stop();
 }

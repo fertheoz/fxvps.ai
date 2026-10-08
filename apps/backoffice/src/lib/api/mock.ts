@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure, IbPayoutPreview } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
@@ -106,6 +106,17 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     const ps = s.positions.filter((p) => p.clientId === c.id);
     c.margin = ps.reduce((a, p) => a + Math.round(notionalMinor(p.symbol, p.lots, p.currentPrice, contract(p.symbol)) / c.leverage), 0);
     c.equity = c.balance + c.credit + ps.reduce((a, p) => a + p.pnl + p.swap, 0);
+  };
+
+  /** IB login -> last day paid out (YYYY-MM-DD); payouts start the day after. */
+  const ibPaid = new Map<number, string>();
+  const ibPreview = (ib: number, to: string): IbPayoutPreview => {
+    const c = s.clients.find((x) => x.login === ib);
+    if (!c) throw new Error("unknown account");
+    const paid = ibPaid.get(ib) ?? null;
+    const from = paid === null ? null : new Date(Date.parse(`${paid}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
+    const amount = paid !== null && paid >= to ? 0 : Math.round((220_00 + 410_00) * (c.ibSharePct ?? 0) / 100);
+    return { ib, from, to, paidThrough: paid, amount, currency: c.currency, pending: null };
   };
 
   /** Small random walk on every positions read so the monitor feels "live". */
@@ -379,7 +390,21 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
     async ibReport() {
       const ibs = s.clients.filter((c) => (c.ibSharePct ?? 0) > 0);
-      return delay({ from: new Date(Date.now() - 30 * 864e5).toISOString(), to: null, rows: ibs.map((c) => ({ ib: c.login, name: c.name, currency: c.currency, sharePct: c.ibSharePct ?? 0, clients: s.clients.filter((x) => x.ibAccount === c.login).length, deals: 40, lots: 31.5, commission: 220_00, markup: 410_00, payout: Math.round((220_00 + 410_00) * (c.ibSharePct ?? 0) / 100) })) });
+      return delay({ from: new Date(Date.now() - 30 * 864e5).toISOString(), to: null, rows: ibs.map((c) => ({ ib: c.login, name: c.name, currency: c.currency, sharePct: c.ibSharePct ?? 0, clients: s.clients.filter((x) => x.ibAccount === c.login).length, deals: 40, lots: 31.5, commission: 220_00, markup: 410_00, payout: Math.round((220_00 + 410_00) * (c.ibSharePct ?? 0) / 100), paidThrough: ibPaid.get(c.login) ?? null, payoutPending: null })) });
+    },
+    async ibPayoutPreview(ib, to) {
+      return delay(ibPreview(ib, to));
+    },
+    async ibPayout(ib, to, actor) {
+      guard(actor, "balance.deposit");
+      const p = ibPreview(ib, to);
+      if (p.amount <= 0) throw new Error("nothing to pay for the period");
+      const c = s.clients.find((x) => x.login === ib)!;
+      c.balance += p.amount;
+      recompute(c);
+      ibPaid.set(ib, to);
+      audit(actor, "balance.deposit", `#${ib}`, `IB payout ${p.from ?? "start"}..${to}`);
+      return delay({ ...p, paidThrough: to, op: { id: `op-${++seq}`, status: "applied" as const, newBalance: c.balance, newCredit: c.credit } });
     },
     async setProfile(id, p, actor) {
       guard(actor, "clients.edit");

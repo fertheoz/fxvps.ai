@@ -1,8 +1,8 @@
-import { clientApi } from '../api/clientApi';
+import { clientApi, ClientApiError } from '../api/clientApi';
 
 const REF_KEY = 'fxvps.ref';
 
-/** Remembers `?ref=CODE` from the landing URL until the client has an account. */
+/** Remembers `?ref=CODE` from the landing URL until the client decides on it. */
 export function captureReferral(): void {
   try {
     const code = new URLSearchParams(window.location.search).get('ref');
@@ -12,26 +12,39 @@ export function captureReferral(): void {
   }
 }
 
-/** Links the account to the remembered IB once; the server ignores repeats. */
-export async function sendPendingReferral(account: string): Promise<void> {
-  let code: string | null;
+/** The remembered referral code waiting for the client's answer, if any. */
+export function pendingReferral(): string | null {
   try {
-    code = localStorage.getItem(REF_KEY);
+    return localStorage.getItem(REF_KEY);
   } catch {
-    return;
+    return null;
   }
-  if (!code) return;
+}
+
+/** The client said no: forget the code. */
+export function dismissReferral(): void {
   try {
-    await clientApi.ibLink(account, code);
     localStorage.removeItem(REF_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/**
+ * Links `account` to the remembered IB. Called only from the client's explicit
+ * confirmation (the link is permanent). The code is forgotten once the server
+ * has decided (linked, already linked or refused) and kept when there was no
+ * answer or the session expired, so the client can try again.
+ */
+export async function acceptReferral(account: string): Promise<'linked' | 'already'> {
+  const code = pendingReferral();
+  if (!code) throw new Error('no referral code');
+  try {
+    const r = await clientApi.ibLink(account, code);
+    dismissReferral();
+    return r.already ? 'already' : 'linked';
   } catch (e) {
-    // unknown code: forget it; anything else: try again next time
-    if ((e as Error).message.includes('referral')) {
-      try {
-        localStorage.removeItem(REF_KEY);
-      } catch {
-        /* ignore */
-      }
-    }
+    if (e instanceof ClientApiError && e.status >= 400 && e.status < 500 && e.status !== 401) dismissReferral();
+    throw e;
   }
 }
