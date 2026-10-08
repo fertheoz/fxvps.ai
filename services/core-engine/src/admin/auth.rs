@@ -204,6 +204,9 @@ struct RawClaims {
     /// Trading accounts of a client token (identity service).
     #[serde(default)]
     accounts: Vec<String>,
+    /// API-key tokens: `read` or `trade`.
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 /// Verified identity token of a trading client (self-service API).
@@ -213,6 +216,8 @@ pub struct ClientClaims {
     pub name: Option<String>,
     /// External account ids (`DEMO-1`, ...).
     pub accounts: Vec<String>,
+    /// Read-only API key (`scope: read`).
+    pub read_only: bool,
 }
 
 /// Back-office role of a token: `role`, else the most privileged back-office
@@ -652,6 +657,7 @@ impl Authenticator {
                         sub: c.sub,
                         name: c.name.or(c.email),
                         accounts: c.accounts,
+                        read_only: c.scope.as_deref() == Some("read"),
                     });
                 }
                 Err(e) => last = AuthError(e.to_string()),

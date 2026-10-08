@@ -10,6 +10,7 @@
 pub mod alerts;
 pub mod auth;
 mod bridge_admin;
+mod copy_admin;
 pub mod lp_poll;
 mod routes;
 pub mod seed;
@@ -222,6 +223,8 @@ pub struct ClientActor {
     pub account_ids: Vec<String>,
     /// (external id, engine login) for the accounts known to this engine.
     pub logins: Vec<(String, u64)>,
+    /// Read-only API-key token: may look, never move money or positions.
+    pub read_only: bool,
 }
 
 impl ClientActor {
@@ -261,6 +264,7 @@ impl FromRequestParts<AdminCtx> for ClientActor {
             sub: c.sub,
             account_ids: c.accounts,
             logins,
+            read_only: c.read_only,
         })
     }
 }

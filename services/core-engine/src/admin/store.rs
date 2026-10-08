@@ -389,6 +389,10 @@ pub enum AdminCmd {
     TenantsSaved {
         tenants: Vec<TenantRec>,
     },
+    /// Copy trading strategy catalogue entry (created or edited).
+    StrategySaved {
+        strategy: super::copy_admin::StrategyRec,
+    },
     /// Introducing-broker share of a parent account's children commission (percent).
     IbShareSet {
         account: u64,
@@ -512,6 +516,9 @@ pub struct AdminState {
     /// Tenants (stage 14).
     #[serde(default)]
     pub tenants: BTreeMap<String, TenantRec>,
+    /// Copy trading strategies by provider account.
+    #[serde(default)]
+    pub strategies: BTreeMap<u64, super::copy_admin::StrategyRec>,
     /// Oldest first.
     pub audit: Vec<AuditRec>,
 }
@@ -798,6 +805,20 @@ impl AdminState {
                     "ib.link".into(),
                     format!("#{account}"),
                     format!("IB {:?} → {:?}", old, ib),
+                )
+            }
+            AdminCmd::StrategySaved { strategy } => {
+                self.strategies.insert(strategy.account, strategy.clone());
+                self.audit(
+                    r,
+                    "copy.strategy".into(),
+                    format!("#{}", strategy.account),
+                    format!(
+                        "{} fee {} bps{}",
+                        strategy.name,
+                        strategy.perf_fee_bps,
+                        if strategy.public { ", public" } else { "" }
+                    ),
                 )
             }
             AdminCmd::IbShareSet { account, pct } => {

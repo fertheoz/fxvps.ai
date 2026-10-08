@@ -305,6 +305,7 @@ pub fn deal(d: &DealView) -> client_proto::Deal {
             OrderOrigin::StopLoss => R::StopLoss,
             OrderOrigin::TakeProfit => R::TakeProfit,
             OrderOrigin::StopOut => R::StopOut,
+            OrderOrigin::Copy => R::Client,
         } as i32,
     }
 }

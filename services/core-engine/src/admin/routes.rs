@@ -44,7 +44,24 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/funding", get(funding_list))
         .route("/v1/funding/{id}/decide", post(funding_decide))
         .route("/v1/reports/ib", get(ib_report))
+        .route("/v1/copy", get(super::copy_admin::list))
+        .route(
+            "/v1/copy/strategies/{account}",
+            put(super::copy_admin::save_strategy),
+        )
+        .route("/v1/copy/subscribe", post(super::copy_admin::subscribe))
+        .route("/v1/copy/unsubscribe", post(super::copy_admin::unsubscribe))
+        .route("/v1/copy/settle", post(super::copy_admin::settle))
         .route("/v1/client/me", get(client_me))
+        .route("/v1/client/copy", get(super::copy_admin::client_list))
+        .route(
+            "/v1/client/copy/subscribe",
+            post(super::copy_admin::client_subscribe),
+        )
+        .route(
+            "/v1/client/copy/unsubscribe",
+            post(super::copy_admin::client_unsubscribe),
+        )
         .route("/v1/client/funding", post(client_funding_request))
         .route("/v1/client/kyc/documents", post(client_kyc_upload))
         .route("/v1/reports/transactions", get(transactions))
@@ -175,7 +192,7 @@ impl AdminCtx {
         Ok(out)
     }
 
-    async fn cmd(&self, c: Command) -> Result<Vec<Event>, ApiError> {
+    pub(super) async fn cmd(&self, c: Command) -> Result<Vec<Event>, ApiError> {
         let ev = self.engine.command(c).await.map_err(ApiError::internal)?;
         if let Some(Event::CommandRejected { reason }) = ev
             .iter()

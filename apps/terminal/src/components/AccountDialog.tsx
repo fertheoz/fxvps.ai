@@ -4,8 +4,9 @@ import { useT } from '../hooks';
 import { useTerminal } from '../store/terminal';
 import { clientApi, clientApiBase, type ClientMe, type FundingKind, type FundingMethod } from '../api/clientApi';
 import { Modal } from './Dialogs';
+import { CopyTab } from './CopyTab';
 
-type Tab = 'funding' | 'verification';
+type Tab = 'funding' | 'verification' | 'copy';
 const DOC_KINDS = ['id_front', 'id_back', 'proof_of_address', 'selfie', 'other'] as const;
 
 /** Funding (deposit / withdrawal requests) and verification (KYC documents) for the signed-in client. */
@@ -95,6 +96,7 @@ export function AccountDialog() {
       <div className="px-3 border-b border-line flex items-center gap-1">
         {tabBtn('funding', t('acct.funding'))}
         {tabBtn('verification', t('acct.verification'))}
+        {tabBtn('copy', t('copy.tab'))}
         {me && me.accounts.length > 1 && (
           <select className="ml-auto bg-panel-2 border border-line rounded px-2 h-7 text-[12px]" value={account} onChange={(e) => setAccount(e.target.value)} aria-label={t('top.account')}>
             {me.accounts.map((a) => <option key={a.externalId} value={a.externalId}>{a.externalId} · {a.currency}</option>)}
@@ -159,6 +161,8 @@ export function AccountDialog() {
             </div>
           </>
         )}
+
+        {tab === 'copy' && me && acc && <CopyTab acc={acc} />}
 
         {tab === 'verification' && me && acc && (
           <>

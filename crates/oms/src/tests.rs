@@ -1635,3 +1635,89 @@ fn rollover_swap_free_fee_after_grace() {
     h.cmd(Command::Rollover);
     assert_eq!(h.bal(1), usd("9990"));
 }
+
+#[test]
+fn copy_trading_mirrors_scales_and_charges_hwm_fee() {
+    let mut h = b();
+    h.account(2, "b", "10000");
+    // follower 2 copies provider 1 at 50 %, 20 % performance fee
+    let ev = h.cmd(Command::CopySubscribe {
+        follower: 2,
+        provider: 1,
+        ratio_bps: 5_000,
+        equity_stop_pct: 0,
+        perf_fee_bps: 2_000,
+    });
+    assert!(
+        !ev.iter()
+            .any(|e| matches!(e, Event::CommandRejected { .. })),
+        "{ev:?}"
+    );
+    h.market(1, "p1", Side::Buy, "2");
+    let copies: Vec<_> = h.e.positions_of(2).into_iter().cloned().collect();
+    assert_eq!(copies.len(), 1);
+    assert_eq!(copies[0].volume, qty("1"));
+    assert_eq!(copies[0].side, Side::Buy);
+    // provider closes half: the copy follows
+    let pp = h.e.positions_of(1)[0].id;
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: pp,
+        volume: Some(qty("1")),
+        client_order_id: "c1".into(),
+    });
+    assert_eq!(h.e.positions_of(2)[0].volume, qty("0.5"));
+    // price up, provider closes the rest: the copy closes in profit
+    h.quote("EURUSD", "1.10200", "1.10210");
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: pp,
+        volume: None,
+        client_order_id: "c2".into(),
+    });
+    assert!(h.e.positions_of(2).is_empty());
+    let sub = h.e.copy_subscriptions()[0].clone();
+    assert!(sub.realized > 0, "{sub:?}");
+    let before = h.bal(2);
+    h.cmd(Command::CopySettle { provider: 1 });
+    let fee = sub.realized * 2_000 / 10_000;
+    assert_eq!(h.bal(2).minor, before.minor - fee);
+    // settling again charges nothing (high-water mark)
+    h.cmd(Command::CopySettle { provider: 1 });
+    assert_eq!(h.bal(2).minor, before.minor - fee);
+    // replay reproduces the same state
+    let replayed = Engine::replay(h.config.clone(), &h.journal);
+    assert_eq!(replayed.state_digest(), h.e.state_digest());
+}
+
+#[test]
+fn copy_trading_never_reopens_a_followers_manual_close() {
+    let mut h = b();
+    h.account(2, "b", "10000");
+    h.cmd(Command::CopySubscribe {
+        follower: 2,
+        provider: 1,
+        ratio_bps: 10_000,
+        equity_stop_pct: 0,
+        perf_fee_bps: 0,
+    });
+    h.market(1, "p1", Side::Sell, "1");
+    let fp = h.e.positions_of(2)[0].id;
+    h.cmd(Command::ClosePosition {
+        account: 2,
+        position_id: fp,
+        volume: None,
+        client_order_id: "mine".into(),
+    });
+    h.cmd(Command::Tick);
+    h.cmd(Command::Tick);
+    assert!(h.e.positions_of(2).is_empty());
+    // unsubscribe stops new copies
+    h.cmd(Command::CopyUnsubscribe {
+        follower: 2,
+        provider: 1,
+        close: true,
+    });
+    h.market(1, "p2", Side::Buy, "1");
+    assert!(h.e.positions_of(2).is_empty());
+}

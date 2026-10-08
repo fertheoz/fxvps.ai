@@ -7,6 +7,7 @@ pub use risk::{
     Side, SwapConfig, SwapMode, SymbolSpec, TradingCalendar, TradingSession,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub type AccountNo = u64;
 pub type OrderId = u64;
@@ -154,6 +155,9 @@ pub struct Order {
     pub max_slippage_override: Option<i64>,
     #[serde(default)]
     pub partial_fill_override: Option<PartialFill>,
+    /// Copy trading: (provider account, provider position) this order mirrors.
+    #[serde(default)]
+    pub copy_from: Option<(AccountNo, PositionId)>,
 }
 
 /// Origin of an order (deal reason in the history).
@@ -164,6 +168,8 @@ pub enum OrderOrigin {
     StopLoss,
     TakeProfit,
     StopOut,
+    /// Opened / closed by copy trading on behalf of a follower.
+    Copy,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -265,6 +271,39 @@ pub struct Position {
     /// Accumulated swap (minor units of the account currency, negative = charged).
     #[serde(default)]
     pub swap_minor: i128,
+    /// Copy trading: (provider account, provider position) this position mirrors.
+    #[serde(default)]
+    pub copy_from: Option<(AccountNo, PositionId)>,
+}
+
+/// A follower copying a strategy provider (copy trading / MAM).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub struct CopySubscription {
+    pub follower: AccountNo,
+    pub provider: AccountNo,
+    /// Follower volume = provider volume x ratio_bps / 10 000 (rounded down to the lot step).
+    pub ratio_bps: u32,
+    /// Stop copying and close the copies when equity falls this many percent
+    /// below the equity at subscription (0 = off).
+    pub equity_stop_pct: u32,
+    /// Performance fee on new copy profit above the high-water mark (bps).
+    pub perf_fee_bps: u32,
+    pub since_ts: u64,
+    /// Follower equity at subscription (minor units).
+    pub start_equity: i128,
+    /// Realized copy result incl. commission and swap (minor units).
+    pub realized: i128,
+    /// High-water mark of `realized` already charged (minor units).
+    pub hwm: i128,
+    /// Fees paid to the provider so far (minor units).
+    pub fees_paid: i128,
+    /// Provider position -> follower lots already sent (raw).
+    pub copied: BTreeMap<PositionId, i64>,
+    /// No copy attempt before this time (after a rejection).
+    pub retry_after: u64,
+    pub active: bool,
+    #[serde(default)]
+    pub stopped_reason: Option<String>,
 }
 
 impl Position {
@@ -415,6 +454,24 @@ pub enum Command {
     FlushLp,
     /// Daily rollover: charge/credit swaps.
     Rollover,
+    /// Follower starts copying a provider (hedging follower, same currency).
+    CopySubscribe {
+        follower: AccountNo,
+        provider: AccountNo,
+        ratio_bps: u32,
+        equity_stop_pct: u32,
+        perf_fee_bps: u32,
+    },
+    /// Stops copying; `close` also closes the open copies.
+    CopyUnsubscribe {
+        follower: AccountNo,
+        provider: AccountNo,
+        close: bool,
+    },
+    /// Charges performance fees (above the high-water mark) to the provider's followers.
+    CopySettle {
+        provider: AccountNo,
+    },
     /// Time advance only (expiry processing).
     Tick,
 }
@@ -502,6 +559,16 @@ pub enum Event {
     },
     NegativeBalanceCompensated {
         account: AccountNo,
+        amount: Money,
+    },
+    CopyChanged {
+        follower: AccountNo,
+        provider: AccountNo,
+        active: bool,
+    },
+    CopyFee {
+        follower: AccountNo,
+        provider: AccountNo,
         amount: Money,
     },
     /// Daily rollover ran (`positions` charged) or was skipped (same day / weekend / disabled).
