@@ -54,6 +54,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/copy/settle", post(super::copy_admin::settle))
         .route("/v1/client/me", get(client_me))
         .route("/v1/client/brand", get(client_brand))
+        .route("/v1/client/statement", get(client_statement))
         .route("/v1/client/copy", get(super::copy_admin::client_list))
         .route(
             "/v1/client/copy/subscribe",
@@ -3348,6 +3349,111 @@ async fn client_brand(State(ctx): State<AdminCtx>, Query(q): Query<BrandQuery>) 
             json!({ "tenant": null, "name": st.settings.broker_name, "brandColor": "", "logoUrl": "", "supportEmail": "" })
         }
     }))
+}
+
+#[derive(Deserialize)]
+struct StatementQuery {
+    account: String,
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
+}
+
+/// The client's own statement for [from, to] (days, UTC): closed trades with
+/// P&L, commission and swap, applied deposits / withdrawals, open positions
+/// and the current balance. Default period: the last 30 days.
+async fn client_statement(
+    State(ctx): State<AdminCtx>,
+    client: ClientActor,
+    Query(q): Query<StatementQuery>,
+) -> ApiResult {
+    let login = client
+        .login_of(&q.account)
+        .ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "forbidden", "not your account"))?;
+    let now = now_ns();
+    let from = q
+        .from
+        .as_deref()
+        .and_then(parse_iso_ns)
+        .unwrap_or(now.saturating_sub(30 * DAY_NS));
+    let to =
+        q.to.as_deref()
+            .and_then(parse_iso_ns)
+            .map(|t| t + DAY_NS)
+            .unwrap_or(u64::MAX);
+    let st = ctx.view_state().await;
+    let cash: Vec<Value> = st
+        .ops
+        .values()
+        .filter(|o| {
+            o.account == login && o.status == OpStatus::Applied && o.kind != BalanceKind::Credit
+        })
+        .filter(|o| {
+            let t = o.decided_at.unwrap_or(o.requested_at);
+            t >= from && t < to
+        })
+        .map(|o| {
+            json!({
+                "at": views::iso(o.decided_at.unwrap_or(o.requested_at)),
+                "kind": if o.kind == BalanceKind::Deposit { "deposit" } else { "withdraw" },
+                "amount": o.amount,
+                "reason": o.reason,
+            })
+        })
+        .collect();
+    let profile = st.profiles.get(&login).map(|p| p.name.clone());
+    let broker = st.settings.broker_name.clone();
+    let body = ctx
+        .q(move |e| {
+            let a = e.account(login)?;
+            let g = e.group(&a.group)?;
+            let trades: Vec<Value> = e
+                .deals()
+                .iter()
+                .filter(|d| d.account == login && d.entry == oms::DealEntry::Out && d.ts >= from && d.ts < to)
+                .map(|d| {
+                    json!({
+                        "at": views::iso(d.ts), "symbol": d.symbol, "side": if d.side == oms::Side::Buy { "buy" } else { "sell" },
+                        "lots": views::qty_f(d.volume), "price": views::price_f(d.price),
+                        "pnl": d.pnl.minor as i64, "commission": d.commission.minor as i64, "swap": d.swap as i64,
+                        "position": d.position_id,
+                    })
+                })
+                .collect();
+            let sum = |k: &str| trades.iter().map(|t| t[k].as_i64().unwrap_or(0)).sum::<i64>();
+            let totals = json!({
+                "trades": trades.len(),
+                "lots": trades.iter().map(|t| t["lots"].as_f64().unwrap_or(0.0)).sum::<f64>(),
+                "pnl": sum("pnl"), "commission": sum("commission"), "swap": sum("swap"),
+            });
+            let positions: Vec<Value> = e
+                .positions_of(login)
+                .iter()
+                .map(|p| {
+                    json!({
+                        "id": p.id, "symbol": p.symbol, "side": if p.side == oms::Side::Buy { "buy" } else { "sell" },
+                        "lots": views::qty_f(p.volume), "openPrice": views::price_f(p.open_price),
+                        "openedAt": views::iso(p.opened_ts), "swap": p.swap_minor as i64,
+                    })
+                })
+                .collect();
+            let r = e.account_risk(login).ok()?;
+            Some(json!({
+                "account": login, "group": a.group, "currency": g.currency.to_string(),
+                "from": views::iso(from), "to": if to == u64::MAX { Value::Null } else { json!(views::iso(to - 1)) },
+                "generatedAt": views::iso(e.now_ns()),
+                "balance": r.balance.minor as i64, "equity": r.equity.minor as i64, "margin": r.margin.minor as i64,
+                "trades": trades, "totals": totals, "positions": positions,
+            }))
+        })
+        .await?
+        .ok_or_else(|| ApiError::not_found("unknown account"))?;
+    let mut body = body;
+    body["cash"] = json!(cash);
+    body["name"] = json!(profile.unwrap_or(client.name));
+    body["broker"] = json!(broker);
+    Ok(Json(body))
 }
 
 #[cfg(test)]

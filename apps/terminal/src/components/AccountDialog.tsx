@@ -4,11 +4,12 @@ import { useT } from '../hooks';
 import { useTerminal } from '../store/terminal';
 import { clientApi, clientApiBase, type ClientMe, type FundingKind, type FundingMethod } from '../api/clientApi';
 import { Modal } from './Dialogs';
+import { StatementTab } from './StatementTab';
 import { CopyTab } from './CopyTab';
 import { IbTab } from './IbTab';
 import { sendPendingReferral } from '../lib/referral';
 
-type Tab = 'funding' | 'verification' | 'copy' | 'ib';
+type Tab = 'funding' | 'verification' | 'copy' | 'ib' | 'statement';
 const DOC_KINDS = ['id_front', 'id_back', 'proof_of_address', 'selfie', 'other'] as const;
 
 /** Funding (deposit / withdrawal requests) and verification (KYC documents) for the signed-in client. */
@@ -99,6 +100,7 @@ export function AccountDialog() {
       <div className="px-3 border-b border-line flex items-center gap-1">
         {tabBtn('funding', t('acct.funding'))}
         {tabBtn('verification', t('acct.verification'))}
+        {tabBtn('statement', t('stmt.tab'))}
         {tabBtn('copy', t('copy.tab'))}
         {tabBtn('ib', t('ib.tab'))}
         {me && me.accounts.length > 1 && (
@@ -168,6 +170,8 @@ export function AccountDialog() {
 
         {tab === 'copy' && me && acc && <CopyTab acc={acc} />}
         {tab === 'ib' && me && acc && <IbTab acc={acc} />}
+
+        {tab === 'statement' && me && acc && <StatementTab acc={acc} />}
 
         {tab === 'verification' && me && acc && (
           <>

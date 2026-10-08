@@ -149,6 +149,27 @@ export const clientApi = {
   ib: () => call<{ ibs: IbDashboard[] }>('/ib'),
   ibLink: (account: string, code: string) =>
     call<{ ok: boolean }>('/ib/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account, code }) }),
+export interface Statement {
+  account: number;
+  name: string;
+  broker: string;
+  group: string;
+  currency: string;
+  from: string;
+  to: string | null;
+  generatedAt: string;
+  balance: number;
+  equity: number;
+  margin: number;
+  trades: { at: string; symbol: string; side: 'buy' | 'sell'; lots: number; price: number; pnl: number; commission: number; swap: number; position: number }[];
+  totals: { trades: number; lots: number; pnl: number; commission: number; swap: number };
+  positions: { id: number; symbol: string; side: 'buy' | 'sell'; lots: number; openPrice: number; openedAt: string; swap: number }[];
+  cash: { at: string; kind: 'deposit' | 'withdraw'; amount: number; reason: string }[];
+}
+
+export const clientApi = {
+  statement: (account: string, from: string, to: string) =>
+    call<Statement>(`/statement?account=${encodeURIComponent(account)}${from ? `&from=${from}` : ''}${to ? `&to=${to}` : ''}`),
   copy: () => call<CopyOverview>('/copy'),
   copySubscribe: (r: { account: string; provider: number; ratioBps: number; equityStopPct: number }) => call<{ ok: boolean }>('/copy/subscribe', json(r)),
   copyUnsubscribe: (r: { account: string; provider: number; close: boolean }) => call<{ ok: boolean }>('/copy/unsubscribe', json(r)),
