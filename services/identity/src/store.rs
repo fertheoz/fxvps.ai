@@ -104,6 +104,23 @@ pub struct PasskeyRecord {
     pub created_at: i64,
 }
 
+/// Personal API key. `hash` is the SHA-256 of the secret; the secret itself
+/// is shown once at creation and never stored.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiKey {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub hash: String,
+    /// `read` or `trade`.
+    pub scope: String,
+    /// Allowed client IPs; empty = any.
+    pub ips: Vec<String>,
+    pub created_at: i64,
+    pub last_used: Option<i64>,
+    pub revoked: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEvent {
     pub ts: i64,
@@ -165,6 +182,13 @@ pub trait Store: Send + Sync + 'static {
     async fn accounts(&self, user_id: &str) -> StoreResult<Vec<String>>;
 
     async fn audit(&self, e: &AuditEvent) -> StoreResult<()>;
+
+    async fn put_api_key(&self, k: &ApiKey) -> StoreResult<()>;
+    async fn api_keys(&self, user_id: &str) -> StoreResult<Vec<ApiKey>>;
+    async fn api_key_by_hash(&self, hash: &str) -> StoreResult<Option<ApiKey>>;
+    /// Revokes the user's key; `false` when there is no such key.
+    async fn revoke_api_key(&self, user_id: &str, id: &str) -> StoreResult<bool>;
+    async fn touch_api_key(&self, id: &str, ts: i64) -> StoreResult<()>;
     async fn audit_events(&self, user_id: Option<&str>, limit: i64)
         -> StoreResult<Vec<AuditEvent>>;
 }
@@ -184,6 +208,7 @@ struct Mem {
     passkeys: Vec<PasskeyRecord>,
     links: Vec<(String, String)>,
     audit: Vec<AuditEvent>,
+    api_keys: Vec<ApiKey>,
 }
 
 impl MemoryStore {
@@ -411,6 +436,56 @@ impl Store for MemoryStore {
             .take(limit.max(0) as usize)
             .cloned()
             .collect())
+    }
+
+    async fn put_api_key(&self, k: &ApiKey) -> StoreResult<()> {
+        let mut m = self.lock();
+        if m.api_keys.iter().any(|x| x.id == k.id || x.hash == k.hash) {
+            return Err(StoreError::Conflict);
+        }
+        m.api_keys.push(k.clone());
+        Ok(())
+    }
+
+    async fn api_keys(&self, user_id: &str) -> StoreResult<Vec<ApiKey>> {
+        Ok(self
+            .lock()
+            .api_keys
+            .iter()
+            .filter(|k| k.user_id == user_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn api_key_by_hash(&self, hash: &str) -> StoreResult<Option<ApiKey>> {
+        Ok(self
+            .lock()
+            .api_keys
+            .iter()
+            .find(|k| k.hash == hash)
+            .cloned())
+    }
+
+    async fn revoke_api_key(&self, user_id: &str, id: &str) -> StoreResult<bool> {
+        let mut m = self.lock();
+        match m
+            .api_keys
+            .iter_mut()
+            .find(|k| k.id == id && k.user_id == user_id)
+        {
+            Some(k) => {
+                k.revoked = true;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn touch_api_key(&self, id: &str, ts: i64) -> StoreResult<()> {
+        if let Some(k) = self.lock().api_keys.iter_mut().find(|k| k.id == id) {
+            k.last_used = Some(ts);
+        }
+        Ok(())
     }
 }
 

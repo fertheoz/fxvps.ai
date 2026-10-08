@@ -1122,3 +1122,63 @@ async fn admin_routes_need_mfa_and_sensitive_routes_are_rate_limited() {
         "{codes:?}"
     );
 }
+
+#[tokio::test]
+async fn api_keys_issue_scoped_tokens_and_revoke() {
+    let h = H::new();
+    h.register_verified("algo@example.com").await;
+    let at = h.login("algo@example.com").await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = h
+        .post_auth("/v1/api-keys", &at, json!({"name": "bot", "scope": "read"}))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    let secret = r.body["secret"].as_str().unwrap().to_string();
+    let id = r.body["id"].as_str().unwrap().to_string();
+    assert!(secret.starts_with("fxk_"));
+    // the list never shows the secret
+    let l = h.get_auth("/v1/api-keys", &at).await;
+    assert!(!l.body.to_string().contains(&secret));
+    let t = h
+        .req(
+            "POST",
+            "/v1/api-keys/token",
+            None,
+            &[("x-api-key", &secret)],
+        )
+        .await;
+    assert_eq!(t.status, StatusCode::OK);
+    assert_eq!(t.body["scope"], "read");
+    let kt = t.body["access_token"].as_str().unwrap().to_string();
+    // a key token cannot mint more keys
+    let r2 = h
+        .post_auth("/v1/api-keys", &kt, json!({"name": "x", "scope": "trade"}))
+        .await;
+    assert_eq!(r2.status, StatusCode::FORBIDDEN);
+    let bad = h
+        .req(
+            "POST",
+            "/v1/api-keys/token",
+            None,
+            &[("x-api-key", "fxk_nope")],
+        )
+        .await;
+    assert_eq!(bad.status, StatusCode::UNAUTHORIZED);
+    h.post_auth("/v1/api-keys/revoke", &at, json!({"id": id}))
+        .await;
+    let t2 = h
+        .req(
+            "POST",
+            "/v1/api-keys/token",
+            None,
+            &[("x-api-key", &secret)],
+        )
+        .await;
+    assert_eq!(t2.status, StatusCode::UNAUTHORIZED);
+    let r3 = h
+        .post_auth("/v1/api-keys", &at, json!({"name": "x", "scope": "admin"}))
+        .await;
+    assert_eq!(r3.status, StatusCode::BAD_REQUEST);
+}

@@ -22,7 +22,7 @@ use webauthn_rs::prelude::{
 use crate::crypto::{self, random_id, random_token, sha256_hex};
 use crate::mail::Mail;
 use crate::store::{
-    OneTimeToken, PasskeyRecord, RefreshToken, Rotation, StoreError, TokenKind, User,
+    ApiKey, OneTimeToken, PasskeyRecord, RefreshToken, Rotation, StoreError, TokenKind, User,
 };
 use crate::{now, AccessClaims, App, ROLES};
 
@@ -264,6 +264,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/.well-known/openid-configuration", get(discovery))
         .route("/v1/me", get(me))
         .route("/v1/accounts", get(my_accounts))
+        .route("/v1/api-keys", get(api_keys_list).post(api_key_create))
+        .route("/v1/api-keys/revoke", post(api_key_revoke))
+        .route("/v1/api-keys/token", post(api_key_token))
         .merge(sensitive)
         .merge(limited)
         .layer(cors)
@@ -391,6 +394,7 @@ async fn access_token(
         accounts: accounts.clone(),
         roles: user.roles.clone(),
         amr: amr.to_vec(),
+        scope: None,
     };
     let t = app.keys.sign(&claims).map_err(|e| {
         tracing::error!(error = %e, "sign");
@@ -1655,4 +1659,185 @@ mod xff_tests {
         assert_eq!(f("1.1.1.1, not-an-ip", 1), None);
         assert_eq!(f("::1", 1).as_deref(), Some("::1"));
     }
+}
+
+// ---------------------------------------------------------------- API keys
+
+const API_KEY_PREFIX: &str = "fxk_";
+const API_KEY_TTL_SECS: u64 = 900;
+const MAX_API_KEYS: usize = 10;
+
+fn api_key_json(k: &ApiKey) -> Value {
+    json!({ "id": k.id, "name": k.name, "scope": k.scope, "ips": k.ips,
+            "created_at": k.created_at, "last_used": k.last_used, "revoked": k.revoked })
+}
+
+async fn api_keys_list(State(app): State<Arc<App>>, Authed(c): Authed) -> ApiResult<Json<Value>> {
+    if c.scope.is_some() {
+        return Err(ApiError::forbidden());
+    }
+    let keys: Vec<Value> = app
+        .store
+        .api_keys(&c.sub)
+        .await?
+        .iter()
+        .map(api_key_json)
+        .collect();
+    Ok(Json(json!({ "keys": keys })))
+}
+
+#[derive(Deserialize)]
+struct NewApiKey {
+    name: String,
+    scope: String,
+    #[serde(default)]
+    ips: Vec<String>,
+}
+
+/// Creates a key; the secret is returned once and only its hash is stored.
+/// API-key tokens cannot create keys (no privilege escalation by key).
+async fn api_key_create(
+    State(app): State<Arc<App>>,
+    ClientIp(ip): ClientIp,
+    Authed(c): Authed,
+    Json(b): Json<NewApiKey>,
+) -> ApiResult<Json<Value>> {
+    if c.scope.is_some() {
+        return Err(ApiError::forbidden());
+    }
+    if !matches!(b.scope.as_str(), "read" | "trade") {
+        return Err(ApiError::bad("bad_scope", "scope must be read or trade"));
+    }
+    let name = b.name.trim();
+    if name.is_empty() || name.len() > 64 {
+        return Err(ApiError::bad("bad_name", "name 1..64 characters"));
+    }
+    if b.ips.len() > 20 || b.ips.iter().any(|i| i.parse::<std::net::IpAddr>().is_err()) {
+        return Err(ApiError::bad(
+            "bad_ips",
+            "ips must be up to 20 IP addresses",
+        ));
+    }
+    let live = app
+        .store
+        .api_keys(&c.sub)
+        .await?
+        .iter()
+        .filter(|k| !k.revoked)
+        .count();
+    if live >= MAX_API_KEYS {
+        return Err(ApiError::bad("too_many_keys", "at most 10 active keys"));
+    }
+    let secret = format!("{API_KEY_PREFIX}{}", random_token());
+    let k = ApiKey {
+        id: random_id(),
+        user_id: c.sub.clone(),
+        name: name.into(),
+        hash: sha256_hex(&secret),
+        scope: b.scope,
+        ips: b.ips,
+        created_at: now(),
+        last_used: None,
+        revoked: false,
+    };
+    app.store.put_api_key(&k).await?;
+    app.audit(
+        Some(&c.sub),
+        "api_key_created",
+        ip.as_deref(),
+        &format!("{} {}", k.id, k.scope),
+    )
+    .await;
+    let mut v = api_key_json(&k);
+    v["secret"] = json!(secret);
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+struct RevokeApiKey {
+    id: String,
+}
+
+async fn api_key_revoke(
+    State(app): State<Arc<App>>,
+    ClientIp(ip): ClientIp,
+    Authed(c): Authed,
+    Json(b): Json<RevokeApiKey>,
+) -> ApiResult<Json<Value>> {
+    if c.scope.is_some() {
+        return Err(ApiError::forbidden());
+    }
+    if !app.store.revoke_api_key(&c.sub, &b.id).await? {
+        return Err(StoreError::NotFound.into());
+    }
+    app.audit(Some(&c.sub), "api_key_revoked", ip.as_deref(), &b.id)
+        .await;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `X-API-Key: fxk_...` -> short-lived access token (client role only, scope claim).
+async fn api_key_token(
+    State(app): State<Arc<App>>,
+    ClientIp(ip): ClientIp,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let secret = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| s.starts_with(API_KEY_PREFIX))
+        .ok_or_else(ApiError::unauthorized)?;
+    let k = app
+        .store
+        .api_key_by_hash(&sha256_hex(secret))
+        .await?
+        .filter(|k| !k.revoked)
+        .ok_or_else(ApiError::unauthorized)?;
+    if !k.ips.is_empty() && !ip.as_deref().is_some_and(|i| k.ips.iter().any(|a| a == i)) {
+        app.audit(Some(&k.user_id), "api_key_ip_denied", ip.as_deref(), &k.id)
+            .await;
+        return Err(ApiError::forbidden());
+    }
+    let user = app
+        .store
+        .user_by_id(&k.user_id)
+        .await?
+        .ok_or_else(ApiError::unauthorized)?;
+    if user.locked_until > now() {
+        return Err(ApiError::unauthorized());
+    }
+    let accounts = app.store.accounts(&user.id).await?;
+    let iat = now() as u64;
+    let claims = AccessClaims {
+        iss: app.cfg.issuer.clone(),
+        aud: app.cfg.audience.clone(),
+        sub: user.id.clone(),
+        exp: iat + API_KEY_TTL_SECS,
+        iat,
+        jti: random_id(),
+        sid: format!("apikey:{}", k.id),
+        email: user.email.clone(),
+        accounts: accounts.clone(),
+        roles: vec!["client".into()],
+        amr: vec!["apikey".into()],
+        scope: Some(k.scope.clone()),
+    };
+    let t = app.keys.sign(&claims).map_err(|e| {
+        tracing::error!(error = %e, "sign");
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "signing failed",
+        )
+    })?;
+    app.store.touch_api_key(&k.id, now()).await?;
+    let mut r = Json(json!({
+        "access_token": t, "token_type": "Bearer", "expires_in": API_KEY_TTL_SECS,
+        "accounts": accounts, "scope": k.scope,
+    }))
+    .into_response();
+    r.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    Ok(r)
 }

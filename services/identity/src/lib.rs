@@ -57,6 +57,9 @@ pub struct AccessClaims {
     pub roles: Vec<String>,
     /// Authentication methods (RFC 8176): `pwd`, `otp`, `mfa`, `hwk`.
     pub amr: Vec<String>,
+    /// API-key tokens only: `read` or `trade`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 pub struct App {
