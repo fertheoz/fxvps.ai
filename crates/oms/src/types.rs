@@ -158,6 +158,9 @@ pub struct Order {
     /// Copy trading: (provider account, provider position) this order mirrors.
     #[serde(default)]
     pub copy_from: Option<(AccountNo, PositionId)>,
+    /// Pending limit entry resting at the LP (`GroupConfig::lp_resting`).
+    #[serde(default)]
+    pub lp_resting: Option<LpOrderId>,
 }
 
 /// Origin of an order (deal reason in the history).
@@ -297,6 +300,9 @@ pub struct Position {
     pub trailing_points: Option<i64>,
     pub routing: Routing,
     pub opened_ts: u64,
+    /// LP-resting order standing for the TP (`GroupConfig::lp_resting`).
+    #[serde(default)]
+    pub lp_tp: Option<LpOrderId>,
     /// Accumulated swap (minor units of the account currency, negative = charged).
     #[serde(default)]
     pub swap_minor: i128,
@@ -424,6 +430,16 @@ pub struct LpOrder {
     /// Broker hedge of B-book excess (no client children; see `HedgePolicy`).
     #[serde(default)]
     pub hedge: bool,
+    /// Rests at the LP as a GTC limit (`GroupConfig::lp_resting`): a
+    /// position's TP (`position` set, child created on the fill) or a pending
+    /// limit entry (`children` = the client order).
+    #[serde(default)]
+    pub resting: bool,
+    #[serde(default)]
+    pub position: Option<PositionId>,
+    /// Cancel/replace count; the LP-side ClOrdID carries it.
+    #[serde(default)]
+    pub revision: u32,
 }
 
 /// One LP execution report applied to an [`LpOrder`].
@@ -574,6 +590,12 @@ pub enum Event {
     },
     OrderTriggered {
         order_id: OrderId,
+    },
+    /// An LP-resting order was placed (`active`) or cancelled/rejected/
+    /// filled away (`!active`).
+    LpRestingChanged {
+        lp_order_id: LpOrderId,
+        active: bool,
     },
     OrderFilled {
         order_id: OrderId,

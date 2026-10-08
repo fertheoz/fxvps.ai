@@ -8,7 +8,7 @@
 //! execution is journaled, replaying the journal reproduces the same state
 //! without talking to the LP.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -100,13 +100,64 @@ impl LpRouter for FixLpRouter {
             self.reject(req.lp_order_id, format!("LP gateway unavailable: {e}"));
         }
     }
+
+    fn replace(&mut self, req: &LpOrderRequest) {
+        let Some((lp_symbol, cs)) = self.symbols.to_lp(&req.symbol) else {
+            return;
+        };
+        let order = lp_order(req, lp_symbol, cs, &self.prefix);
+        let orig = cl_ord_id(
+            &self.prefix,
+            req.lp_order_id,
+            req.revision.saturating_sub(1),
+        );
+        if let Err(e) = self.orders.try_send(OrderCommand::Replace {
+            orig_cl_ord_id: orig,
+            order,
+        }) {
+            tracing::warn!(lp_order_id = req.lp_order_id, error = %e, "LP replace not sent");
+        }
+    }
+
+    fn cancel(&mut self, req: &LpOrderRequest) {
+        let Some((lp_symbol, _)) = self.symbols.to_lp(&req.symbol) else {
+            return;
+        };
+        let cmd = lp_cancel(
+            &self.prefix,
+            req.lp_order_id,
+            req.revision,
+            lp_symbol,
+            req.side,
+        );
+        if let Err(e) = self.orders.try_send(cmd) {
+            tracing::warn!(lp_order_id = req.lp_order_id, error = %e, "LP cancel not sent");
+        }
+    }
+}
+
+/// ClOrdID of revision `rev` of LP order `id`: `LP-7`, then `LP-7-r1`, ...
+/// (a cancel/replace needs a fresh ClOrdID; the chain is deterministic so a
+/// restarted process can still address the resting order).
+pub fn cl_ord_id(prefix: &str, id: u64, rev: u32) -> String {
+    if rev == 0 {
+        format!("{prefix}{id}")
+    } else {
+        format!("{prefix}{id}-r{rev}")
+    }
+}
+
+/// Our LP order id from any revision's ClOrdID (`LP-7-r2` → 7).
+pub fn parse_lp_id(prefix: &str, cl: &str) -> Option<u64> {
+    let s = cl.strip_prefix(prefix)?;
+    s.split('-').next()?.parse::<u64>().ok()
 }
 
 /// Builds the LP-side order of an omnibus request (lots -> LP quantity,
-/// core -> LP symbol, IOC or FOK).
+/// core -> LP symbol, IOC or FOK; resting = GTC limit).
 fn lp_order(req: &LpOrderRequest, lp_symbol: &str, cs: i64, prefix: &str) -> Order {
     Order {
-        cl_ord_id: format!("{prefix}{}", req.lp_order_id),
+        cl_ord_id: cl_ord_id(prefix, req.lp_order_id, req.revision),
         symbol: lp_symbol.to_string(),
         side: req.side.into(),
         qty: lots_to_units(req.volume, cs),
@@ -116,11 +167,23 @@ fn lp_order(req: &LpOrderRequest, lp_symbol: &str, cs: i64, prefix: &str) -> Ord
             OrderType::Market
         },
         limit_price: req.limit.map(Fixed::from),
-        tif: if req.all_or_none {
+        tif: if req.resting {
+            TimeInForce::GoodTillCancel
+        } else if req.all_or_none {
             TimeInForce::FillOrKill
         } else {
             TimeInForce::ImmediateOrCancel
         },
+    }
+}
+
+/// Cancel of the revision currently live at the LP.
+fn lp_cancel(prefix: &str, id: u64, rev: u32, lp_symbol: &str, side: risk::Side) -> OrderCommand {
+    OrderCommand::Cancel {
+        cl_ord_id: format!("{prefix}{id}-c{}", rev + 1),
+        orig_cl_ord_id: cl_ord_id(prefix, id, rev),
+        symbol: lp_symbol.to_string(),
+        side: side.into(),
     }
 }
 
@@ -141,6 +204,9 @@ pub struct AggLpRouter {
     agg: Arc<Aggregator>,
     feedback: LpFeedback,
     prefix: String,
+    /// LP of each resting order this process sent (after a restart the
+    /// primary order-taking LP of the symbol stands in).
+    resting: HashMap<u64, String>,
 }
 
 impl AggLpRouter {
@@ -155,7 +221,19 @@ impl AggLpRouter {
             agg,
             feedback,
             prefix: prefix.into(),
+            resting: HashMap::new(),
         }
+    }
+
+    /// The link a resting order lives on: remembered from the send, else
+    /// (after a restart) the primary order-taking LP of the symbol.
+    fn resting_link(&self, id: u64, symbol: &str) -> Option<&LpLink> {
+        let name = self
+            .resting
+            .get(&id)
+            .cloned()
+            .or_else(|| self.agg.resting_lp(symbol))?;
+        self.links.iter().find(|l| l.name == name)
     }
 
     fn push(&self, cmd: Command) {
@@ -167,7 +245,13 @@ impl AggLpRouter {
 
 impl LpRouter for AggLpRouter {
     fn send(&mut self, req: &LpOrderRequest) {
-        let cands = self.agg.choose(&req.symbol, req.side, req.volume);
+        // A resting order goes to the primary order-taking LP of the symbol
+        // even before it has quoted (a fresh process): it rests there.
+        let cands = if req.resting {
+            self.agg.resting_lp(&req.symbol).into_iter().collect()
+        } else {
+            self.agg.choose(&req.symbol, req.side, req.volume)
+        };
         if cands.is_empty() {
             tracing::warn!(lp_order_id = req.lp_order_id, symbol = %req.symbol, "no eligible LP");
             return self.push(Command::LpReject {
@@ -187,6 +271,9 @@ impl LpRouter for AggLpRouter {
             let order = lp_order(req, lp_symbol, cs, &self.prefix);
             match link.orders.try_send(OrderCommand::Submit(order)) {
                 Ok(()) => {
+                    if req.resting {
+                        self.resting.insert(req.lp_order_id, lp.clone());
+                    }
                     return self.push(Command::LpRouted {
                         lp_order_id: req.lp_order_id,
                         lp: lp.clone(),
@@ -208,11 +295,52 @@ impl LpRouter for AggLpRouter {
             },
         });
     }
+
+    fn replace(&mut self, req: &LpOrderRequest) {
+        let Some(link) = self.resting_link(req.lp_order_id, &req.symbol) else {
+            return tracing::warn!(lp_order_id = req.lp_order_id, "LP replace: no link");
+        };
+        let Some((lp_symbol, cs)) = link.symbols.to_lp(&req.symbol) else {
+            return;
+        };
+        let order = lp_order(req, lp_symbol, cs, &self.prefix);
+        let orig = cl_ord_id(
+            &self.prefix,
+            req.lp_order_id,
+            req.revision.saturating_sub(1),
+        );
+        if let Err(e) = link.orders.try_send(OrderCommand::Replace {
+            orig_cl_ord_id: orig,
+            order,
+        }) {
+            tracing::warn!(lp_order_id = req.lp_order_id, error = %e, "LP replace not sent");
+        }
+    }
+
+    fn cancel(&mut self, req: &LpOrderRequest) {
+        let Some(link) = self.resting_link(req.lp_order_id, &req.symbol) else {
+            return tracing::warn!(lp_order_id = req.lp_order_id, "LP cancel: no link");
+        };
+        let Some((lp_symbol, _)) = link.symbols.to_lp(&req.symbol) else {
+            return;
+        };
+        let cmd = lp_cancel(
+            &self.prefix,
+            req.lp_order_id,
+            req.revision,
+            lp_symbol,
+            req.side,
+        );
+        if let Err(e) = link.orders.try_send(cmd) {
+            tracing::warn!(lp_order_id = req.lp_order_id, error = %e, "LP cancel not sent");
+        }
+        self.resting.remove(&req.lp_order_id);
+    }
 }
 
 /// Turns one fix-gateway event into an engine command (if relevant).
 pub fn to_command(ev: &GatewayEvent, symbols: &SymbolMap, prefix: &str) -> Option<Command> {
-    let lp_id = |cl: &str| cl.strip_prefix(prefix).and_then(|s| s.parse::<u64>().ok());
+    let lp_id = |cl: &str| parse_lp_id(prefix, cl);
     match ev {
         GatewayEvent::Quote(q) => {
             let (sym, _) = symbols.from_lp(&q.symbol)?;
@@ -418,6 +546,67 @@ mod tests {
     }
 
     #[test]
+    fn resting_requests_become_gtc_and_revisions_map_back() {
+        assert_eq!(cl_ord_id("LP-", 7, 0), "LP-7");
+        assert_eq!(cl_ord_id("LP-", 7, 2), "LP-7-r2");
+        assert_eq!(parse_lp_id("LP-", "LP-7"), Some(7));
+        assert_eq!(parse_lp_id("LP-", "LP-7-r2"), Some(7));
+        assert_eq!(parse_lp_id("LP-", "LP-7-c3"), Some(7));
+        assert_eq!(parse_lp_id("LP-", "AUD-7"), None);
+        let (tx, mut rx) = mpsc::channel(4);
+        let fb = LpFeedback::default();
+        let mut r = FixLpRouter::new(tx, fb.clone(), Arc::new(map()), "LP-");
+        let req = LpOrderRequest {
+            lp_order_id: 11,
+            symbol: "EURUSD".into(),
+            side: risk::Side::Sell,
+            volume: qty("1"),
+            limit: Some(px("1.10105")),
+            all_or_none: false,
+            resting: true,
+            revision: 0,
+        };
+        r.send(&req);
+        match rx.try_recv().unwrap() {
+            OrderCommand::Submit(o) => {
+                assert_eq!(o.cl_ord_id, "LP-11");
+                assert_eq!(o.tif, TimeInForce::GoodTillCancel);
+                assert_eq!(o.ord_type, OrderType::Limit);
+            }
+            c => panic!("{c:?}"),
+        }
+        let mut rep = req.clone();
+        rep.revision = 1;
+        rep.limit = Some(px("1.10205"));
+        r.replace(&rep);
+        match rx.try_recv().unwrap() {
+            OrderCommand::Replace {
+                orig_cl_ord_id,
+                order,
+            } => {
+                assert_eq!(orig_cl_ord_id, "LP-11");
+                assert_eq!(order.cl_ord_id, "LP-11-r1");
+                assert_eq!(order.tif, TimeInForce::GoodTillCancel);
+            }
+            c => panic!("{c:?}"),
+        }
+        let mut can = rep.clone();
+        can.revision = 1;
+        r.cancel(&can);
+        match rx.try_recv().unwrap() {
+            OrderCommand::Cancel {
+                orig_cl_ord_id,
+                cl_ord_id,
+                ..
+            } => {
+                assert_eq!(orig_cl_ord_id, "LP-11-r1");
+                assert_eq!(cl_ord_id, "LP-11-c2");
+            }
+            c => panic!("{c:?}"),
+        }
+    }
+
+    #[test]
     fn router_converts_lots_and_symbols() {
         let (tx, mut rx) = mpsc::channel(4);
         let fb = LpFeedback::default();
@@ -429,6 +618,8 @@ mod tests {
             volume: qty("0.25"),
             limit: None,
             all_or_none: false,
+            resting: false,
+            revision: 0,
         });
         match rx.try_recv().unwrap() {
             OrderCommand::Submit(o) => {
@@ -446,6 +637,8 @@ mod tests {
             volume: qty("1"),
             limit: None,
             all_or_none: false,
+            resting: false,
+            revision: 0,
         });
         assert!(matches!(
             fb.lock().unwrap().pop_front(),
@@ -488,6 +681,8 @@ mod tests {
             volume: qty("1"),
             limit: None,
             all_or_none: false,
+            resting: false,
+            revision: 0,
         });
         assert!(
             matches!(rx_b.try_recv().unwrap(), OrderCommand::Submit(o) if o.cl_ord_id == "LP-9")

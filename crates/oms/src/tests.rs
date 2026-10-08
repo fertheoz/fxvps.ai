@@ -2424,3 +2424,210 @@ fn swap_free_fee_on_a_book_is_broker_revenue() {
     let replayed = Engine::replay(h.config.clone(), &h.journal);
     assert_eq!(replayed.state_digest(), h.e.state_digest());
 }
+
+// ---- LP-resting orders (GroupConfig::lp_resting) ---------------------------
+
+fn resting_h() -> H {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 5;
+    g.lp_resting = true;
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "10000");
+    h
+}
+
+/// Opens 1 lot long for account 1 at the LP (1.10010) and returns the position id.
+fn resting_long(h: &mut H) -> PositionId {
+    h.market(1, "x", Side::Buy, "1");
+    let lp = h.router.take()[0].lp_order_id;
+    h.cmd(Command::LpFill {
+        lp_order_id: lp,
+        exec_id: "e1".into(),
+        volume: qty("1"),
+        price: px("1.10010"),
+    });
+    h.pos(1)[0].id
+}
+
+#[test]
+fn resting_tp_rests_at_the_lp_and_only_the_lp_fill_closes() {
+    let mut h = resting_h();
+    let pid = resting_long(&mut h);
+    assert!(h.router.take().is_empty(), "no TP yet: nothing rests");
+    h.cmd(Command::ModifyPosition {
+        account: 1,
+        position_id: pid,
+        sl: None,
+        tp: Some(px("1.10100")),
+        trailing_points: None,
+    });
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    let r = &sent[0];
+    assert!(r.resting);
+    assert_eq!((r.side, r.volume), (Side::Sell, qty("1")));
+    // the client sells at LP bid − 5 points: the LP must fill at TP + 5
+    assert_eq!(r.limit, Some(px("1.10105")));
+    assert_eq!(h.pos(1)[0].lp_tp, Some(r.lp_order_id));
+    // our own quote through the TP closes nothing (the LP did not trade)
+    h.quote("EURUSD", "1.10300", "1.10310");
+    assert_eq!(h.pos(1).len(), 1);
+    assert!(h.router.take().is_empty());
+    // the LP fills the resting order: the position closes at LP − markup
+    h.cmd(Command::LpFill {
+        lp_order_id: r.lp_order_id,
+        exec_id: "t1".into(),
+        volume: qty("1"),
+        price: px("1.10110"),
+    });
+    assert!(h.pos(1).is_empty());
+    let d = h.e.deals().last().unwrap();
+    assert_eq!(d.price, px("1.10105"));
+    assert_eq!(h.e.omnibus_net("EURUSD"), 0);
+    assert!(h.router.take().is_empty(), "no IOC close was sent");
+}
+
+#[test]
+fn resting_tp_follows_modify_partial_close_and_removal() {
+    let mut h = resting_h();
+    let pid = resting_long(&mut h);
+    h.cmd(Command::ModifyPosition {
+        account: 1,
+        position_id: pid,
+        sl: None,
+        tp: Some(px("1.10100")),
+        trailing_points: None,
+    });
+    let lp = h.router.take()[0].lp_order_id;
+    // new TP → replace with the new limit, revision 1
+    h.cmd(Command::ModifyPosition {
+        account: 1,
+        position_id: pid,
+        sl: None,
+        tp: Some(px("1.10200")),
+        trailing_points: None,
+    });
+    let rep = h.router.take_replaced();
+    assert_eq!(rep.len(), 1);
+    assert_eq!((rep[0].lp_order_id, rep[0].revision), (lp, 1));
+    assert_eq!(rep[0].limit, Some(px("1.10205")));
+    // manual partial close 0.4: the resting quantity drops to 0.6 at once
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: pid,
+        volume: Some(qty("0.4")),
+        client_order_id: "c1".into(),
+    });
+    let rep = h.router.take_replaced();
+    assert_eq!(rep.len(), 1);
+    assert_eq!((rep[0].volume, rep[0].revision), (qty("0.6"), 2));
+    let close_lp = h.router.take()[0].lp_order_id; // the IOC close itself
+    h.cmd(Command::LpFill {
+        lp_order_id: close_lp,
+        exec_id: "c".into(),
+        volume: qty("0.4"),
+        price: px("1.10050"),
+    });
+    assert!(h.router.take_replaced().is_empty(), "0.6 already rests");
+    // TP removed → cancel at the LP; the LP's confirmation ends the order
+    h.cmd(Command::ModifyPosition {
+        account: 1,
+        position_id: pid,
+        sl: None,
+        tp: None,
+        trailing_points: None,
+    });
+    assert_eq!(h.router.take_cancelled(), vec![(lp, 2)]);
+    assert_eq!(h.pos(1)[0].lp_tp, None);
+    h.cmd(Command::LpReject {
+        lp_order_id: lp,
+        reason: "Canceled".into(),
+    });
+    assert!(h.e.lp_orders().find(|l| l.id == lp).unwrap().done);
+}
+
+#[test]
+fn resting_tp_reject_falls_back_to_our_trigger() {
+    let mut h = resting_h();
+    let pid = resting_long(&mut h);
+    h.cmd(Command::ModifyPosition {
+        account: 1,
+        position_id: pid,
+        sl: None,
+        tp: Some(px("1.10100")),
+        trailing_points: None,
+    });
+    let lp = h.router.take()[0].lp_order_id;
+    h.cmd(Command::LpReject {
+        lp_order_id: lp,
+        reason: "no eligible LP".into(),
+    });
+    assert_eq!(h.pos(1)[0].lp_tp, None);
+    // trigger mode again: the client bid (LP bid − 5) through the TP sends an IOC close
+    h.quote("EURUSD", "1.10110", "1.10120");
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert!(!sent[0].resting);
+}
+
+#[test]
+fn resting_limit_entry_rests_at_the_lp() {
+    let mut h = resting_h();
+    let o = h.pending(1, "l1", Side::Buy, OrderType::Limit, Some("1.09900"), None);
+    let (_, id) = h.order(o);
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].resting);
+    // the client buys at LP ask + 5 points: the LP limit is 5 points lower
+    assert_eq!(sent[0].limit, Some(px("1.09895")));
+    assert_eq!(h.e.order(id).unwrap().lp_resting, Some(sent[0].lp_order_id));
+    // our quote through the limit does not execute it
+    h.quote("EURUSD", "1.09800", "1.09810");
+    assert!(h.router.take().is_empty());
+    assert_eq!(h.e.order(id).unwrap().status, OrderStatus::Accepted);
+    // modify the price → replace
+    h.cmd(Command::ModifyOrder {
+        account: 1,
+        order_id: id,
+        change: OrderChange {
+            volume: qty("1"),
+            limit_price: Some(px("1.09850")),
+            stop_price: None,
+            sl: None,
+            tp: Some(px("1.10500")),
+            trailing_points: None,
+            expire_at: None,
+        },
+    });
+    let rep = h.router.take_replaced();
+    assert_eq!(rep.len(), 1);
+    assert_eq!(rep[0].limit, Some(px("1.09845")));
+    // the LP fills: position opens at LP + markup, and its TP rests at once
+    h.cmd(Command::LpFill {
+        lp_order_id: sent[0].lp_order_id,
+        exec_id: "f".into(),
+        volume: qty("1"),
+        price: px("1.09840"),
+    });
+    let p = &h.pos(1)[0];
+    assert_eq!(p.open_price, px("1.09845"));
+    assert_eq!(h.e.order(id).unwrap().lp_resting, None);
+    let tp = h.router.take();
+    assert_eq!(tp.len(), 1);
+    assert!(tp[0].resting);
+    assert_eq!(tp[0].limit, Some(px("1.10505")));
+    assert_eq!(p.lp_tp, Some(tp[0].lp_order_id));
+    // a second entry cancelled by the client is cancelled at the LP
+    let o = h.pending(1, "l2", Side::Buy, OrderType::Limit, Some("1.09000"), None);
+    let (_, id2) = h.order(o);
+    let lp2 = h.router.take()[0].lp_order_id;
+    h.cmd(Command::CancelOrder {
+        account: 1,
+        order_id: id2,
+    });
+    assert_eq!(h.router.take_cancelled(), vec![(lp2, 0)]);
+    assert_eq!(h.e.order(id2).unwrap().status, OrderStatus::Cancelled);
+}

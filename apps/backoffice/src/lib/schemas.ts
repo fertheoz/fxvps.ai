@@ -46,6 +46,8 @@ export const Group = z
     maxSlippagePoints: z.preprocess((v) => (v === undefined ? null : v), z.number().int().min(0).max(1000).nullable()),
     /** false: a better fill is given at the requested price, the difference is ours. */
     passPriceImprovement: z.preprocess((v) => v ?? true, z.boolean()),
+    /** A-book TP and pending limit entries rest at the LP as GTC limit orders. */
+    lpResting: z.preprocess((v) => v ?? false, z.boolean()),
     /** Leverage cap Friday 20:00 - Sunday 22:00 UTC (null = none). */
     weekendLeverage: z.preprocess((v) => (v === undefined || v === 0 ? null : v), z.number().int().min(1).max(1000).nullable()),
     /** News windows: leverage cap between two instants (ms since epoch). */

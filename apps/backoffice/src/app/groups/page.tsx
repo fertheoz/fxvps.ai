@@ -93,6 +93,7 @@ function GroupDialog({ group, onClose }: { group: Group; onClose: () => void }) 
         <NumField label={t("groups.weekendLeverage")} value={draft.weekendLeverage ?? 0} onChange={(v) => set("weekendLeverage", v > 0 ? v : null)} step={1} />
         <LeverageWindowsField value={draft.leverageWindows ?? []} onChange={(v) => set("leverageWindows", v)} />
         <SelectField label={t("groups.priceImprovement")} value={draft.passPriceImprovement ? "client" : "broker"} options={["client", "broker"] as const} onChange={(v) => set("passPriceImprovement", v === "client")} />
+        <SelectField label={t("groups.lpResting")} value={draft.lpResting ? "lp" : "trigger"} options={["lp", "trigger"] as const} onChange={(v) => set("lpResting", v === "lp")} />
         <NumField label={t("groups.swapMult")} value={draft.swapMultiplier} onChange={(v) => set("swapMultiplier", v)} error={errors.swapMultiplier} step={0.1} />
         {draft.swapMultiplier === 0 && (
           <>

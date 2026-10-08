@@ -385,6 +385,20 @@ impl Aggregator {
         }
     }
 
+    /// The LP a resting (GTC) order of `symbol` goes to: the enabled,
+    /// order-taking policy LP of highest priority that allows the symbol —
+    /// whether or not it has quoted yet (a fresh process). `None` = nobody.
+    pub fn resting_lp(&self, symbol: &str) -> Option<String> {
+        let cfg = self.config();
+        let mut lps: Vec<&LpPolicy> = cfg
+            .lps
+            .iter()
+            .filter(|p| p.enabled && p.orders && p.allows_symbol(symbol))
+            .collect();
+        lps.sort_by_key(|p| (p.priority, p.name.clone()));
+        lps.first().map(|p| p.name.clone())
+    }
+
     /// LPs to try for an order, best first. Empty = nobody eligible.
     pub fn choose(&self, symbol: &str, side: Side, lots: Qty) -> Vec<String> {
         let cfg = self.config();
@@ -614,6 +628,26 @@ mod tests {
         let first = a.choose("EURUSD", Side::Buy, qty("1"))[0].clone();
         let second = a.choose("EURUSD", Side::Buy, qty("1"))[0].clone();
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn resting_lp_is_the_primary_order_taker_even_before_it_quotes() {
+        let mut sim = LpPolicy::new("SIM", 2);
+        sim.orders = false;
+        let a = Aggregator::new(AggConfig {
+            mode: AggMode::BestPrice,
+            lps: vec![sim, LpPolicy::new("LMAX", 1)],
+            max_deviation_points: 0,
+            ..AggConfig::default()
+        });
+        assert_eq!(a.resting_lp("EURUSD").as_deref(), Some("LMAX"));
+        let mut sym = LpPolicy::new("LMAX", 1);
+        sym.symbols = vec!["XAUUSD".into()];
+        a.set_config(AggConfig {
+            lps: vec![sym],
+            ..AggConfig::default()
+        });
+        assert_eq!(a.resting_lp("EURUSD"), None);
     }
 
     #[test]

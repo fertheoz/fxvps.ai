@@ -285,10 +285,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             m = orders.next() => {
                 let Some(m) = m else { break };
-                if let Ok(OrderCommand::Submit(o)) = serde_json::from_slice::<OrderCommand>(&m.payload) {
-                    if !o.cl_ord_id.starts_with("AUD-") {
+                match serde_json::from_slice::<OrderCommand>(&m.payload) {
+                    Ok(OrderCommand::Submit(o)) if !o.cl_ord_id.starts_with("AUD-") => {
                         a.on_order(&lp_of(&m.subject), &o, now_ns());
                     }
+                    Ok(OrderCommand::Replace { orig_cl_ord_id, order }) => {
+                        a.on_replace(&lp_of(&m.subject), &orig_cl_ord_id, &order, now_ns());
+                    }
+                    Ok(OrderCommand::Cancel { cl_ord_id, orig_cl_ord_id, .. }) => {
+                        a.on_cancel(&lp_of(&m.subject), &cl_ord_id, &orig_cl_ord_id, now_ns());
+                    }
+                    _ => {}
                 }
             }
             m = events.next() => {
