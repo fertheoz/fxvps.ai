@@ -676,18 +676,27 @@ mod tests {
         let mut core = BTreeMap::new();
         core.insert(key("LMAX", "EUR/USD"), px("0"));
         assert!(a.compare(&core, 0).is_empty()); // baseline 0
-        // the LP filled a buy the core never booked at LMAX (booked at SIM)
+                                                 // the LP filled a buy the core never booked at LMAX (booked at SIM)
         a.on_order("LMAX", &order("LP-9", Side::Buy, "1", None), 0);
         a.on_exec(
             "LMAX",
-            &exec(Some("LP-9"), Side::Buy, Some(("1", "4140")), OrderStatus::Filled),
+            &exec(
+                Some("LP-9"),
+                Side::Buy,
+                Some(("1", "4140")),
+                OrderStatus::Filled,
+            ),
             MS,
         );
         core.insert(key("SIM", "EUR/USD"), px("-1"));
         core.insert(key("LMAX", "EUR/USD"), px("1"));
         a.tick(10_000 * MS);
         assert!(a.compare(&core, 10_000).is_empty(), "first look settles");
-        assert_eq!(a.compare(&core, 20_000).len(), 1, "LMAX holds 1, must hold 0");
+        assert_eq!(
+            a.compare(&core, 20_000).len(),
+            1,
+            "LMAX holds 1, must hold 0"
+        );
         let held = a.held().expect("baseline");
         assert_eq!(held[&key("LMAX", "EUR/USD")], px("1"));
         // restart: a fresh auditor with the persisted held-net keeps seeing it

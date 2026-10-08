@@ -237,7 +237,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(v) = serde_json::from_slice::<serde_json::Map<String, Value>>(&b) {
             let mut held = BTreeMap::new();
             for (k, q) in v {
-                if let (Some((lp, sym)), Some(q)) = (k.split_once('|'), q.as_str().and_then(|s| s.parse::<Fixed>().ok())) {
+                if let (Some((lp, sym)), Some(q)) = (
+                    k.split_once('|'),
+                    q.as_str().and_then(|s| s.parse::<Fixed>().ok()),
+                ) {
                     held.insert((lp.to_string(), sym.to_string()), q);
                 }
             }
