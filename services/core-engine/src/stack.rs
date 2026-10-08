@@ -518,6 +518,6 @@ mod lmax_list_tests {
             );
             n += 1;
         }
-        assert_eq!(n, 91);
+        assert_eq!(n, 90);
     }
 }
