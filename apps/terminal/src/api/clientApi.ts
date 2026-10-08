@@ -145,10 +145,6 @@ export interface IbDashboard {
   payouts: { amount: number; currency: string; reason: string; status: string; requestedAt: string }[];
 }
 
-export const clientApi = {
-  ib: () => call<{ ibs: IbDashboard[] }>('/ib'),
-  ibLink: (account: string, code: string) =>
-    call<{ ok: boolean }>('/ib/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account, code }) }),
 export interface Statement {
   account: number;
   name: string;
@@ -168,6 +164,9 @@ export interface Statement {
 }
 
 export const clientApi = {
+  ib: () => call<{ ibs: IbDashboard[] }>('/ib'),
+  ibLink: (account: string, code: string) =>
+    call<{ ok: boolean }>('/ib/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account, code }) }),
   statement: (account: string, from: string, to: string) =>
     call<Statement>(`/statement?account=${encodeURIComponent(account)}${from ? `&from=${from}` : ''}${to ? `&to=${to}` : ''}`),
   copy: () => call<CopyOverview>('/copy'),
