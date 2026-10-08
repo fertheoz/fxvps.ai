@@ -53,6 +53,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/copy/unsubscribe", post(super::copy_admin::unsubscribe))
         .route("/v1/copy/settle", post(super::copy_admin::settle))
         .route("/v1/client/me", get(client_me))
+        .route("/v1/client/sentiment", get(client_sentiment))
         .route("/v1/client/brand", get(client_brand))
         .route("/v1/client/statement", get(client_statement))
         .route("/v1/client/copy", get(super::copy_admin::client_list))
@@ -3255,6 +3256,313 @@ async fn save_settings(
 }
 
 pub(super) const LIVE_ENGINE_TOPICS: [&str; 8] = ENGINE_TOPICS;
+
+/// Distinct holders a symbol needs, the caller not counted, before its
+/// sentiment is published.
+const SENTIMENT_MIN_HOLDERS: usize = 10;
+/// A symbol is suppressed while one holder (the caller aside) has more than
+/// this share of its lots.
+const SENTIMENT_MAX_SHARE_PCT: i128 = 50;
+
+/// Client sentiment per symbol: share of open lots that are long, within the
+/// caller's white-label tenant (outside every tenant: the platform's own
+/// groups). Copy-trading mirrors and bridge institution accounts are not
+/// client books and do not count. Published only where at least
+/// `SENTIMENT_MIN_HOLDERS` other holders (one client's logins with the same
+/// profile e-mail are one holder) have positions and none of them dominates,
+/// so the caller cannot subtract their own lots and read another client's
+/// book.
+async fn client_sentiment(State(ctx): State<AdminCtx>, client: ClientActor) -> ApiResult {
+    let skip = super::bridge_admin::institution_logins(&ctx)?;
+    let tenants: Vec<Vec<String>> = {
+        let st = &ctx.store.lock().await.state;
+        st.tenants.values().map(|t| t.groups.clone()).collect()
+    };
+    let mine: BTreeSet<u64> = client.logins.iter().map(|(_, l)| *l).collect();
+    let me = mine.clone();
+    // whole-book scan: on the read replica, never the writer thread
+    let book = ctx
+        .qr(move |e| {
+            let my_groups: BTreeSet<&str> = me
+                .iter()
+                .filter_map(|l| e.account(*l))
+                .map(|a| a.group.as_str())
+                .collect();
+            let my_tenants: BTreeSet<&str> = tenants
+                .iter()
+                .filter(|gs| gs.iter().any(|g| my_groups.contains(g.as_str())))
+                .flatten()
+                .map(String::as_str)
+                .collect();
+            if my_tenants.is_empty() {
+                let tenant_groups: BTreeSet<&str> =
+                    tenants.iter().flatten().map(String::as_str).collect();
+                sentiment_book(e, |g| !tenant_groups.contains(g), &skip)
+            } else {
+                sentiment_book(e, |g| my_tenants.contains(g), &skip)
+            }
+        })
+        .await?;
+    // holder identity (profile e-mail) of every login involved, copied under a short lock
+    let emails: BTreeMap<u64, String> = {
+        let st = &ctx.store.lock().await.state;
+        book.values()
+            .flat_map(|accs| accs.keys())
+            .chain(mine.iter())
+            .filter_map(|l| {
+                let m = st.profiles.get(l)?.email.trim().to_ascii_lowercase();
+                (!m.is_empty()).then_some((*l, m))
+            })
+            .collect()
+    };
+    let holder_of = |login: u64| match emails.get(&login) {
+        Some(m) => Holder::Email(m.clone()),
+        None => Holder::Login(login),
+    };
+    let caller: BTreeSet<Holder> = mine.iter().map(|l| holder_of(*l)).collect();
+    Ok(Json(json!(sentiment_rows(book, holder_of, &caller))))
+}
+
+/// One client for the sentiment threshold: logins sharing a profile e-mail
+/// are the same holder.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum Holder {
+    Email(String),
+    Login(u64),
+}
+
+/// Open client lots per symbol and account (raw lots: long, short) in one
+/// pass over the positions: no copy-trading mirrors, no `skip` accounts, only
+/// accounts whose group passes `in_scope`.
+fn sentiment_book(
+    e: &Engine,
+    in_scope: impl Fn(&str) -> bool,
+    skip: &BTreeSet<u64>,
+) -> BTreeMap<String, BTreeMap<u64, (i128, i128)>> {
+    let mut scoped: BTreeMap<u64, bool> = BTreeMap::new();
+    let mut out: BTreeMap<String, BTreeMap<u64, (i128, i128)>> = BTreeMap::new();
+    for p in e.positions() {
+        if p.copy_from.is_some() || skip.contains(&p.account) {
+            continue;
+        }
+        let ok = *scoped
+            .entry(p.account)
+            .or_insert_with(|| e.account(p.account).is_some_and(|a| in_scope(&a.group)));
+        if !ok {
+            continue;
+        }
+        let r = out
+            .entry(p.symbol.clone())
+            .or_default()
+            .entry(p.account)
+            .or_default();
+        let v = p.volume.raw() as i128;
+        if p.side == oms::Side::Buy {
+            r.0 += v;
+        } else {
+            r.1 += v;
+        }
+    }
+    out
+}
+
+/// Published rows: `longPct` over every holder in scope (the caller
+/// included), but the threshold and the dominance rule only over the others.
+fn sentiment_rows(
+    book: BTreeMap<String, BTreeMap<u64, (i128, i128)>>,
+    holder_of: impl Fn(u64) -> Holder,
+    caller: &BTreeSet<Holder>,
+) -> Vec<Value> {
+    book.into_iter()
+        .filter_map(|(symbol, accs)| {
+            let (mut long, mut short) = (0i128, 0i128);
+            let mut holders: BTreeSet<Holder> = BTreeSet::new();
+            let mut others: BTreeMap<Holder, i128> = BTreeMap::new();
+            for (login, (l, s)) in accs {
+                long += l;
+                short += s;
+                let h = holder_of(login);
+                if !caller.contains(&h) {
+                    *others.entry(h.clone()).or_default() += l + s;
+                }
+                holders.insert(h);
+            }
+            let total = long + short;
+            let others_total: i128 = others.values().sum();
+            let top = others.values().copied().max().unwrap_or(0);
+            if others.len() < SENTIMENT_MIN_HOLDERS
+                || total <= 0
+                || top * 100 > others_total * SENTIMENT_MAX_SHARE_PCT
+            {
+                return None;
+            }
+            let long_pct = (long * 200 + total) / (total * 2); // rounded half up
+            Some(json!({ "symbol": symbol, "longPct": long_pct as i64, "traders": holders.len() }))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod sentiment_tests {
+    use super::*;
+
+    const LOT: i128 = 100; // raw units do not matter for the shares
+
+    fn book(rows: &[(&str, u64, i128, i128)]) -> BTreeMap<String, BTreeMap<u64, (i128, i128)>> {
+        let mut b: BTreeMap<String, BTreeMap<u64, (i128, i128)>> = BTreeMap::new();
+        for (sym, login, l, s) in rows {
+            b.entry(sym.to_string())
+                .or_default()
+                .insert(*login, (*l, *s));
+        }
+        b
+    }
+
+    fn by_login(l: u64) -> Holder {
+        Holder::Login(l)
+    }
+
+    #[test]
+    fn needs_ten_other_holders() {
+        // nine others + the caller: not enough
+        let mut rows: Vec<(&str, u64, i128, i128)> =
+            (1..=9).map(|l| ("EURUSD", l, LOT, 0)).collect();
+        rows.push(("EURUSD", 100, 0, 5 * LOT));
+        let caller = BTreeSet::from([Holder::Login(100)]);
+        assert!(sentiment_rows(book(&rows), by_login, &caller).is_empty());
+        // a tenth other holder publishes it; the share includes the caller
+        rows.push(("EURUSD", 10, LOT, 0));
+        let out = sentiment_rows(book(&rows), by_login, &caller);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["symbol"], "EURUSD");
+        assert_eq!(out[0]["longPct"], 67); // 10 long of 15 lots
+        assert_eq!(out[0]["traders"], 11);
+    }
+
+    #[test]
+    fn logins_of_one_client_are_one_holder() {
+        // ten logins, but 9 and 10 share an e-mail: nine holders
+        let rows: Vec<(&str, u64, i128, i128)> = (1..=10).map(|l| ("XAUUSD", l, LOT, 0)).collect();
+        let holder = |l: u64| {
+            if l >= 9 {
+                Holder::Email("same@example.com".into())
+            } else {
+                Holder::Login(l)
+            }
+        };
+        assert!(sentiment_rows(book(&rows), holder, &BTreeSet::new()).is_empty());
+        // the caller's own second login does not count either
+        let rows: Vec<(&str, u64, i128, i128)> = (1..=11).map(|l| ("XAUUSD", l, LOT, 0)).collect();
+        let caller = BTreeSet::from([Holder::Email("me@example.com".into())]);
+        let mine = |l: u64| {
+            if l >= 10 {
+                Holder::Email("me@example.com".into())
+            } else {
+                Holder::Login(l)
+            }
+        };
+        assert!(sentiment_rows(book(&rows), mine, &caller).is_empty());
+    }
+
+    #[test]
+    fn a_dominant_holder_suppresses_the_symbol() {
+        let mut rows: Vec<(&str, u64, i128, i128)> =
+            (1..=10).map(|l| ("GBPUSD", l, LOT, 0)).collect();
+        rows.push(("GBPUSD", 11, 0, 20 * LOT)); // 20 of 30 lots
+        assert!(sentiment_rows(book(&rows), by_login, &BTreeSet::new()).is_empty());
+        // exactly half is still published
+        rows.pop();
+        rows.push(("GBPUSD", 11, 0, 10 * LOT));
+        let out = sentiment_rows(book(&rows), by_login, &BTreeSet::new());
+        assert_eq!(out[0]["longPct"], 50);
+        // the caller's own size never counts as dominance
+        rows.pop();
+        rows.push(("GBPUSD", 11, 0, 1_000 * LOT));
+        let caller = BTreeSet::from([Holder::Login(11)]);
+        assert_eq!(sentiment_rows(book(&rows), by_login, &caller).len(), 1);
+    }
+
+    #[test]
+    fn book_skips_copies_institutions_and_other_tenants() {
+        use money::{px, qty};
+        use oms::{Envelope, NewOrder, NullRouter};
+        let mut e = Engine::new(Default::default(), Box::new(NullRouter));
+        let mut n = 0u64;
+        let mut cmd = |e: &mut Engine, c: Command| {
+            n += 1;
+            e.apply(&Envelope {
+                seq: n,
+                ts: 1_000 * n,
+                cmd: c,
+            })
+        };
+        cmd(
+            &mut e,
+            Command::AddSymbol(SymbolSpec::fx("EURUSD", Currency::EUR, Currency::USD, 5)),
+        );
+        for g in ["own", "acme"] {
+            let mut gc = GroupConfig::retail(g, Currency::USD, Routing::BBook);
+            gc.esma = None;
+            gc.leverage = 100;
+            cmd(&mut e, Command::SetGroup(gc));
+        }
+        cmd(
+            &mut e,
+            Command::Quote {
+                symbol: "EURUSD".into(),
+                bid: px("1.10000"),
+                ask: px("1.10010"),
+            },
+        );
+        for (acc, g) in [(1, "own"), (2, "own"), (3, "own"), (4, "acme")] {
+            cmd(
+                &mut e,
+                Command::OpenAccount {
+                    account: acc,
+                    group: g.into(),
+                },
+            );
+            cmd(
+                &mut e,
+                Command::Deposit {
+                    account: acc,
+                    amount: Money::parse("10000", Currency::USD).unwrap(),
+                    key: format!("d{acc}"),
+                },
+            );
+        }
+        // 2 copies 1: its mirror is not a client decision
+        cmd(
+            &mut e,
+            Command::CopySubscribe {
+                follower: 2,
+                provider: 1,
+                ratio_bps: 10_000,
+                equity_stop_pct: 0,
+                perf_fee_bps: 0,
+            },
+        );
+        for acc in [1u64, 3, 4] {
+            cmd(
+                &mut e,
+                Command::PlaceOrder(NewOrder::market(
+                    acc,
+                    "o",
+                    "EURUSD",
+                    oms::Side::Buy,
+                    qty("1"),
+                )),
+            );
+        }
+        assert_eq!(e.positions_of(2).len(), 1, "the copy exists");
+        let skip = BTreeSet::from([3u64]); // a bridge institution
+        let b = sentiment_book(&e, |g| g == "own", &skip);
+        let accs: Vec<u64> = b["EURUSD"].keys().copied().collect();
+        assert_eq!(accs, vec![1]);
+        let b = sentiment_book(&e, |g| g == "acme", &BTreeSet::new());
+        assert_eq!(b["EURUSD"].keys().copied().collect::<Vec<_>>(), vec![4]);
+    }
+}
 
 // ------------------------------------------------------------- IB (client side)
 

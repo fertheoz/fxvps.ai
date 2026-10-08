@@ -2236,6 +2236,24 @@ fn copy_fee_never_drives_the_follower_negative() {
 }
 
 #[test]
+fn positions_iterates_the_whole_book_once() {
+    let mut h = b();
+    h.account(2, "b", "10000");
+    h.market(1, "x1", Side::Buy, "1");
+    h.market(2, "x2", Side::Sell, "0.5");
+    h.market(1, "x3", Side::Sell, "0.2");
+    let all: Vec<(u64, u64)> = h.e.positions().map(|p| (p.id, p.account)).collect();
+    assert_eq!(all.len(), 3);
+    assert!(all.windows(2).all(|w| w[0].0 < w[1].0), "id order");
+    for acc in [1, 2] {
+        let mut ids: Vec<u64> = all.iter().filter(|p| p.1 == acc).map(|p| p.0).collect();
+        ids.sort_unstable();
+        let of: Vec<u64> = h.e.positions_of(acc).iter().map(|p| p.id).collect();
+        assert_eq!(ids, of);
+    }
+}
+
+#[test]
 fn markout_measures_mid_move_after_fills() {
     let mut h = b();
     h.market(1, "m1", Side::Buy, "1");
