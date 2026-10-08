@@ -12,7 +12,8 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  // https: white-label tenant logos (lib/brand.ts)
+  "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
   "connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*",
   "worker-src 'self' blob:",

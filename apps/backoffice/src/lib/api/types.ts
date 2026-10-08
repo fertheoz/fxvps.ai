@@ -326,7 +326,7 @@ export interface PerfReport {
   /** Last nightly load test (yuk-sinavi.sh). */
   loadtest?: { at: string; ok: boolean; clients: number; connected: number; ordersPerMin: number; targetPerMin: number; ackP99Ms: number; rejectPct: number; quotesPerS: number } | null;
 }
-export interface Tenant { id: string; name: string; groups: string[]; hostnames: string[] }
+export interface Tenant { id: string; name: string; groups: string[]; hostnames: string[]; brandColor?: string; logoUrl?: string; supportEmail?: string }
 
 export interface AlertSettings {
   lpDownGraceS: number;
