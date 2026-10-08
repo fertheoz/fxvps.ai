@@ -185,6 +185,8 @@ pub struct NewOrderSingle {
     pub order_qty: Qty,
     pub ord_type: OrderType,
     pub price: Option<Price>,
+    /// StopPx (99): trigger of a stop order.
+    pub stop_px: Option<Price>,
     pub time_in_force: Option<TimeInForce>,
 }
 
@@ -235,6 +237,8 @@ pub struct OrderCancelReplaceRequest {
     pub order_qty: Qty,
     pub ord_type: OrderType,
     pub price: Option<Price>,
+    /// StopPx (99): trigger of a stop order.
+    pub stop_px: Option<Price>,
     pub time_in_force: Option<TimeInForce>,
 }
 
@@ -404,6 +408,7 @@ impl Body {
                 order_qty: v.fixed(38)?,
                 ord_type: enum_field(&v, 40)?,
                 price: v.opt_fixed(44)?,
+                stop_px: v.opt_fixed(99)?,
                 time_in_force: opt_enum_field(&v, 59)?,
             }),
             b"8" => Body::ExecutionReport(ExecutionReport {
@@ -445,6 +450,7 @@ impl Body {
                 order_qty: v.fixed(38)?,
                 ord_type: enum_field(&v, 40)?,
                 price: v.opt_fixed(44)?,
+                stop_px: v.opt_fixed(99)?,
                 time_in_force: opt_enum_field(&v, 59)?,
             }),
             b"9" => Body::OrderCancelReject(OrderCancelReject {
@@ -552,6 +558,7 @@ impl Body {
                     .fixed(38, m.order_qty)
                     .char(40, m.ord_type.to_fix())
                     .opt_fixed(44, m.price)
+                    .opt_fixed(99, m.stop_px)
                     .opt_char(59, opt_enum(m.time_in_force));
             }
             Body::ExecutionReport(m) => {
@@ -591,6 +598,7 @@ impl Body {
                     .fixed(38, m.order_qty)
                     .char(40, m.ord_type.to_fix())
                     .opt_fixed(44, m.price)
+                    .opt_fixed(99, m.stop_px)
                     .opt_char(59, opt_enum(m.time_in_force));
             }
             Body::OrderCancelReject(m) => {

@@ -161,12 +161,15 @@ fn lp_order(req: &LpOrderRequest, lp_symbol: &str, cs: i64, prefix: &str) -> Ord
         symbol: lp_symbol.to_string(),
         side: req.side.into(),
         qty: lots_to_units(req.volume, cs),
-        ord_type: if req.limit.is_some() {
+        ord_type: if req.stop.is_some() {
+            OrderType::Stop
+        } else if req.limit.is_some() {
             OrderType::Limit
         } else {
             OrderType::Market
         },
         limit_price: req.limit.map(Fixed::from),
+        stop_price: req.stop.map(Fixed::from),
         tif: if req.resting {
             TimeInForce::GoodTillCancel
         } else if req.all_or_none {
@@ -565,6 +568,7 @@ mod tests {
             all_or_none: false,
             resting: true,
             revision: 0,
+            stop: None,
         };
         r.send(&req);
         match rx.try_recv().unwrap() {
@@ -587,6 +591,21 @@ mod tests {
                 assert_eq!(orig_cl_ord_id, "LP-11");
                 assert_eq!(order.cl_ord_id, "LP-11-r1");
                 assert_eq!(order.tif, TimeInForce::GoodTillCancel);
+            }
+            c => panic!("{c:?}"),
+        }
+        // a stop (SL at the LP) goes out as OrdType 3 with StopPx, GTC
+        let mut st = req.clone();
+        st.lp_order_id = 12;
+        st.limit = None;
+        st.stop = Some(px("1.09905"));
+        r.send(&st);
+        match rx.try_recv().unwrap() {
+            OrderCommand::Submit(o) => {
+                assert_eq!(o.ord_type, OrderType::Stop);
+                assert_eq!(o.stop_price, Some(Fixed::from(px("1.09905"))));
+                assert_eq!(o.limit_price, None);
+                assert_eq!(o.tif, TimeInForce::GoodTillCancel);
             }
             c => panic!("{c:?}"),
         }
@@ -620,6 +639,7 @@ mod tests {
             all_or_none: false,
             resting: false,
             revision: 0,
+            stop: None,
         });
         match rx.try_recv().unwrap() {
             OrderCommand::Submit(o) => {
@@ -639,6 +659,7 @@ mod tests {
             all_or_none: false,
             resting: false,
             revision: 0,
+            stop: None,
         });
         assert!(matches!(
             fb.lock().unwrap().pop_front(),
@@ -683,6 +704,7 @@ mod tests {
             all_or_none: false,
             resting: false,
             revision: 0,
+            stop: None,
         });
         assert!(
             matches!(rx_b.try_recv().unwrap(), OrderCommand::Submit(o) if o.cl_ord_id == "LP-9")

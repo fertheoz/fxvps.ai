@@ -22,6 +22,10 @@ pub struct LpOrderRequest {
     pub resting: bool,
     #[serde(default)]
     pub revision: u32,
+    /// Stop trigger (resting SL / stop entry at the LP): the LP order is a
+    /// STOP at this price; `limit` is then `None`.
+    #[serde(default)]
+    pub stop: Option<Price>,
 }
 
 /// Outbound side of A-book routing. Fills come back as

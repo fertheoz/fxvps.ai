@@ -439,6 +439,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         qty: abs,
                         ord_type: OrderType::Market,
                         limit_price: None,
+                        stop_price: None,
                         tif: TimeInForce::ImmediateOrCancel,
                     };
                     let body = serde_json::to_vec(&OrderCommand::Submit(order))?;

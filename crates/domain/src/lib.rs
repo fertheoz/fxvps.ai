@@ -53,6 +53,8 @@ impl Side {
 pub enum OrderType {
     Market,
     Limit,
+    /// Stop (FIX 40=3): triggers at `stop_price`, then executes as a market order.
+    Stop,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -136,6 +138,9 @@ pub struct Order {
     pub qty: Qty,
     pub ord_type: OrderType,
     pub limit_price: Option<Price>,
+    /// StopPx (99) of a stop order.
+    #[serde(default)]
+    pub stop_price: Option<Price>,
     pub tif: TimeInForce,
 }
 

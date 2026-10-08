@@ -167,6 +167,7 @@ fn new_order() -> Body {
         order_qty: Fixed::from_int(100_000),
         ord_type: OrderType::Market,
         price: None,
+        stop_px: None,
         time_in_force: Some(TimeInForce::ImmediateOrCancel),
     })
 }
@@ -290,6 +291,7 @@ fn all_bodies() -> Vec<Body> {
             order_qty: Fixed::from_int(3),
             ord_type: OrderType::Limit,
             price: Some(Fixed::from_parts(11, 1)),
+            stop_px: None,
             time_in_force: Some(TimeInForce::GoodTillCancel),
         }),
         Body::OrderCancelReject(OrderCancelReject {
@@ -381,6 +383,7 @@ fn body_strategy() -> impl Strategy<Value = Body> {
                     OrderType::Market
                 },
                 price,
+                stop_px: None,
                 time_in_force: tif,
             })
         });

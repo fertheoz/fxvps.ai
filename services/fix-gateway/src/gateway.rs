@@ -603,6 +603,7 @@ fn to_body(cfg: &GatewayConfig, c: &OrderCommand) -> Result<Body, String> {
             order_qty: order.qty,
             ord_type: order.ord_type,
             price: order.limit_price,
+            stop_px: order.stop_price,
             time_in_force: Some(order.tif),
         }),
         OrderCommand::Positions { req_id, fields } => {
