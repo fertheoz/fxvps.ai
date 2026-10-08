@@ -628,7 +628,7 @@ mod tests {
         });
         // the simulator quotes first (a fresh process after a take-over)
         a.update("SIM", "EURUSD", book("1.10005", "1.10025", "10"));
-        assert!(a.merged("EURUSD").bids.first().is_some());
+        assert!(!a.merged("EURUSD").bids.is_empty());
         // nobody may take the order: the engine rejects instead of filling here
         assert!(a.choose("EURUSD", Side::Sell, qty("1")).is_empty());
         a.update("LMAX", "EURUSD", book("1.10000", "1.10020", "5"));
