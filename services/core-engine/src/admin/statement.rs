@@ -1081,6 +1081,7 @@ mod tests {
             replica: None,
             http: reqwest::Client::new(),
             mailer: None,
+            hazine: None,
         };
         let r = run_once(&ctx, &mailer, at).await.unwrap();
         assert_eq!(r, Some((month.clone(), 1, 0)));

@@ -73,6 +73,56 @@ struct T {
 }
 
 impl T {
+    async fn start_with(dir: &Path, seed: bool, tune: impl FnOnce(&mut AdminConfig)) -> T {
+        let (h, join) = spawn(Settings::new(dir)).unwrap();
+        if seed {
+            for c in setup_cmds() {
+                h.command(c).await.unwrap();
+            }
+        }
+        let mut cfg = AdminConfig::new(dir);
+        cfg.live_interval_ms = 50;
+        cfg.cors_origins = Some(vec!["http://bo.test".into()]);
+        cfg.lp_status = Some(std::sync::Arc::new(std::sync::RwLock::new(vec![
+            fix_gateway::SessionStatus {
+                kind: fix_gateway::SessionKind::Trading,
+                lp: "LMAX".into(),
+                sender_comp_id: "FXVPS".into(),
+                target_comp_id: "LMAX".into(),
+                logged_on: true,
+                since_ms: 1_700_000_000_000,
+                last_down_reason: None,
+                rejects: 2,
+                in_seq: 0,
+                last_msg_ms: 0,
+            },
+        ])));
+        // Real fix-gateway admin endpoint with a managed config file.
+        let managed =
+            std::sync::Arc::new(fix_gateway::managed::Managed::open(dir.join("lp.json")).unwrap());
+        let gw = fix_gateway::status_http::spawn_with_admin(
+            "127.0.0.1:0",
+            std::sync::Arc::default(),
+            Some(fix_gateway::status_http::Admin {
+                token: LP_TOKEN.into(),
+                managed,
+            }),
+        )
+        .await
+        .unwrap();
+        cfg.lp_admin = Some(admin::LpAdmin {
+            url: format!("http://{gw}"),
+            token: LP_TOKEN.into(),
+        });
+        tune(&mut cfg);
+        let app = admin::app(h.clone(), Authenticator::hs256(SECRET), cfg).unwrap();
+        T {
+            app,
+            h,
+            join: Some(join),
+        }
+    }
+
     async fn start(dir: &Path, seed: bool) -> T {
         let (h, join) = spawn(Settings::new(dir)).unwrap();
         if seed {
@@ -2499,4 +2549,291 @@ async fn ib_link_history_override_loop_and_payouts() {
     assert_eq!(st.ib_paid_to.get(&9), Some(&today));
     assert_eq!(st.ib_paid_to.get(&11), Some(&today));
     t.stop();
+}
+
+/// Stand-in for hazine's paylink API: a link asks for the amount plus a
+/// one-micro uniqueness tag; `pay` binds a transfer to it the way hazine's
+/// checkPayment does (any amount the test chooses).
+#[derive(Clone, Default)]
+struct FakeHazine(std::sync::Arc<std::sync::Mutex<FakeHazineState>>);
+
+#[derive(Default)]
+struct FakeHazineState {
+    down: bool,
+    /// create calls, failed ones included
+    calls: u32,
+    /// link id -> (invoice amount, (tx hash, receivedAmount) once paid)
+    links: std::collections::BTreeMap<String, (String, Option<(String, String)>)>,
+}
+
+impl FakeHazine {
+    async fn serve(&self) -> String {
+        type Reply = (StatusCode, axum::Json<Value>);
+        fn authorized(h: &axum::http::HeaderMap) -> bool {
+            h.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer hazine-test-key")
+        }
+        async fn create(
+            axum::extract::State(hz): axum::extract::State<FakeHazine>,
+            headers: axum::http::HeaderMap,
+            axum::Json(b): axum::Json<Value>,
+        ) -> Reply {
+            let mut s = hz.0.lock().unwrap();
+            s.calls += 1;
+            if !authorized(&headers) {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(json!({"message": "Invalid API key"})),
+                );
+            }
+            if s.down {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(json!({"message": "maintenance"})),
+                );
+            }
+            let id = format!("00000000-0000-4000-8000-{:012}", s.links.len() + 1);
+            // "150.00" -> "150.000001"
+            let amount = format!("{}0001", b["amount"].as_str().unwrap_or("0"));
+            s.links.insert(id.clone(), (amount.clone(), None));
+            (
+                StatusCode::CREATED,
+                axum::Json(
+                    json!({"id": id, "amount": amount, "status": "pending", "receivedAmount": "0", "txHash": ""}),
+                ),
+            )
+        }
+        async fn check(
+            axum::extract::State(hz): axum::extract::State<FakeHazine>,
+            headers: axum::http::HeaderMap,
+            axum::extract::Path(id): axum::extract::Path<String>,
+        ) -> Reply {
+            if !authorized(&headers) {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(json!({"message": "Invalid API key"})),
+                );
+            }
+            let s = hz.0.lock().unwrap();
+            let Some((amount, paid)) = s.links.get(&id) else {
+                return (
+                    StatusCode::NOT_FOUND,
+                    axum::Json(json!({"message": "Payment request not found."})),
+                );
+            };
+            let (status, tx, got) = match paid {
+                Some((tx, got)) => ("paid", tx.as_str(), got.as_str()),
+                None => ("pending", "", "0"),
+            };
+            (
+                StatusCode::CREATED,
+                axum::Json(
+                    json!({"id": id, "amount": amount, "status": status, "txHash": tx, "receivedAmount": got}),
+                ),
+            )
+        }
+        let app = axum::Router::new()
+            .route("/api/paylink-api", axum::routing::post(create))
+            .route("/api/paylink-api/{id}/check", axum::routing::post(check))
+            .with_state(self.clone());
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    fn set_down(&self, down: bool) {
+        self.0.lock().unwrap().down = down;
+    }
+
+    fn calls(&self) -> u32 {
+        self.0.lock().unwrap().calls
+    }
+
+    fn pay(&self, id: &str, tx: &str, received: &str) {
+        let mut s = self.0.lock().unwrap();
+        s.links.get_mut(id).unwrap().1 = Some((tx.into(), received.into()));
+    }
+}
+
+async fn usdt_deposit(t: &T, tok: &str, account: &str, amount: i64) -> (StatusCode, Value) {
+    let body =
+        json!({"account": account, "kind": "deposit", "method": "usdt_trc20", "amount": amount});
+    t.req(
+        Method::POST,
+        "/v1/client/funding",
+        Some(tok),
+        Some(body),
+        &[],
+    )
+    .await
+}
+
+async fn decide_funding(t: &T, tok: &str, id: &str, body: Value) -> (StatusCode, Value) {
+    let path = format!("/v1/funding/{id}/decide");
+    t.req(Method::POST, &path, Some(tok), Some(body), &[]).await
+}
+
+/// Ids in the back office's default (open) funding list.
+async fn open_funding(t: &T, tok: &str) -> Vec<String> {
+    let v = t.get("/v1/funding?status=open", tok).await.1;
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The back-office row of a funding request, once `ready` holds (the hazine
+/// watcher polls in the background).
+async fn funding_row(t: &T, tok: &str, id: &str, ready: impl Fn(&Value) -> bool) -> Value {
+    for _ in 0..200 {
+        let rows = t.get("/v1/funding?status=all", tok).await.1;
+        if let Some(r) = rows.as_array().unwrap().iter().find(|r| r["id"] == id) {
+            if ready(r) {
+                return r.clone();
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("funding request {id} never got ready");
+}
+
+/// USDT deposits through hazine: the link is opened before anything is
+/// journaled, only an exact payment lets one approval credit, and a payment
+/// that arrives after the decision is still recorded and flagged.
+#[tokio::test(flavor = "multi_thread")]
+async fn usdt_card_deposits_follow_hazine() {
+    let dir = tempfile::tempdir().unwrap();
+    let hz = FakeHazine::default();
+    let url = hz.serve().await;
+    let tune = |cfg: &mut AdminConfig| {
+        let mut h = admin::usdt_watch::Hazine::new(&url, "hazine-test-key");
+        h.poll = std::time::Duration::from_millis(20);
+        cfg.hazine = Some(h);
+        cfg.names = Some(core_engine::api::AccountNames::default());
+    };
+    let t = T::start_with(dir.path(), true, tune).await;
+    // a EUR account next to the USD ones
+    t.h.command(Command::SetGroup(GroupConfig::retail(
+        "e",
+        Currency::EUR,
+        Routing::BBook,
+    )))
+    .await
+    .unwrap();
+    t.h.command(Command::OpenAccount {
+        account: 9,
+        group: "e".into(),
+    })
+    .await
+    .unwrap();
+    let a = admin_t();
+    let c = client_token_as("cli", &["7", "9"]);
+    let (s, me) = t.get("/v1/client/me", &c).await;
+    assert_eq!(s, StatusCode::OK, "{me}");
+    assert_eq!(me["cryptoCard"], true);
+    // hazine down: an error for the client and nothing journaled
+    hz.set_down(true);
+    let (s, e) = usdt_deposit(&t, &c, "7", 1_500_000).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{e}");
+    assert_eq!(t.get("/v1/funding?status=all", &a).await.1, json!([]));
+    hz.set_down(false);
+    // non-USD account: refused before hazine is even asked
+    let calls = hz.calls();
+    let (s, _) = usdt_deposit(&t, &c, "9", 10_000).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(hz.calls(), calls);
+    assert_eq!(t.get("/v1/funding?status=all", &a).await.1, json!([]));
+    let audit = t.get("/v1/audit", &a).await.1.to_string();
+    assert!(!audit.contains("funding.deposit"), "{audit}");
+
+    // 1) overpaid (hazine binds 1x..2x): recorded, but four-eyes stays
+    let (s, fr1) = usdt_deposit(&t, &c, "7", 1_500_000).await;
+    assert_eq!(s, StatusCode::OK, "{fr1}");
+    let pay1 = fr1["payId"].as_str().unwrap().to_string();
+    assert_eq!(fr1["payUrl"], format!("{url}/pay?id={pay1}"));
+    assert_eq!(fr1["expectedMicro"], 15_000_000_001i64);
+    assert_eq!(fr1["details"], "");
+    let id1 = fr1["id"].as_str().unwrap().to_string();
+    hz.pay(&pay1, "tx1", "15000.5");
+    let r = funding_row(&t, &a, &id1, |r| r["txHash"].is_string()).await;
+    assert_eq!(r["txHash"], "tx1");
+    assert_eq!(r["receivedMicro"], 15_000_500_000i64);
+    assert_eq!(r["paidAfterDecision"], false);
+    let (s, v) = decide_funding(&t, &a, &id1, json!({"decision": "approve"})).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let q = t.get("/v1/approvals", &a).await.1;
+    assert_eq!(q.as_array().unwrap().len(), 1, "{q}");
+    let reason = q[0]["reason"].as_str().unwrap_or_default().to_string();
+    assert!(reason.contains("received 15000.500000 USDT"), "{reason}");
+    assert_eq!(t.get("/v1/accounts/7", &a).await.1["balance"], 1_000_000);
+
+    // 2) exactly the tagged amount: one approval credits
+    let (s, fr2) = usdt_deposit(&t, &c, "7", 1_500_000).await;
+    assert_eq!(s, StatusCode::OK, "{fr2}");
+    let id2 = fr2["id"].as_str().unwrap().to_string();
+    hz.pay(fr2["payId"].as_str().unwrap(), "tx2", "15000.000001");
+    funding_row(&t, &a, &id2, |r| r["txHash"].is_string()).await;
+    let (s, v) = decide_funding(&t, &a, &id2, json!({"decision": "approve"})).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(t.get("/v1/accounts/7", &a).await.1["balance"], 2_500_000);
+    let q = t.get("/v1/approvals", &a).await.1;
+    assert_eq!(q.as_array().unwrap().len(), 1, "{q}");
+
+    // 3) rejected, then paid on the card that stayed open: still recorded,
+    // flagged and kept in the open list until someone handles it
+    let (s, fr3) = usdt_deposit(&t, &c, "7", 20_000).await;
+    assert_eq!(s, StatusCode::OK, "{fr3}");
+    let id3 = fr3["id"].as_str().unwrap().to_string();
+    let rej = json!({"decision": "reject", "note": "duplicate"});
+    assert_eq!(decide_funding(&t, &a, &id3, rej).await.0, StatusCode::OK);
+    hz.pay(fr3["payId"].as_str().unwrap(), "tx3", "200.000001");
+    let r = funding_row(&t, &a, &id3, |r| r["txHash"].is_string()).await;
+    assert_eq!(r["status"], "rejected");
+    assert_eq!(r["paidAfterDecision"], true);
+    // decided requests leave the open list; a late payment brings one back
+    assert_eq!(open_funding(&t, &a).await, vec![id3.clone()]);
+    let audit = t.get("/v1/audit", &a).await.1.to_string();
+    assert!(audit.contains("after the request was Rejected"), "{audit}");
+    let (s, _) = decide_funding(&t, &a, &id3, json!({"decision": "handled"})).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "a note is required");
+    let done = json!({"decision": "handled", "note": "refunded to sender"});
+    let (s, v) = decide_funding(&t, &a, &id3, done).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["lateHandledBy"], "alice name");
+    assert!(open_funding(&t, &a).await.is_empty());
+    let again = json!({"decision": "handled", "note": "again"});
+    assert_eq!(
+        decide_funding(&t, &a, &id3, again).await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // 4) approved before the money came: the payment is still recorded
+    let (s, fr4) = usdt_deposit(&t, &c, "7", 30_000).await;
+    assert_eq!(s, StatusCode::OK, "{fr4}");
+    let id4 = fr4["id"].as_str().unwrap().to_string();
+    let ok = json!({"decision": "approve"});
+    assert_eq!(decide_funding(&t, &a, &id4, ok).await.0, StatusCode::OK);
+    hz.pay(fr4["payId"].as_str().unwrap(), "tx4", "300.000001");
+    let r = funding_row(&t, &a, &id4, |r| r["txHash"].is_string()).await;
+    assert_eq!(r["status"], "approved");
+    assert_eq!(r["paidAfterDecision"], true);
+    assert_eq!(open_funding(&t, &a).await, vec![id4.clone()]);
+
+    // the journal replays to the same requests
+    let before = t.get("/v1/funding?status=all", &a).await.1;
+    t.stop();
+    let t = T::start_with(dir.path(), false, tune).await;
+    assert_eq!(t.get("/v1/funding?status=all", &a).await.1, before);
+    t.stop();
+}
+
+/// Client token for a given subject (USDT tests).
+fn client_token_as(sub: &str, accounts: &[&str]) -> String {
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+        &json!({ "sub": sub, "name": format!("{sub} name"), "exp": unix_now() + 600, "accounts": accounts }),
+        &jsonwebtoken::EncodingKey::from_secret(SECRET),
+    )
+    .unwrap()
 }

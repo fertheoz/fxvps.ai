@@ -68,6 +68,8 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
   const funding: FundingRequest[] = [
     { id: "fr-1", account: s.clients[0]?.login ?? 1001, clientName: s.clients[0]?.name, kind: "deposit", method: "usdt_trc20", amount: 500_00, currency: "USD", details: "tx 0x9a…c1", requestedBy: "client", requestedAt: Date.now() * 1e6 - 2e12, status: "requested", decidedBy: null, decidedAt: null, note: null, opId: null },
     { id: "fr-2", account: s.clients[1]?.login ?? 1002, clientName: s.clients[1]?.name, kind: "withdraw", method: "bank", amount: 1200_00, currency: "USD", details: "TR12 0006 … 55", requestedBy: "client", requestedAt: Date.now() * 1e6 - 9e12, status: "approved", decidedBy: "dealer", decidedAt: Date.now() * 1e6 - 8e12, note: null, opId: "op-77" },
+    // hazine card deposit rejected as a duplicate, then paid on the card that stayed open
+    { id: "fr-3", account: s.clients[2]?.login ?? 1003, clientName: s.clients[2]?.name, kind: "deposit", method: "usdt_trc20", amount: 250_00, currency: "USD", details: "", requestedBy: "client", requestedAt: Date.now() * 1e6 - 7e12, status: "rejected", decidedBy: "dealer", decidedAt: Date.now() * 1e6 - 6e12, note: "duplicate", opId: null, expectedMicro: 250_000_001, txHash: "9f1c2a7be0d34c5f8a61e2b7c4d9f0a1b2c3d4e5f60718293a4b5c6d7e8f9012", payUrl: null, receivedMicro: 250_000_001, paidAfterDecision: true, lateHandledBy: null },
   ];
   const kycDocs: KycDocMeta[] = [
     { id: "kd-1", account: s.clients[0]?.login ?? 1001, kind: "id_front", filename: "passport.jpg", contentType: "image/jpeg", size: 412_000, sha256: "ab12cd34ef56", uploadedBy: "client", uploadedAt: new Date(Date.now() - 3e8).toISOString() },
@@ -376,12 +378,20 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
     async kycDocBlob() { return delay(new Blob(["demo"], { type: "text/plain" })); },
     async listFunding(status = "open") {
-      return delay(funding.filter((f) => status === "all" || (status === "open" ? f.status === "requested" : f.status === status)));
+      const open = (f: FundingRequest) => f.status === "requested" || (!!f.paidAfterDecision && !f.lateHandledBy);
+      return delay(funding.filter((f) => status === "all" || (status === "open" ? open(f) : f.status === status)));
     },
     async decideFunding(id, decision, note, actor) {
       guard(actor, "clients.edit");
       const f = funding.find((x) => x.id === id);
       if (!f) throw new Error("not found");
+      if (decision === "handled") {
+        if (!f.paidAfterDecision || f.lateHandledBy) throw new Error("no unreviewed late payment on this request");
+        if (!note) throw new Error("a note is required (what was done with the payment)");
+        f.lateHandledBy = actor.name;
+        audit(actor, "funding.late_handled", `#${f.account}`, `${f.id} (${note})`);
+        return delay(f);
+      }
       f.status = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "paid";
       f.decidedBy = actor.name; f.decidedAt = Date.now() * 1e6; f.note = note ?? null;
       if (decision === "approve") { const c = s.clients.find((x) => x.login === f.account); if (c) c.balance += f.kind === "deposit" ? f.amount : -f.amount; }

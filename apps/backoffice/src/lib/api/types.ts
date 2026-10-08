@@ -395,8 +395,21 @@ export interface FundingRequest {
   decidedAt: number | null;
   decidedAtIso?: string | null;
   note: string | null;
+  /** USDT deposits: exact amount the client was told to send (micro-USDT). */
+  expectedMicro?: number | null;
+  /** On-chain transfer the watcher matched to this request. */
+  txHash?: string | null;
+  /** hazine.io payment card of a USDT deposit. */
+  payUrl?: string | null;
+  /** What actually arrived on chain (micro-USDT); only an exact match skips 4-eyes. */
+  receivedMicro?: number | null;
+  /** hazine reported the payment after the request was decided; needs review. */
+  paidAfterDecision?: boolean;
+  /** Staff member who reviewed such a late payment. */
+  lateHandledBy?: string | null;
   opId: string | null;
 }
+export type FundingDecision = "approve" | "reject" | "paid" | "handled";
 export interface IbRow {
   ib: number; name: string | null; currency: string | null; sharePct: number; clients: number; deals: number; lots: number; commission: number; markup: number; payout: number;
   /** Rebate per closed lot (minor), override on sub-IBs (%), referral code, parent IB. */
@@ -527,7 +540,7 @@ export interface AdminApi {
   listKycDocs(id: string): Promise<KycDocMeta[]>;
   kycDocBlob(id: string, doc: string): Promise<Blob>;
   listFunding(status?: string): Promise<FundingRequest[]>;
-  decideFunding(id: string, decision: "approve" | "reject" | "paid", note: string | undefined, actor: Actor): Promise<FundingRequest>;
+  decideFunding(id: string, decision: FundingDecision, note: string | undefined, actor: Actor): Promise<FundingRequest>;
   ibReport(from?: string, to?: string): Promise<IbReport>;
   /** What an IB payout up to `to` (a closed day) would book; the amount comes from the server. */
   ibPayoutPreview(ib: number, to: string): Promise<IbPayoutPreview>;
