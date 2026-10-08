@@ -52,9 +52,10 @@ export function renkoBox(bars: Bar[], point: number): number {
  */
 export function renko(bars: Bar[], box: number): Bar[] {
   const out: Bar[] = [];
-  if (!bars.length || !(box > 0)) return out;
-  let lo = bars[0].close;
-  let hi = bars[0].close;
+  const first = bars[0];
+  if (!first || !(box > 0)) return out;
+  let lo = first.close;
+  let hi = first.close;
   const eps = box * 1e-9;
   for (const b of bars) {
     let j = 0;
