@@ -75,6 +75,7 @@ fn order(
         qty: Fixed::from_int(qty),
         ord_type,
         limit_price: px,
+        stop_price: None,
         tif,
     }
 }
