@@ -25,6 +25,13 @@ use fix_gateway::gateway::{GatewayEvent, OrderCommand};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
+/// ClOrdID of a correction: `AUD-<unix seconds>-<n>`. LMAX caps ClOrdID at
+/// 20 characters (SessionReject "string length less than or equal to 20"),
+/// so the stamp is in seconds, not milliseconds.
+fn correction_cl_ord_id(now_ms: u64, seq: u64) -> String {
+    format!("AUD-{}-{seq}", now_ms / 1000)
+}
+
 fn now_ns() -> u64 {
     domain::now_ns()
 }
@@ -388,7 +395,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     seq += 1;
-                    let cl = format!("AUD-{}-{seq}", now_ms);
+                    let cl = correction_cl_ord_id(now_ms, seq);
                     let order = Order {
                         cl_ord_id: cl.clone(),
                         symbol: c.symbol.clone(),
@@ -434,4 +441,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::correction_cl_ord_id;
+
+    #[test]
+    fn correction_id_fits_lmax_limit() {
+        let id = correction_cl_ord_id(1_791_492_994_926, 373);
+        assert_eq!(id, "AUD-1791492994-373");
+        assert!(id.len() <= 20);
+        assert!(correction_cl_ord_id(4_102_444_800_000, 99_999).len() <= 20);
+    }
 }
