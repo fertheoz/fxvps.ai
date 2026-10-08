@@ -59,6 +59,10 @@ export interface ClientFlowRow {
   realisedPnl: number;
   brokerPnl: number;
   avgSlipGainPoints: number;
+  /** Mid move in the client's favour after fills (points), null until measured. */
+  markout1s?: number | null;
+  markout5s?: number | null;
+  markout60s?: number | null;
   toxicity: number;
 }
 

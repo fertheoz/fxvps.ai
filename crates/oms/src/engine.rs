@@ -97,7 +97,24 @@ struct State {
     pending_copy: Option<(AccountNo, PositionId)>,
     #[serde(default)]
     copy_seq: u64,
+    /// Fills waiting for their markout horizons (oldest first, bounded).
+    #[serde(default)]
+    markouts: std::collections::VecDeque<MarkoutSample>,
 }
+
+/// A client fill whose later mid moves feed `FlowStats` markout.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+struct MarkoutSample {
+    account: AccountNo,
+    symbol: String,
+    sign: i64,
+    price: i64,
+    ts: u64,
+    /// Horizons already measured (bit per `FlowStats::MARKOUT_SECS`).
+    done: u8,
+}
+
+const MARKOUT_MAX_PENDING: usize = 20_000;
 
 /// Serializable engine snapshot.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -591,6 +608,7 @@ impl Engine {
                     },
                 );
                 self.on_quote(symbol);
+                self.resolve_markouts(symbol);
             }
             Command::PlaceOrder(o) => self.place_order(o.clone(), None, OrderOrigin::Client)?,
             Command::ModifyOrder {
@@ -1558,6 +1576,19 @@ impl Engine {
             let gain = (req.raw() - price.raw()) * side.sign() / point;
             self.st.flow.entry(account).or_default().record_fill(gain);
         }
+        if self.st.orders[&id].origin == OrderOrigin::Client {
+            if self.st.markouts.len() >= MARKOUT_MAX_PENDING {
+                self.st.markouts.pop_front();
+            }
+            self.st.markouts.push_back(MarkoutSample {
+                account,
+                symbol: symbol.clone(),
+                sign: side.sign(),
+                price: price.raw(),
+                ts: self.st.now,
+                done: 0,
+            });
+        }
         let mut commission = Money::zero(g.currency);
         // commission per side: the group's model, else the symbol's per-lot amount
         let c = match g.commission {
@@ -2459,5 +2490,43 @@ impl Engine {
             sm.fees_paid += fee;
         }
         Ok(())
+    }
+}
+
+impl Engine {
+    /// Measures pending fills of `symbol` whose horizons have passed: the raw
+    /// mid move (no markup) in the client's favour, in points.
+    fn resolve_markouts(&mut self, symbol: &str) {
+        if self.st.markouts.is_empty() {
+            return;
+        }
+        let Some(q) = self.st.quotes.get(symbol) else {
+            return;
+        };
+        let Some(point) = self.st.symbols.get(symbol).map(|s| s.point().raw().max(1)) else {
+            return;
+        };
+        let mid = (q.bid.raw() + q.ask.raw()) / 2;
+        let now = self.st.now;
+        let all = (1u8 << risk::FlowStats::MARKOUT_SECS.len()) - 1;
+        let mut i = 0;
+        while i < self.st.markouts.len() {
+            let m = &mut self.st.markouts[i];
+            if m.symbol == symbol {
+                for (h, secs) in risk::FlowStats::MARKOUT_SECS.iter().enumerate() {
+                    if m.done & (1 << h) == 0 && now >= m.ts + secs * 1_000_000_000 {
+                        m.done |= 1 << h;
+                        let pts = (mid - m.price) * m.sign / point;
+                        let acc = m.account;
+                        self.st.flow.entry(acc).or_default().record_markout(h, pts);
+                    }
+                }
+            }
+            if self.st.markouts[i].done == all {
+                self.st.markouts.remove(i);
+            } else {
+                i += 1;
+            }
+        }
     }
 }

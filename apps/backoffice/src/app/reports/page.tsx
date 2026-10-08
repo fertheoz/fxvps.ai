@@ -130,6 +130,8 @@ export default function ReportsPage() {
     fc.accessor("realisedPnl", { header: t("flow.realised"), cell: (c) => <Pnl value={c.getValue()}>{f.num(c.getValue(), 2)} {c.row.original.currency}</Pnl> }),
     fc.accessor("brokerPnl", { header: t("flow.broker"), cell: (c) => <Pnl value={c.getValue()}>{f.num(c.getValue(), 2)} {c.row.original.currency}</Pnl> }),
     fc.accessor("avgSlipGainPoints", { header: t("flow.slipGain"), cell: (c) => c.getValue().toFixed(2) }),
+    fc.accessor("markout5s", { header: t("flow.markout5"), cell: (c) => { const v = c.getValue(); return v == null ? "—" : <span className={v > 0 ? "text-red-600 dark:text-red-400" : ""}>{v.toFixed(1)}</span>; } }),
+    fc.accessor("markout60s", { header: t("flow.markout60"), cell: (c) => { const v = c.getValue(); return v == null ? "—" : v.toFixed(1); } }),
     fc.accessor("toxicity", { header: t("flow.toxicity"), cell: (c) => <ToxicityBadge score={c.getValue()} /> }),
   ];
   const txCols = [

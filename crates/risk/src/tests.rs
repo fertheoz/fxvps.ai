@@ -405,3 +405,17 @@ fn leverage_tiers_are_progressive() {
     );
     assert_eq!(tiered_margin(300_000 * sc, 100, &[]), 3_000 * sc);
 }
+
+#[test]
+fn markout_weighs_in_once_measured() {
+    let mut f = FlowStats::default();
+    for _ in 0..5 {
+        f.record_close(600, -10, 10); // long holds, losing: not toxic by the old signals
+    }
+    assert_eq!(f.toxicity(), 0);
+    for _ in 0..5 {
+        f.record_markout(1, 4); // but the price keeps running their way after fills
+    }
+    assert_eq!(f.avg_markout(1), Some(4.0));
+    assert_eq!(f.toxicity(), 25);
+}
