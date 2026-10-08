@@ -65,6 +65,55 @@ gösterir (08-bridge-yol-haritasi.md, 12-eksik-parcalar-plan.md).
 | Müşteri başına oran özelleştirme | ✅ grup/kural profili |
 | Gerçek zamanlı VaR/PnL/hacim panosu | 🟡 PnL/hacim var, VaR yok |
 
+## 0. parça — LP'de yatan emirler (kurucu kararı, 9 Ekim)
+
+**Sorun.** TP/limit bizim fiyat çizgimizde tetikleniyor, LP'ye o anda piyasa
+emri gidiyor. İğne ucunda LP doldurmazsa (8 Ekim XAU/USD: devir anında LMAX
+kitabı yoktu, emir SIM'e düştü) ya müşteri haksız kârla kapanır ya da
+"fiyat oraya gitti, neden kapanmadı/açılmadı, spread'i siz açıyorsunuz" olur.
+
+**Kural.** A-book'ta müşterinin TP'si ve bekleyen limit emri, **LP'de gerçek
+GTC limit emri** olarak durur. Dolum LP'den gelir; müşteri fiyatı = LP dolumu
++ markup. LP işlem yapmadıysa bizde de hiçbir şey olmaz; müşteriye cevap:
+"emriniz LMAX'ta duruyordu, LMAX o fiyattan işlem yapmadı".
+
+**Kapsam (v0, bu PR):** A-book pozisyon TP'si + A-book bekleyen **limit**
+girişleri. SL ve stop girişleri tetik tabanlı kalır (geçit henüz Stop
+OrdType taşımıyor → v1). B-book'a dokunulmaz (orası için derinlik-VWAP tetik,
+parça 1 ile).
+
+**Motor (oms, journal'lı, replay güvenli)**
+- `GroupConfig.lp_resting` (varsayılan kapalı; grup başına açılır).
+- `LpOrder.resting` + `LpOrder.position` (TP için; çocuk emir dolumda
+  yaratılır) + `LpOrder.revision` (replace zinciri; ClOrdID `LP-<id>` →
+  `LP-<id>-r<n>`, yeniden başlatmada deterministik).
+- `Position.lp_tp`, `Order.lp_resting`: LP'deki emrin kimliği.
+- Yaşam döngüsü: pozisyon açıldı/TP değişti → gönder/değiştir/iptal; elle
+  kısmi kapanış → hacim değiştir; tam kapanış → iptal. Bekleyen limit: kabulde
+  gönder; değiştir → replace; iptal → cancel; dolum → normal çocuk dolumu.
+- LP limit fiyatı = müşteri fiyatı − markup(o yön); dolumda müşteri ≥ TP alır.
+- `check_sl_tp`/`check_pending`: LP'de yatan emir için bizim tetik **çalışmaz**.
+- Dolum pozisyonun serbest hacminden fazlaysa (elle kapanışla yarış): fazlalık
+  broker hedge defterinde ters piyasa emriyle düzleştirilir (omnibus değişmezi).
+- LP reddi/iptali → tetik kipine geri düşer (`lp_tp = None`), olay yazılır.
+- `LpRouter` trait: `send` + `cancel` + `replace`; replay'de NullRouter.
+
+**Köprü (core-engine lp_fix / lp_agg)**
+- GTC Submit; Cancel/Replace `OrderCommand`'ları; icra ClOrdID'sinden kimlik
+  ayrıştırma `-r<n>` ekiyle. Yatan emir yalnız **emir alan birincil LP**'ye
+  gider (`orders=true`, en yüksek öncelik), o an kitap olmasa da.
+
+**Denetçi**: GTC emri "ack geldi" sayılır (NoAnswer yalnız IOC/FOK ve ack'siz
+GTC için); yatan emir uçuşta sayılmaz, uzlaştırma devam eder.
+
+**Konsol**: Grup formu → "TP/limit LP'de yatsın" seçeneği; ekranlar
+(terminalde "LP'de bekliyor" rozeti, "neden dolmadı" kaydı) v1.
+
+**Bilinen sınırlar (v0):** yatan limit girişinde marj yalnız kabulde
+denetlenir (LP dolumu bağlayıcı); aynı sembolde ters yönlü yatan emirler
+LMAX'ta kendi kendine eşleşebilir (self-match; v1: netleştirilmiş tek emir);
+trading süreci kapalıyken gelen icra Denetçi farkı olarak görünür.
+
 ## 2. Harmanlanmış havuz — eksik parçalar, öncelik sırasıyla
 
 Ölçüt: broker kârına doğrudan etki × satış argümanı × bizde temel var mı.
@@ -114,6 +163,7 @@ gösterir (08-bridge-yol-haritasi.md, 12-eksik-parcalar-plan.md).
 | Tarih | Parça | Durum | PR | Not |
 |---|---|---|---|---|
 | 2026-10-09 | — | 📝 | — | havuz çıkarıldı; 15 parça sıralandı |
+| 2026-10-09 | 0 | 🔧 | #189 | LP'de yatan emirler v0: motor (TP + limit giriş, replace/cancel, fazlalık düzleştirme), köprü (GTC, revizyonlu ClOrdID), Denetçi (GTC ack), konsol grup seçeneği |
 
 ## Kaynaklar
 PrimeXM: https://primexm.com/xcore/solutions/ · https://primexm.com/xcore-aggregation/ ·

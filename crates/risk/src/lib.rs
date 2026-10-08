@@ -370,6 +370,11 @@ pub struct GroupConfig {
     pub swap_free_fee_per_lot: i64,
     #[serde(default)]
     pub swap_free_grace_days: u32,
+    /// A-book TP and pending limit entries rest at the LP as GTC limit
+    /// orders (the LP's fill closes/opens the client side; our own quote
+    /// never triggers them). Off = trigger on our price, then IOC at the LP.
+    #[serde(default)]
+    pub lp_resting: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -463,6 +468,7 @@ impl GroupConfig {
             leverage_tiers: Vec::new(),
             swap_free_fee_per_lot: 0,
             swap_free_grace_days: 0,
+            lp_resting: false,
         }
     }
 

@@ -696,6 +696,7 @@ impl Engine {
                     tp: *tp,
                 });
                 let sym = p.symbol.clone();
+                self.sync_resting_tp(*position_id);
                 self.on_quote(&sym);
             }
             Command::ClosePosition {
@@ -717,7 +718,9 @@ impl Engine {
                 let mut o =
                     NewOrder::market(*account, client_order_id, &p.symbol, p.side.opposite(), v);
                 o.client_order_id = client_order_id.clone();
-                self.place_order(o, Some(*position_id), OrderOrigin::Client)?;
+                let pid = *position_id;
+                self.place_order(o, Some(pid), OrderOrigin::Client)?;
+                self.sync_resting_tp(pid);
             }
             Command::LpFill {
                 lp_order_id,
@@ -854,6 +857,17 @@ impl Engine {
         // A new price is a new attempt.
         self.st.orders.get_mut(&id).expect("order").rearm_px = None;
         self.events.push(Event::OrderModified { order_id: id });
+        if let Some(lp) = self.st.orders[&id].lp_resting {
+            let o = &self.st.orders[&id];
+            match o.limit_leg().filter(|_| o.req.order_type == OrderType::Limit) {
+                Some(l) => {
+                    let m = self.order_markup(o, &g, o.req.side).raw() * o.req.side.sign();
+                    let (limit, rem) = (Price::from_raw(l.raw() - m), o.remaining());
+                    self.replace_resting(lp, limit, rem);
+                }
+                None => self.cancel_resting(lp),
+            }
+        }
         self.check_pending(&sym);
         Ok(())
     }
@@ -863,6 +877,18 @@ impl Engine {
         req: NewOrder,
         close: Option<PositionId>,
         origin: OrderOrigin,
+    ) -> R<()> {
+        self.place_order_with(req, close, origin, true)
+    }
+
+    /// [`Self::place_order`]; `start = false` creates and accepts the order
+    /// without executing it (a child whose fill is already known).
+    fn place_order_with(
+        &mut self,
+        req: NewOrder,
+        close: Option<PositionId>,
+        origin: OrderOrigin,
+        start: bool,
     ) -> R<()> {
         let key = format!("{}:{}", req.account, req.client_order_id);
         if let Some(&id) = self.st.client_ids.get(&key) {
@@ -918,6 +944,7 @@ impl Engine {
             max_slippage_override: rule.as_ref().and_then(|r| r.max_slippage_points),
             partial_fill_override: rule.as_ref().and_then(|r| r.partial_fill),
             copy_from: self.st.pending_copy.take(),
+            lp_resting: None,
         };
         self.st.orders.insert(id, order);
         if let Err(reason) = self.validate_order(id, &g) {
@@ -932,13 +959,18 @@ impl Engine {
                 p.closing = Qty::from_raw(p.closing.raw() + v.raw());
             }
         }
+        if !start {
+            return Ok(());
+        }
         let o = &self.st.orders[&id];
         if o.req.order_type == OrderType::Market {
             self.execute(id);
         } else {
             let sym = o.req.symbol.clone();
             self.st.pending_ids.insert(id);
-            self.check_pending(&sym);
+            if !self.rest_entry_at_lp(id) {
+                self.check_pending(&sym);
+            }
         }
         Ok(())
     }
@@ -1047,11 +1079,15 @@ impl Engine {
             if let Some(p) = self.st.positions.get_mut(&pid) {
                 p.closing = Qty::from_raw((p.closing.raw() - rem.raw()).max(0));
             }
+            self.sync_resting_tp(pid);
         }
     }
 
     /// Terminal transition for cancel/expire (keeps partial fills).
     fn finish_order(&mut self, id: OrderId, to: OrderStatus) {
+        if let Some(lp) = self.st.orders[&id].lp_resting {
+            self.cancel_resting(lp);
+        }
         self.release_closing(id);
         self.set_status(id, to);
         self.st.orders.get_mut(&id).expect("order").working = false;
@@ -1202,6 +1238,8 @@ impl Engine {
             volume,
             limit,
             all_or_none,
+            resting: false,
+            revision: 0,
         };
         let sent = self.st.quotes.get(&symbol);
         self.st.lp_orders.insert(
@@ -1222,6 +1260,9 @@ impl Engine {
                 sent_ask: sent.map(|q| q.ask),
                 lp: None,
                 hedge: false,
+                resting: false,
+                position: None,
+                revision: 0,
             },
         );
         self.router.send(&req);
@@ -1342,6 +1383,8 @@ impl Engine {
             volume,
             limit: None,
             all_or_none: false,
+            resting: false,
+            revision: 0,
         };
         let sent = self.st.quotes.get(&symbol);
         *self.st.hedge_pending.entry(symbol.clone()).or_default() += side.sign() * volume.raw();
@@ -1363,6 +1406,9 @@ impl Engine {
                 sent_ask: sent.map(|q| q.ask),
                 lp: None,
                 hedge: true,
+                resting: false,
+                position: None,
+                revision: 0,
             },
         );
         self.router.send(&req);
@@ -1393,6 +1439,14 @@ impl Engine {
             });
             (lp.symbol.clone(), lp.side)
         };
+        self.apply_hedge_fill(&symbol, side, volume, price, exec_id);
+        Ok(())
+    }
+
+    /// Books an LP fill on the broker hedge book (omnibus, pending, average,
+    /// realised P&L of the reduced part).
+    fn apply_hedge_fill(&mut self, symbol: &str, side: Side, volume: Qty, price: Price, exec_id: &str) {
+        let symbol = symbol.to_string();
         let signed = side.sign() * volume.raw();
         *self.st.hedge_pending.entry(symbol.clone()).or_default() -= signed;
         *self.st.omnibus_net.entry(symbol.clone()).or_default() += signed;
@@ -1438,6 +1492,248 @@ impl Engine {
         if self.hedge_net(&symbol) == 0 {
             self.st.hedge_avg.remove(&symbol);
         }
+    }
+
+    // ---- LP-resting orders (GroupConfig::lp_resting) --------------------
+    //
+    // A-book TP and pending limit entries rest at the LP as GTC limit orders.
+    // The LP's fill is the event: our own quote never triggers them, so a
+    // spike the LP did not trade at closes nothing here, and the client gets
+    // the LP's price plus the markup.
+
+    /// Keeps the LP-side TP order of a position in step with its TP and its
+    /// free volume (sends, replaces or cancels as needed).
+    fn sync_resting_tp(&mut self, pid: PositionId) {
+        let Some(p) = self.st.positions.get(&pid).cloned() else {
+            return;
+        };
+        let g = self.st.groups[&self.st.accounts[&p.account].group].clone();
+        let side = p.side.opposite();
+        let vol = p.free_volume();
+        let target = p
+            .tp
+            .filter(|_| p.routing == Routing::ABook && g.lp_resting && vol.is_positive())
+            .map(|tp| {
+                let m = self.markup(&g, &p.symbol, side).raw() * side.sign();
+                Price::from_raw(tp.raw() - m)
+            });
+        match (p.lp_tp, target) {
+            (None, None) => {}
+            (None, Some(limit)) => {
+                let id = self.send_resting(p.symbol.clone(), side, vol, limit, Some(pid), Vec::new());
+                self.st.positions.get_mut(&pid).expect("position").lp_tp = Some(id);
+            }
+            (Some(id), None) => self.cancel_resting(id),
+            (Some(id), Some(limit)) => {
+                let lp = &self.st.lp_orders[&id];
+                let rem = Qty::from_raw(lp.volume.raw() - lp.filled.raw());
+                if lp.limit != Some(limit) || rem != vol {
+                    self.replace_resting(id, limit, vol);
+                }
+            }
+        }
+    }
+
+    /// A just-accepted pending limit entry of an A-book `lp_resting` group
+    /// goes to the LP as a GTC limit (net of the markup). Returns whether it did.
+    fn rest_entry_at_lp(&mut self, id: OrderId) -> bool {
+        let o = &self.st.orders[&id];
+        let g = &self.st.groups[&self.st.accounts[&o.req.account].group];
+        if !(g.lp_resting && o.routing == Routing::ABook && o.req.order_type == OrderType::Limit) {
+            return false;
+        }
+        let Some(l) = o.req.limit_price else {
+            return false;
+        };
+        let m = self.order_markup(o, g, o.req.side).raw() * o.req.side.sign();
+        let (symbol, side, vol) = (o.req.symbol.clone(), o.req.side, o.remaining());
+        let lp = self.send_resting(symbol, side, vol, Price::from_raw(l.raw() - m), None, vec![id]);
+        self.st.orders.get_mut(&id).expect("order").lp_resting = Some(lp);
+        true
+    }
+
+    fn send_resting(
+        &mut self,
+        symbol: String,
+        side: Side,
+        volume: Qty,
+        limit: Price,
+        position: Option<PositionId>,
+        children: Vec<OrderId>,
+    ) -> LpOrderId {
+        let id = self.st.next_id;
+        self.st.next_id += 1;
+        let req = LpOrderRequest {
+            lp_order_id: id,
+            symbol: symbol.clone(),
+            side,
+            volume,
+            limit: Some(limit),
+            all_or_none: false,
+            resting: true,
+            revision: 0,
+        };
+        let sent = self.st.quotes.get(&symbol);
+        self.st.lp_orders.insert(
+            id,
+            LpOrder {
+                id,
+                symbol,
+                side,
+                volume,
+                filled: Qty::ZERO,
+                children,
+                done: false,
+                fills: Vec::new(),
+                created_ts: self.st.now,
+                reject_reason: None,
+                limit: Some(limit),
+                sent_bid: sent.map(|q| q.bid),
+                sent_ask: sent.map(|q| q.ask),
+                lp: None,
+                hedge: false,
+                resting: true,
+                position,
+                revision: 0,
+            },
+        );
+        self.router.send(&req);
+        self.events.push(Event::LpOrderSent {
+            lp_order_id: id,
+            volume,
+        });
+        self.events.push(Event::LpRestingChanged {
+            lp_order_id: id,
+            active: true,
+        });
+        id
+    }
+
+    /// New price and/or remaining quantity for a resting order (the LP
+    /// quantity is the total: filled + remaining).
+    fn replace_resting(&mut self, id: LpOrderId, limit: Price, remaining: Qty) {
+        let Some(lp) = self.st.lp_orders.get_mut(&id) else {
+            return;
+        };
+        if lp.done {
+            return;
+        }
+        lp.revision += 1;
+        lp.limit = Some(limit);
+        lp.volume = Qty::from_raw(lp.filled.raw() + remaining.raw());
+        let req = LpOrderRequest {
+            lp_order_id: id,
+            symbol: lp.symbol.clone(),
+            side: lp.side,
+            volume: lp.volume,
+            limit: Some(limit),
+            all_or_none: false,
+            resting: true,
+            revision: lp.revision,
+        };
+        self.router.replace(&req);
+    }
+
+    /// Cancel at the LP; the order stays open here until the LP confirms
+    /// (`LpReject`), so a fill racing the cancel is still booked.
+    fn cancel_resting(&mut self, id: LpOrderId) {
+        let Some(lp) = self.st.lp_orders.get(&id) else {
+            return;
+        };
+        if lp.done {
+            return;
+        }
+        let req = LpOrderRequest {
+            lp_order_id: id,
+            symbol: lp.symbol.clone(),
+            side: lp.side,
+            volume: lp.volume,
+            limit: lp.limit,
+            all_or_none: false,
+            resting: true,
+            revision: lp.revision,
+        };
+        let (pos, children) = (lp.position, lp.children.clone());
+        self.detach_resting(id, pos, &children);
+        self.router.cancel(&req);
+    }
+
+    /// Forgets the LP-side order on the position / client orders (they fall
+    /// back to our own trigger).
+    fn detach_resting(&mut self, id: LpOrderId, pos: Option<PositionId>, children: &[OrderId]) {
+        if let Some(p) = pos.and_then(|pid| self.st.positions.get_mut(&pid)) {
+            if p.lp_tp == Some(id) {
+                p.lp_tp = None;
+            }
+        }
+        for c in children {
+            if let Some(o) = self.st.orders.get_mut(c) {
+                if o.lp_resting == Some(id) {
+                    o.lp_resting = None;
+                }
+            }
+        }
+        self.events.push(Event::LpRestingChanged {
+            lp_order_id: id,
+            active: false,
+        });
+    }
+
+    /// Fill of a position's LP-side TP: the close child is created now and
+    /// filled at the LP price plus the markup. Volume beyond the position's
+    /// free volume (a manual close raced the LP) is booked on the hedge book
+    /// and flattened at once, so omnibus = A-book net + hedge holds.
+    fn on_resting_tp_fill(
+        &mut self,
+        lp_id: LpOrderId,
+        exec_id: &str,
+        volume: Qty,
+        price: Price,
+    ) -> R<()> {
+        let (symbol, side, pid) = {
+            let lp = self.st.lp_orders.get_mut(&lp_id).expect("lp");
+            lp.filled = Qty::from_raw(lp.filled.raw() + volume.raw());
+            lp.done = lp.filled >= lp.volume;
+            lp.fills.push(LpExec {
+                exec_id: exec_id.to_string(),
+                volume,
+                price,
+                ts: self.st.now,
+            });
+            (lp.symbol.clone(), lp.side, lp.position.expect("resting tp"))
+        };
+        let closable = self
+            .st
+            .positions
+            .get(&pid)
+            .filter(|p| p.lp_tp == Some(lp_id))
+            .map_or(0, |p| p.free_volume().raw().min(volume.raw()));
+        if closable > 0 {
+            let p = self.st.positions[&pid].clone();
+            let clid = format!("tp-{pid}-{}", self.st.seq);
+            let o = NewOrder::market(p.account, &clid, &symbol, side, Qty::from_raw(closable));
+            self.place_order_with(o, Some(pid), OrderOrigin::TakeProfit, false)?;
+            let oid = self
+                .order_by_client_id(p.account, &clid)
+                .map(|o| o.id)
+                .ok_or("tp child not created")?;
+            self.st.lp_orders.get_mut(&lp_id).expect("lp").children.push(oid);
+            *self.st.omnibus_net.entry(symbol.clone()).or_default() += side.sign() * closable;
+            let g = self.st.groups[&self.st.accounts[&p.account].group].clone();
+            let m = self.order_markup(&self.st.orders[&oid], &g, side).raw() * side.sign();
+            let client_px = Price::from_raw(price.raw() + m);
+            self.fill_child(oid, Qty::from_raw(closable), client_px, price);
+        }
+        let excess = volume.raw() - closable;
+        if excess > 0 {
+            let ex = Qty::from_raw(excess);
+            *self.st.hedge_pending.entry(symbol.clone()).or_default() += side.sign() * excess;
+            self.apply_hedge_fill(&symbol, side, ex, price, exec_id);
+            self.send_hedge(symbol.clone(), side.opposite(), ex);
+        }
+        if self.st.lp_orders[&lp_id].done {
+            self.detach_resting(lp_id, Some(pid), &[]);
+        }
         Ok(())
     }
 
@@ -1453,6 +1749,9 @@ impl Engine {
         }
         if lp.hedge {
             return self.on_hedge_fill(lp_id, exec_id, volume, price);
+        }
+        if lp.resting && lp.position.is_some() {
+            return self.on_resting_tp_fill(lp_id, exec_id, volume, price);
         }
         let children: Vec<(OrderId, i64)> = lp
             .children
@@ -1491,6 +1790,11 @@ impl Engine {
             }
             self.fill_child(oid, Qty::from_raw(q), client_px, price);
         }
+        let lp = &self.st.lp_orders[&lp_id];
+        if lp.resting && lp.done {
+            let children = lp.children.clone();
+            self.detach_resting(lp_id, None, &children);
+        }
         Ok(())
     }
 
@@ -1505,6 +1809,15 @@ impl Engine {
         }
         lp.done = true;
         lp.reject_reason = Some(reason.to_string());
+        if lp.resting {
+            let (pos, children) = (lp.position, lp.children.clone());
+            self.detach_resting(lp_id, pos, &children);
+            if let Some(c) = children.first().copied() {
+                let sym = self.st.orders[&c].req.symbol.clone();
+                self.check_pending(&sym);
+            }
+            return Ok(());
+        }
         if lp.hedge {
             let left = lp.side.sign() * (lp.volume.raw() - lp.filled.raw());
             let sym = lp.symbol.clone();
@@ -1764,10 +2077,12 @@ impl Engine {
                 swap_minor: 0,
                 swap_fee_minor: 0,
                 copy_from: self.st.orders[&id].copy_from,
+                lp_tp: None,
             };
             self.st.positions.insert(pid, pos);
             self.st.orders.get_mut(&id).expect("order").position = Some(pid);
             self.events.push(Event::PositionOpened { position_id: pid });
+            self.sync_resting_tp(pid);
             let copy = copy_of(self, pid);
             let z = Money::zero(g.currency);
             deal(self, pid, DealEntry::In, left, z, (0, 0), copy);
@@ -1899,8 +2214,12 @@ impl Engine {
             let pm = self.st.positions.get_mut(&pid).expect("position");
             pm.volume = remaining;
             pm.closing = pm.closing.min(remaining);
+            self.sync_resting_tp(pid);
         } else {
             self.st.positions.remove(&pid);
+            if let Some(lp) = p.lp_tp {
+                self.cancel_resting(lp);
+            }
         }
         self.events.push(Event::PositionClosed {
             position_id: pid,
@@ -1966,6 +2285,9 @@ impl Engine {
             let o = &self.st.orders[&id];
             if !o.is_pending() {
                 continue; // cancelled by OCO earlier in this loop
+            }
+            if o.lp_resting.is_some() {
+                continue; // the LP decides: it rests there
             }
             let g = self.st.groups[&self.st.accounts[&o.req.account].group].clone();
             let Ok(q) = self.client_quote(&g, symbol) else {
@@ -2061,7 +2383,7 @@ impl Engine {
             }
             let p = &self.st.positions[&pid];
             let sl_hit = p.sl.is_some_and(|sl| (px.raw() - sl.raw()) * s <= 0);
-            let tp_hit = p.tp.is_some_and(|tp| (px.raw() - tp.raw()) * s >= 0);
+            let tp_hit = p.lp_tp.is_none() && p.tp.is_some_and(|tp| (px.raw() - tp.raw()) * s >= 0);
             if sl_hit || tp_hit {
                 if sl_hit {
                     self.close_internal(pid, "sl", OrderOrigin::StopLoss);

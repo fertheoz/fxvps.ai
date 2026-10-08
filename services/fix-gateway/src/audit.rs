@@ -81,6 +81,15 @@ struct Track {
     acked: bool,
     filled: Fixed,
     done: bool,
+    /// Rests at the LP (GTC): answered by its ack, in flight only until then.
+    gtc: bool,
+}
+
+impl Track {
+    /// Still waiting for the LP: not done, and (for a resting order) not acked yet.
+    fn open(&self) -> bool {
+        !(self.done || (self.gtc && self.acked))
+    }
 }
 
 #[derive(Default, Clone, Debug, Serialize)]
@@ -201,8 +210,41 @@ impl Auditor {
                 acked: false,
                 filled: Fixed::from_int(0),
                 done: false,
+                gtc: o.tif == domain::TimeInForce::GoodTillCancel,
             },
         );
+    }
+
+    /// Cancel/replace of a resting order: the new ClOrdID carries on (fills
+    /// report under it), the old one is finished here.
+    pub fn on_replace(&mut self, lp: &str, orig: &str, o: &Order, now_ns: u64) {
+        let filled = self.orders.get(orig).map_or(Fixed::from_int(0), |t| t.filled);
+        if let Some(t) = self.orders.get_mut(orig) {
+            t.done = true;
+        }
+        self.on_order(lp, o, now_ns);
+        if let Some(t) = self.orders.get_mut(&o.cl_ord_id) {
+            t.filled = filled;
+            t.acked = true; // not a new round trip to judge
+        }
+    }
+
+    /// Cancel of a resting order: its "Canceled" report comes under the
+    /// cancel's ClOrdID; the resting one is finished here.
+    pub fn on_cancel(&mut self, lp: &str, cl: &str, orig: &str, now_ns: u64) {
+        if let Some(t) = self.orders.remove(orig) {
+            self.orders.insert(
+                cl.to_string(),
+                Track {
+                    sent_ns: now_ns,
+                    acked: true,
+                    done: true,
+                    ..t
+                },
+            );
+        } else {
+            let _ = lp;
+        }
     }
 
     /// An execution report from `lp`.
@@ -345,7 +387,7 @@ impl Auditor {
     fn in_flight(&self, lp: &str, symbol: &str) -> bool {
         self.orders
             .values()
-            .any(|t| !t.done && t.lp == lp && t.symbol == symbol)
+            .any(|t| t.open() && t.lp == lp && t.symbol == symbol)
     }
 
     /// Timeouts and housekeeping.
@@ -355,7 +397,7 @@ impl Auditor {
         let late: Vec<(String, String, String)> = self
             .orders
             .iter_mut()
-            .filter(|(_, t)| !t.done && now_ns.saturating_sub(t.sent_ns) > limit)
+            .filter(|(_, t)| t.open() && now_ns.saturating_sub(t.sent_ns) > limit)
             .map(|(cl, t)| {
                 t.done = true;
                 (cl.clone(), t.lp.clone(), t.symbol.clone())
@@ -372,6 +414,8 @@ impl Auditor {
         let keep = 60_000 * 1_000_000;
         self.orders
             .retain(|_, t| !t.done || now_ns.saturating_sub(t.sent_ns) < keep);
+        // a GTC order marks itself done on its final report, so the retain
+        // above never drops a live resting order
     }
 
     /// Compares what the primary LP must hold with what it holds.
@@ -846,6 +890,37 @@ mod tests {
                 qty: px("2")
             }]
         );
+    }
+
+    #[test]
+    fn resting_gtc_order_is_answered_by_its_ack_and_not_in_flight() {
+        let mut a = Auditor::new(AuditCfg::default(), 0);
+        let mut core = BTreeMap::new();
+        a.compare(&core, 0);
+        let mut o = order("LP-5", Side::Sell, "1", Some("1.10105"));
+        o.tif = TimeInForce::GoodTillCancel;
+        a.on_order("LMAX", &o, 0);
+        a.on_exec(
+            "LMAX",
+            &exec(Some("LP-5"), Side::Sell, None, OrderStatus::New),
+            30 * MS,
+        );
+        // no "no answer" after the timeout: it rests
+        a.tick(20_000 * MS);
+        assert_eq!(a.total_incidents, 0);
+        // and it does not hold the net comparison of the symbol
+        core.insert(key("LMAX", "EUR/USD"), px("1"));
+        assert!(a.compare(&core, 7_000).is_empty()); // settle
+        assert_eq!(a.compare(&core, 20_000).len(), 1, "mismatch still judged");
+        // replace: fills under the new ClOrdID are ours, not foreign
+        let mut r = order("LP-5-r1", Side::Sell, "1", Some("1.10205"));
+        r.tif = TimeInForce::GoodTillCancel;
+        a.on_replace("LMAX", "LP-5", &r, 40 * MS);
+        let mut x = exec(Some("LP-5-r1"), Side::Sell, Some(("1", "1.10205")), OrderStatus::Filled);
+        x.exec_id = "fill-r1".into();
+        a.on_exec("LMAX", &x, 50 * MS);
+        assert_eq!(a.total_incidents, 1, "no ForeignFill incident");
+        assert_eq!(a.status(60_000)["net"][0]["qty"], "-1");
     }
 
     #[test]

@@ -2403,6 +2403,9 @@ struct GroupDto {
     swap_free_grace_days: Option<u32>,
     #[serde(default)]
     pass_price_improvement: Option<bool>,
+    /// A-book TP / pending limit entries rest at the LP as GTC limit orders.
+    #[serde(default)]
+    lp_resting: Option<bool>,
     /// "symbol" (use the symbol's per-lot commission) | "per_lot" | "per_million"; value in minor units.
     #[serde(default)]
     commission_type: Option<String>,
@@ -2597,6 +2600,9 @@ async fn save_group(
     };
     if let Some(p) = g.pass_price_improvement {
         cfg.pass_price_improvement = p;
+    }
+    if let Some(r) = g.lp_resting {
+        cfg.lp_resting = r;
     }
     let value = g.commission_value.unwrap_or(0);
     if !(0..=10_000_000).contains(&value) {
