@@ -23,7 +23,7 @@ import { DEFAULT_MW_COLUMNS, type MwColumnId } from '../components/mwColumns';
 export type Theme = 'dark' | 'light';
 /** Charts on screen at once; 6 is the ceiling (every chart costs the client CPU and memory). */
 export type ChartLayout = 1 | 2 | 4 | 6;
-export type ChartStyle = 'candles' | 'heikin' | 'bars' | 'line' | 'area';
+export type ChartStyle = 'candles' | 'heikin' | 'renko' | 'bars' | 'line' | 'area';
 /** Up/down colours: the theme's green/red, blue/orange, or a single muted tone. */
 export type ColorScheme = 'classic' | 'blueOrange' | 'mono';
 export const MAX_CHARTS = 6;

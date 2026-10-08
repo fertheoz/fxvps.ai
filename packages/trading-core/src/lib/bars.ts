@@ -35,3 +35,43 @@ export function heikinAshi(bars: Bar[]): Bar[] {
   for (const b of bars) out.push(heikinAshiBar(out[out.length - 1], b));
   return out;
 }
+
+/** Renko box size: half the average bar range of the last 50 bars, at least one point. */
+export function renkoBox(bars: Bar[], point: number): number {
+  const tail = bars.slice(-50);
+  if (!tail.length) return point;
+  const avg = tail.reduce((a, b) => a + (b.high - b.low), 0) / tail.length;
+  return Math.max(point, Math.round(avg / 2 / point) * point);
+}
+
+/**
+ * Renko bricks from closes: a new brick when the close moves a full box
+ * beyond the last brick's top (up) or bottom (down). Bricks formed in the
+ * same bar get that bar's time plus 1 s per extra brick, so times stay
+ * strictly increasing for the chart.
+ */
+export function renko(bars: Bar[], box: number): Bar[] {
+  const out: Bar[] = [];
+  if (!bars.length || !(box > 0)) return out;
+  let lo = bars[0].close;
+  let hi = bars[0].close;
+  const eps = box * 1e-9;
+  for (const b of bars) {
+    let j = 0;
+    for (;;) {
+      if (b.close >= hi + box - eps) {
+        const open = hi;
+        hi = open + box;
+        lo = open;
+        out.push({ time: b.time + j, open, high: hi, low: open, close: hi, volume: j === 0 ? b.volume : 0 });
+      } else if (b.close <= lo - box + eps) {
+        const open = lo;
+        lo = open - box;
+        hi = open;
+        out.push({ time: b.time + j, open, high: open, low: lo, close: lo, volume: j === 0 ? b.volume : 0 });
+      } else break;
+      j++;
+    }
+  }
+  return out;
+}

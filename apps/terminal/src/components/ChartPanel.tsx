@@ -49,7 +49,7 @@ import { TIMEFRAMES, TIMEFRAME_SECONDS, type Bar, type Position } from '@fxvps/t
 import { getApi, trade } from '../store/api';
 import { selectActiveAccount, selectOrders, selectPositions, useTerminal, type Indicators } from '../store/terminal';
 import { useT } from '../hooks';
-import { applyTick, heikinAshi, heikinAshiBar } from '@fxvps/trading-core';
+import { applyTick, heikinAshi, heikinAshiBar, renko, renkoBox } from '@fxvps/trading-core';
 import { bollinger, ema, rsi, sma } from '@fxvps/trading-core';
 import { buildRates, formatMoney, formatPrice, lotsToVolume, profitMinor, roundPrice, volumeToLots } from '@fxvps/trading-core';
 import { isTauri, openChartWindow } from '../native';
@@ -155,6 +155,21 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const barsRef = useRef<Bar[]>([]);
   /** Heikin-Ashi view of `barsRef` (style 'heikin'), kept in step tick by tick. */
   const haRef = useRef<Bar[]>([]);
+  /** Renko box size (price units) for the loaded symbol / timeframe. */
+  const boxRef = useRef(0);
+  const renkoCount = useRef(0);
+  /** Bar replay: how many bars are shown (null = live). */
+  const [replay, setReplay] = useState<{ at: number; total: number; playing: boolean; speed: number } | null>(null);
+  const replayRef = useRef(replay);
+  useEffect(() => {
+    replayRef.current = replay;
+  }, [replay]);
+  /** Draws `bars` in the current style (candles / HA / renko / ...). */
+  const drawMain = (bars: Bar[]) => {
+    const shown = chartStyle === 'heikin' ? heikinAshi(bars) : chartStyle === 'renko' ? renko(bars, boxRef.current) : bars;
+    if (chartStyle === 'heikin') haRef.current = shown;
+    (candleRef.current as ISeriesApi<SeriesType>)?.setData(shown.map((b) => mainPoint(chartStyle, b)) as never);
+  };
   const linesRef = useRef<IPriceLine[]>([]);
   /** Draggable SL/TP lines of open positions. */
   const protRef = useRef<{ line: IPriceLine; positionId: string; kind: 'sl' | 'tp' }[]>([]);
@@ -252,9 +267,11 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     else main?.applyOptions({ upColor: up, downColor: down, wickUpColor: up, wickDownColor: down } as never);
   }, [theme, colorScheme, showGrid, chartStyle, chartGen]);
 
-  const refreshIndicators = (ind: Indicators) => {
+  const refreshIndicators = (shownInd: Indicators) => {
     const chart = chartRef.current;
     if (!chart) return;
+    // renko has synthetic brick times: time-based overlays would distort its axis
+    const ind = chartStyle === 'renko' ? (Object.fromEntries(Object.keys(shownInd).map((k) => [k, false])) as unknown as Indicators) : shownInd;
     const bars = barsRef.current;
     const closes = bars.map((b) => b.close);
     const r = indRef.current;
@@ -314,9 +331,9 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       .then((bars) => {
         if (cancelled || !candleRef.current) return;
         barsRef.current = bars;
-        haRef.current = heikinAshi(bars);
-        const shown = chartStyle === 'heikin' ? haRef.current : bars;
-        (candleRef.current as ISeriesApi<SeriesType>).setData(shown.map((b) => mainPoint(chartStyle, b)) as never);
+        boxRef.current = renkoBox(bars, 1 / 10 ** spec.digits);
+        setReplay(null);
+        drawMain(bars);
         refreshIndicators(useTerminal.getState().indicators);
         chartRef.current?.timeScale().scrollToRealTime();
         setLoadedKey(`${symbol}|${timeframe}`);
@@ -326,6 +343,26 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     };
   }, [symbol, timeframe, spec, chartGen]); // eslint-disable-line react-hooks/exhaustive-deps -- chartStyle is folded into chartGen
 
+  // bar replay: draw the first `at` bars; playing advances one bar per tick of the speed
+  useEffect(() => {
+    if (!replay || loading) return;
+    drawMain(barsRef.current.slice(0, replay.at));
+    if (!replay.playing || replay.at >= replay.total) return;
+    // the last step also stops playback
+    const id = setTimeout(() => setReplay((r) => (r ? { ...r, at: r.at + 1, playing: r.at + 1 < r.total } : r)), 1000 / replay.speed);
+    return () => clearTimeout(id);
+  }, [replay, loading]); // eslint-disable-line react-hooks/exhaustive-deps -- drawMain reads refs
+
+  const startReplay = () => {
+    const n = barsRef.current.length;
+    setReplay({ at: Math.max(1, Math.min(n, n - 200)), total: n, playing: false, speed: 2 });
+  };
+  const stopReplay = () => {
+    setReplay(null);
+    drawMain(barsRef.current);
+    chartRef.current?.timeScale().scrollToRealTime();
+  };
+
   // indicator toggles
   useEffect(() => {
     if (!loading) refreshIndicators(indicators);
@@ -333,7 +370,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
 
   // live ticks -> last bar (store already batches per animation frame)
   useEffect(() => {
-    if (!quote || !timeframe || loading || !candleRef.current) return;
+    if (!quote || !timeframe || loading || !candleRef.current || replayRef.current) return;
     const bars = barsRef.current;
     const last = bars[bars.length - 1];
     const bar = applyTick(last, quote.bid, Math.floor(quote.time / 1000), TIMEFRAME_SECONDS[timeframe]);
@@ -341,6 +378,15 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     const same = !!last && bar.time === last.time;
     if (same) bars[bars.length - 1] = bar;
     else bars.push(bar);
+    if (chartStyle === 'renko') {
+      // bricks change only when price moves a full box; redraw is cheap
+      const n = renko(bars, boxRef.current).length;
+      if (n !== renkoCount.current) {
+        renkoCount.current = n;
+        drawMain(bars);
+      }
+      return;
+    }
     let shown = bar;
     if (chartStyle === 'heikin') {
       const ha = haRef.current;
@@ -369,7 +415,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       const rv = lastOf(rsi(closes, cfg.rsi.period));
       if (r.rsi && rv != null) r.rsi.update({ time, value: rv });
     }
-  }, [quote, timeframe, loading, chartStyle]);
+  }, [quote, timeframe, loading, chartStyle]); // eslint-disable-line react-hooks/exhaustive-deps -- drawMain reads refs
 
   // "TP #12 · +11.55 USD": profit/loss if the position closes at that level
   // (gross: excl. commission and swap), in the account currency.
@@ -821,6 +867,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     return [
       style('candles', t('chart.style.candles')),
       style('heikin', t('chart.style.heikin')),
+      style('renko', t('chart.style.renko')),
       style('bars', t('chart.style.bars')),
       style('line', t('chart.style.line')),
       style('area', t('chart.style.area')),
@@ -828,6 +875,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       scheme('blueOrange', t('chart.scheme.blueOrange')),
       scheme('mono', t('chart.scheme.mono')),
       { label: t('chart.grid'), hint: tick(showGrid), onClick: toggleGrid, separator: true },
+      { label: replay ? t('replay.stop') : t('replay.start'), onClick: () => (replay ? stopReplay() : startReplay()) },
       { label: t('chart.volume'), hint: tick(indicatorsOn.volume), onClick: () => toggleIndicator('volume') },
       { label: t('chart.askLine'), hint: tick(showAskLine), onClick: toggleAskLine },
       {
@@ -1033,6 +1081,19 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
         />
         {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} testId="chart-menu" />}
         {loading && <div className="absolute inset-0 grid place-items-center text-muted">{t('chart.loading')}</div>}
+        {replay && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-2 h-8 rounded-full bg-panel border border-line shadow text-[12px]" data-testid={`replay-bar-${index}`}>
+            <span className="text-accent font-medium mr-1">{t('replay.title')}</span>
+            <button className="px-1.5 hover:bg-hover rounded" title={t('replay.back')} onClick={() => setReplay({ ...replay, playing: false, at: Math.max(1, replay.at - 1) })}>⏮</button>
+            <button className="px-1.5 hover:bg-hover rounded" title={replay.playing ? t('replay.pause') : t('replay.play')} onClick={() => setReplay({ ...replay, playing: !replay.playing })} data-testid={`replay-play-${index}`}>{replay.playing ? '⏸' : '▶'}</button>
+            <button className="px-1.5 hover:bg-hover rounded" title={t('replay.step')} onClick={() => setReplay({ ...replay, playing: false, at: Math.min(replay.total, replay.at + 1) })}>⏭</button>
+            <select className="bg-panel-2 border border-line rounded h-6 px-1" value={replay.speed} onChange={(e) => setReplay({ ...replay, speed: Number(e.target.value) })} aria-label={t('replay.speed')}>
+              {[1, 2, 5, 10, 25].map((v) => <option key={v} value={v}>{v}×</option>)}
+            </select>
+            <span className="num text-muted px-1">{replay.at}/{replay.total}</span>
+            <button className="px-1.5 hover:bg-hover rounded" title={t('replay.stop')} onClick={stopReplay}>✕</button>
+          </div>
+        )}
         {drawTool && isActive && !drawing && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-3 h-8 rounded-full bg-accent text-white text-[12px] font-medium grid place-items-center shadow-lg pointer-events-none" data-testid={`chart-draw-hint-${index}`}>
             {chartTool === 'trend' ? t('obj.trend') : t('obj.rect')} · {t('obj.drawHint')}
