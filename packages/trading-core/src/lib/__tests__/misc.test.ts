@@ -93,3 +93,15 @@ describe('heikinAshi', () => {
     expect(ha[1]).toMatchObject({ open: 11, close: 13.5, high: 16, low: 11 });
   });
 });
+
+describe('renko', () => {
+  it('builds whole-box bricks with strictly increasing times', async () => {
+    const { renko } = await import('../bars');
+    const bar = (time: number, close: number) => ({ time, open: close, high: close, low: close, close, volume: 1 });
+    // 10 -> 13: three up bricks in one bar; 11.5: no brick (a reversal needs a close below 11);
+    // 9: the reversal starts at the last brick's open (12) -> 12-11, 11-10, 10-9
+    const r = renko([bar(0, 10), bar(60, 13), bar(120, 11.5), bar(180, 9)], 1);
+    expect(r.map((x) => [x.open, x.close])).toEqual([[10, 11], [11, 12], [12, 13], [12, 11], [11, 10], [10, 9]]);
+    expect(r.map((x) => x.time)).toEqual([60, 61, 62, 180, 181, 182]);
+  });
+});
