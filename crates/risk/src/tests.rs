@@ -370,3 +370,38 @@ fn leverage_at_takes_the_lowest_active_cap() {
     assert!(matches!(g.at(monday), std::borrow::Cow::Borrowed(_)));
     assert_eq!(g.at(saturday).leverage, 100);
 }
+
+#[test]
+fn leverage_tiers_are_progressive() {
+    use crate::{tiered_margin, LeverageTier};
+    let sc = money::SCALE as i128;
+    let tiers = [
+        LeverageTier {
+            from: 100_000,
+            leverage: 50,
+        },
+        LeverageTier {
+            from: 500_000,
+            leverage: 10,
+        },
+    ];
+    // 50k notional at 1:100 -> 500
+    assert_eq!(tiered_margin(50_000 * sc, 100, &tiers), 500 * sc);
+    // 300k: 100k/100 + 200k/50 = 1000 + 4000
+    assert_eq!(tiered_margin(300_000 * sc, 100, &tiers), 5_000 * sc);
+    // 1M: 1000 + 400k/50 (8000) + 500k/10 (50000)
+    assert_eq!(tiered_margin(1_000_000 * sc, 100, &tiers), 59_000 * sc);
+    // a tier above the group leverage never lowers margin
+    assert_eq!(
+        tiered_margin(
+            300_000 * sc,
+            30,
+            &[LeverageTier {
+                from: 100_000,
+                leverage: 200
+            }]
+        ),
+        10_000 * sc
+    );
+    assert_eq!(tiered_margin(300_000 * sc, 100, &[]), 3_000 * sc);
+}
