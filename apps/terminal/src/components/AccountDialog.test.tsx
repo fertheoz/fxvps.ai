@@ -9,7 +9,7 @@ vi.mock('../api/clientApi', async (orig) => {
   const m = await orig<typeof import('../api/clientApi')>();
   return { ...m, clientApiBase: () => 'https://gw.test/api/client', clientApi: { ...m.clientApi, ...api } };
 });
-vi.mock('../lib/referral', () => ({ sendPendingReferral: vi.fn() }));
+vi.mock('../lib/referral', () => ({ captureReferral: vi.fn(), pendingReferral: vi.fn(() => null), dismissReferral: vi.fn(), acceptReferral: vi.fn() }));
 
 import { AccountDialog } from './AccountDialog';
 

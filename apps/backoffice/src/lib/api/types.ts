@@ -402,8 +402,22 @@ export interface IbRow {
   /** Rebate per closed lot (minor), override on sub-IBs (%), referral code, parent IB. */
   perLotCents?: number; overridePct?: number; code?: string; parent?: number | null;
   share?: number; rebate?: number; override?: number;
+  /** Last UTC day paid out (YYYY-MM-DD) and the payout op awaiting approval. */
+  paidThrough?: string | null; payoutPending?: string | null;
 }
 export interface IbReport { from: string; to: string | null; rows: IbRow[] }
+/** IB payout worked out by the server: from the day after `paidThrough` (null = from the start) to `to`, inclusive. */
+export interface IbPayoutPreview {
+  ib: number;
+  from: string | null;
+  to: string;
+  paidThrough: string | null;
+  amount: number;
+  currency: string;
+  /** Payout op of this IB awaiting approval (no new payout until it is decided). */
+  pending: string | null;
+}
+export interface IbPayoutResult extends IbPayoutPreview { op: BalanceOpResult }
 
 export interface TransactionRow {
   txId: string;
@@ -515,6 +529,10 @@ export interface AdminApi {
   listFunding(status?: string): Promise<FundingRequest[]>;
   decideFunding(id: string, decision: "approve" | "reject" | "paid", note: string | undefined, actor: Actor): Promise<FundingRequest>;
   ibReport(from?: string, to?: string): Promise<IbReport>;
+  /** What an IB payout up to `to` (a closed day) would book; the amount comes from the server. */
+  ibPayoutPreview(ib: number, to: string): Promise<IbPayoutPreview>;
+  /** Books it as a deposit through the four-eyes flow. */
+  ibPayout(ib: number, to: string, actor: Actor): Promise<IbPayoutResult>;
   /** MiFIR-style transaction report rows for [from, to] (YYYY-MM-DD). */
   transactions(from?: string, to?: string): Promise<TransactionReport>;
   bestExecution(from?: string, to?: string): Promise<BestExecutionReport>;

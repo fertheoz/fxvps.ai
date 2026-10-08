@@ -77,6 +77,25 @@ describe("mock AdminApi", () => {
     for (let i = 1; i < rows.length; i++) expect(rows[i]!.marginLevel).toBeGreaterThanOrEqual(rows[i - 1]!.marginLevel);
   });
 
+  it("IB payouts move the paid-through date and cannot pay a day twice", async () => {
+    const api = createMockApi({ latencyMs: 0 });
+    const [c] = await api.listClients();
+    await api.setIb(c!.id, { sharePct: 30 }, admin);
+    const ib = (await api.ibReport()).rows[0]!;
+    expect(ib.ib).toBe(c!.login);
+    const p = await api.ibPayoutPreview(ib.ib, "2026-09-30");
+    expect(p.from).toBeNull();
+    expect(p.amount).toBeGreaterThan(0);
+    await expect(api.ibPayout(ib.ib, "2026-09-30", dealer)).rejects.toBeInstanceOf(ForbiddenError);
+    const r = await api.ibPayout(ib.ib, "2026-09-30", admin);
+    expect(r.op.status).toBe("applied");
+    expect((await api.ibReport()).rows[0]!.paidThrough).toBe("2026-09-30");
+    const again = await api.ibPayoutPreview(ib.ib, "2026-09-30");
+    expect(again.amount).toBe(0);
+    expect(again.from).toBe("2026-10-01");
+    await expect(api.ibPayout(ib.ib, "2026-09-30", admin)).rejects.toThrow(/nothing to pay/);
+  });
+
   it("LP reconnect logs on a disconnected session", async () => {
     const api = createMockApi({ latencyMs: 0 });
     const down = (await api.listFixSessions()).find((f) => f.status === "disconnected")!;

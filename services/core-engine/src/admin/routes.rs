@@ -41,6 +41,10 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/accounts/{id}/kyc/documents", get(kyc_docs))
         .route("/v1/accounts/{id}/kyc/documents/{doc}", get(kyc_doc_file))
         .route("/v1/accounts/{id}/ib", patch(set_ib))
+        .route(
+            "/v1/accounts/{id}/ib/payout",
+            get(ib_payout_preview).post(ib_payout),
+        )
         .route("/v1/funding", get(funding_list))
         .route("/v1/funding/{id}/decide", post(funding_decide))
         .route("/v1/reports/ib", get(ib_report))
@@ -245,6 +249,8 @@ impl AdminCtx {
             kyc_docs: st.kyc_docs.clone(),
             ib_share: st.ib_share.clone(),
             ib_of: st.ib_of.clone(),
+            ib_links: st.ib_links.clone(),
+            ib_paid_to: st.ib_paid_to.clone(),
             ib_plan: st.ib_plan.clone(),
             tenants: st.tenants.clone(),
             strategies: st.strategies.clone(),
@@ -776,6 +782,7 @@ async fn balance_op(
         decision_note: None,
         new_balance: balance,
         new_credit: store.state.credit_of(account),
+        ib_days: None,
     };
     let rec = if req.amount >= store.state.settings.four_eyes_threshold {
         store.append(&actor, AdminCmd::BalanceQueued { op: op.clone() })?
@@ -877,6 +884,7 @@ async fn approve(State(ctx): State<AdminCtx>, actor: Actor, Path(id): Path<Strin
         "listAudit",
         "dashboard",
         "statements",
+        "ibReport",
     ]);
     Ok(Json(v))
 }
@@ -909,7 +917,7 @@ async fn reject(
     )?;
     let v = op_json(&store.state.ops[&id]);
     drop(store);
-    ctx.notify(&["listApprovals", "listAudit"]);
+    ctx.notify(&["listApprovals", "listAudit", "ibReport"]);
     Ok(Json(v))
 }
 
@@ -967,7 +975,7 @@ struct ReportRange {
     to: Option<String>,
 }
 
-fn parse_iso_ns(s: &str) -> Option<u64> {
+pub(super) fn parse_iso_ns(s: &str) -> Option<u64> {
     // YYYY-MM-DD or full RFC 3339 (date part only is used for day bounds)
     let d = s.get(0..10)?;
     let mut it = d.split('-');
@@ -1385,6 +1393,40 @@ fn valid_ib_code(c: &str) -> bool {
     (3..=20).contains(&c.len()) && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
 }
 
+/// True when linking `account` under `ib` closes a loop: walking up from `ib`
+/// through the current links reaches `account`.
+fn ib_loop(st: &AdminState, account: u64, ib: u64) -> bool {
+    let mut seen = BTreeSet::new();
+    let mut cur = ib;
+    loop {
+        if cur == account {
+            return true;
+        }
+        // a loop above `ib` that does not pass through `account` (old data)
+        if !seen.insert(cur) {
+            return false;
+        }
+        match st.ib_of.get(&cur) {
+            Some(p) => cur = *p,
+            None => return false,
+        }
+    }
+}
+
+/// Account currency (group currency) of each login; `None` = unknown account.
+async fn ccy_of(ctx: &AdminCtx, logins: [u64; 2]) -> Result<[Option<Currency>; 2], ApiError> {
+    ctx.q(move |e| {
+        logins.map(|l| {
+            e.account(l)
+                .and_then(|a| e.group(&a.group))
+                .map(|g| g.currency)
+        })
+    })
+    .await
+}
+
+/// Admin edit of an account's IB terms and link. Everything is validated
+/// before the first journal write, so a refused request changes nothing.
 async fn set_ib(
     State(ctx): State<AdminCtx>,
     actor: Actor,
@@ -1393,18 +1435,8 @@ async fn set_ib(
 ) -> ApiResult {
     need(&actor, "clients.edit")?;
     let account = parse_id(&id)?;
-    if !ctx.q(move |e| e.account(account).is_some()).await? {
-        return Err(ApiError::not_found("unknown account"));
-    }
-    if let Some(p) = req.share_pct {
-        if p > 50 {
-            return Err(ApiError::bad("sharePct must be 0..50"));
-        }
-    }
-    if let Some(Some(ib)) = req.ib_account {
-        if ib == account || !ctx.q(move |e| e.account(ib).is_some()).await? {
-            return Err(ApiError::bad("unknown IB account"));
-        }
+    if req.share_pct.is_some_and(|p| p > 50) {
+        return Err(ApiError::bad("sharePct must be 0..50"));
     }
     if req
         .per_lot_cents
@@ -1413,11 +1445,52 @@ async fn set_ib(
     {
         return Err(ApiError::bad("perLotCents 0..10000, overridePct 0..50"));
     }
+    let code = req.code.as_deref().map(|c| c.trim().to_uppercase());
+    if code
+        .as_deref()
+        .is_some_and(|c| !c.is_empty() && !valid_ib_code(c))
+    {
+        return Err(ApiError::bad("code: 3-20 letters, digits or '-'"));
+    }
+    let target = req.ib_account.flatten();
+    let [own_ccy, ib_ccy] = ccy_of(&ctx, [account, target.unwrap_or(account)]).await?;
+    let Some(own_ccy) = own_ccy else {
+        return Err(ApiError::not_found("unknown account"));
+    };
+    if let Some(ib) = target {
+        if ib == account || ib_ccy.is_none() {
+            return Err(ApiError::bad("unknown IB account"));
+        }
+        // shares and overrides are paid out of the client's revenue as is
+        if ib_ccy != Some(own_ccy) {
+            return Err(ApiError::bad(
+                "the IB account must use the client's currency",
+            ));
+        }
+    }
     let mut store = ctx.store.lock().await;
+    if let Some(c) = code.as_deref().filter(|c| !c.is_empty()) {
+        if store
+            .state
+            .ib_plan
+            .iter()
+            .any(|(a, p)| *a != account && p.code == c)
+        {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "conflict",
+                "code already used",
+            ));
+        }
+    }
+    if target.is_some_and(|ib| ib_loop(&store.state, account, ib)) {
+        return Err(ApiError::bad("this IB link would form a loop"));
+    }
+    // validated: write
     if let Some(p) = req.share_pct {
         store.append(&actor, AdminCmd::IbShareSet { account, pct: p })?;
     }
-    if req.per_lot_cents.is_some() || req.override_pct.is_some() || req.code.is_some() {
+    if req.per_lot_cents.is_some() || req.override_pct.is_some() || code.is_some() {
         let mut plan = store
             .state
             .ib_plan
@@ -1430,31 +1503,22 @@ async fn set_ib(
         if let Some(v) = req.override_pct {
             plan.override_pct = v;
         }
-        if let Some(code) = req.code.as_deref().map(str::trim) {
-            let code = code.to_uppercase();
-            if !code.is_empty() {
-                if !valid_ib_code(&code) {
-                    return Err(ApiError::bad("code: 3-20 letters, digits or '-'"));
-                }
-                if store
-                    .state
-                    .ib_plan
-                    .iter()
-                    .any(|(a, p)| *a != account && p.code == code)
-                {
-                    return Err(ApiError::new(
-                        StatusCode::CONFLICT,
-                        "conflict",
-                        "code already used",
-                    ));
-                }
-            }
-            plan.code = code;
+        if let Some(c) = code {
+            plan.code = c;
         }
         store.append(&actor, AdminCmd::IbPlanSet { account, plan })?;
     }
     if let Some(ib) = req.ib_account {
-        store.append(&actor, AdminCmd::IbLinked { account, ib })?;
+        if store.state.ib_of.get(&account).copied() != ib {
+            store.append(
+                &actor,
+                AdminCmd::IbLinked {
+                    account,
+                    ib,
+                    dated: true,
+                },
+            )?;
+        }
     }
     drop(store);
     ctx.notify(&["listClients", "getClient", "ibReport", "listAudit"]);
@@ -1561,6 +1625,7 @@ async fn funding_decide(
                 decision_note: None,
                 new_balance: balance,
                 new_credit: store.state.credit_of(account),
+                ib_days: None,
             };
             if fr.amount >= store.state.settings.four_eyes_threshold {
                 store.append(&actor, AdminCmd::BalanceQueued { op: op.clone() })?;
@@ -1621,6 +1686,192 @@ async fn ib_report(
     Ok(Json(
         ctx.qr(move |e| views::ib_report(e, &st, from, to)).await?,
     ))
+}
+
+/// UTC day number -> `YYYY-MM-DD`.
+fn day_str(day: u64) -> String {
+    views::iso(day * DAY_NS)[..10].to_string()
+}
+
+/// An IB payout worked out on the server: the IB's accrual from its
+/// paid-through mark to the end of a closed day, `[from_day, to_day)`.
+struct IbPayout {
+    ib: u64,
+    from_day: u64,
+    to_day: u64,
+    amount: i64,
+    currency: String,
+    /// A payout of this IB waiting for its second approval.
+    pending: Option<String>,
+}
+
+impl IbPayout {
+    fn json(&self) -> Value {
+        json!({
+            "ib": self.ib,
+            "from": (self.from_day > 0).then(|| day_str(self.from_day)),
+            "to": day_str(self.to_day.saturating_sub(1)),
+            "paidThrough": (self.from_day > 0).then(|| day_str(self.from_day - 1)),
+            "amount": self.amount,
+            "currency": self.currency,
+            "pending": self.pending,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct IbPayoutReq {
+    /// Last UTC day the payout covers (inclusive), `YYYY-MM-DD`; must be over.
+    to: String,
+}
+
+async fn ib_payout_plan(ctx: &AdminCtx, ib: u64, to: &str) -> Result<IbPayout, ApiError> {
+    let to_day = parse_iso_ns(to)
+        .map(|ns| day(ns) + 1)
+        .ok_or_else(|| ApiError::bad("to: YYYY-MM-DD"))?;
+    if to_day > day(now_ns()) {
+        return Err(ApiError::bad("to must be a closed day (before today, UTC)"));
+    }
+    let [ccy, _] = ccy_of(ctx, [ib, ib]).await?;
+    let currency = ccy
+        .ok_or_else(|| ApiError::not_found("unknown account"))?
+        .as_str()
+        .to_string();
+    let st = ctx.view_state().await;
+    if !st.is_ib(ib) {
+        return Err(ApiError::not_found("not an IB account"));
+    }
+    let from_day = st.ib_paid_from(ib);
+    let pending = st.ib_payout_pending(ib).map(|o| o.id.clone());
+    let amount = if to_day > from_day {
+        ctx.qr(move |e| {
+            let rep = views::ib_report(e, &st, from_day * DAY_NS, to_day * DAY_NS);
+            rep["rows"]
+                .as_array()
+                .and_then(|r| r.iter().find(|x| x["ib"] == json!(ib)))
+                .and_then(|x| x["payout"].as_i64())
+                .unwrap_or(0)
+        })
+        .await?
+    } else {
+        0
+    };
+    Ok(IbPayout {
+        ib,
+        from_day,
+        to_day,
+        amount,
+        currency,
+        pending,
+    })
+}
+
+/// What `POST /v1/accounts/{id}/ib/payout` would book up to `?to=`.
+async fn ib_payout_preview(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Query(q): Query<IbPayoutReq>,
+) -> ApiResult {
+    need(&actor, "reports.view")?;
+    let ib = parse_id(&id)?;
+    Ok(Json(ib_payout_plan(&ctx, ib, &q.to).await?.json()))
+}
+
+/// Books an IB payout up to `to`: the amount is the IB report from the
+/// paid-through mark, computed here (never taken from the console). The
+/// deposit goes through the four-eyes flow; the mark moves only when it is
+/// applied, so a rejected payout can simply be requested again.
+async fn ib_payout(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(req): Json<IbPayoutReq>,
+) -> ApiResult {
+    need(&actor, BalanceKind::Deposit.permission())?;
+    let ib = parse_id(&id)?;
+    let plan = ib_payout_plan(&ctx, ib, &req.to).await?;
+    if let Some(p) = &plan.pending {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "payout_pending",
+            format!("payout {p} is awaiting approval"),
+        ));
+    }
+    if plan.to_day <= plan.from_day {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "already_paid",
+            "already paid through that day",
+        ));
+    }
+    if plan.amount <= 0 {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "nothing_to_pay",
+            "nothing to pay for the period",
+        ));
+    }
+    let balance = ctx
+        .q(move |e| e.balance(ib).map(|m| m.minor as i64).unwrap_or(0))
+        .await?;
+    let mut store = ctx.store.lock().await;
+    // another payout may have been booked since the plan was worked out
+    if store.state.ib_paid_from(ib) != plan.from_day || store.state.ib_payout_pending(ib).is_some()
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "conflict",
+            "IB payouts changed meanwhile; reload",
+        ));
+    }
+    let op_id = format!("op-{}", store.next_seq());
+    let from = if plan.from_day > 0 {
+        day_str(plan.from_day)
+    } else {
+        "start".into()
+    };
+    let to = day_str(plan.to_day - 1);
+    let mut op = BalanceOp {
+        idempotency_key: format!("ibpay:{ib}:{from}:{to}:{op_id}"),
+        id: op_id,
+        account: ib,
+        kind: BalanceKind::Deposit,
+        amount: plan.amount,
+        currency: plan.currency.clone(),
+        reason: format!("IB payout {from}..{to}"),
+        requested_by: actor.clone(),
+        requested_at: now_ns(),
+        status: OpStatus::PendingApproval,
+        decided_by: None,
+        decided_at: None,
+        decision_note: None,
+        new_balance: balance,
+        new_credit: store.state.credit_of(ib),
+        ib_days: Some((plan.from_day, plan.to_day)),
+    };
+    if op.amount >= store.state.settings.four_eyes_threshold {
+        store.append(&actor, AdminCmd::BalanceQueued { op: op.clone() })?;
+    } else {
+        let (b, c) = execute(&ctx, &store.state, &op).await?;
+        op.status = OpStatus::Applied;
+        op.new_balance = b;
+        op.new_credit = c;
+        store.append(&actor, AdminCmd::BalanceApplied { op: op.clone() })?;
+    }
+    drop(store);
+    ctx.notify(&[
+        "listClients",
+        "getClient",
+        "listApprovals",
+        "listAudit",
+        "dashboard",
+        "statements",
+        "ibReport",
+    ]);
+    let mut v = plan.json();
+    v["op"] = op_result(&op, false);
+    Ok(Json(v))
 }
 
 async fn set_kyc(
@@ -3614,31 +3865,13 @@ async fn client_ib(State(ctx): State<AdminCtx>, client: ClientActor) -> ApiResul
         .logins
         .iter()
         .map(|(_, l)| *l)
-        .filter(|l| {
-            st.ib_share.contains_key(l)
-                || st.ib_plan.contains_key(l)
-                || st.ib_of.values().any(|i| i == l)
-        })
+        .filter(|l| st.is_ib(*l))
         .collect();
-    let now = now_ns();
-    let (this_m, last_m) = month_start(now);
-    let st2 = st.clone();
-    let (cur, prev) = ctx
-        .q(move |e| {
-            (
-                views::ib_report(e, &st2, this_m, u64::MAX),
-                views::ib_report(e, &st, last_m, this_m),
-            )
-        })
-        .await?;
-    let st = ctx.view_state().await;
-    let row = |rep: &Value, ib: u64| {
-        rep["rows"]
-            .as_array()
-            .and_then(|r| r.iter().find(|x| x["ib"] == json!(ib)).cloned())
-            .unwrap_or(Value::Null)
-    };
-    let out: Vec<Value> = mine
+    // not an IB: answer before any report (they scan the whole deal history)
+    if mine.is_empty() {
+        return Ok(Json(json!({ "ibs": [] })));
+    }
+    let mut out: Vec<Value> = mine
         .iter()
         .map(|ib| {
             let plan = st.ib_plan.get(ib).cloned().unwrap_or_default();
@@ -3648,6 +3881,7 @@ async fn client_ib(State(ctx): State<AdminCtx>, client: ClientActor) -> ApiResul
                 .filter(|o| o.account == *ib && o.idempotency_key.starts_with(&format!("ibpay:{ib}:")))
                 .map(|o| json!({ "amount": o.amount, "currency": o.currency, "reason": o.reason, "status": o.status, "requestedAt": views::iso(o.requested_at) }))
                 .collect();
+            let paid_from = st.ib_paid_from(*ib);
             json!({
                 "ib": ib,
                 "code": plan.code,
@@ -3655,12 +3889,31 @@ async fn client_ib(State(ctx): State<AdminCtx>, client: ClientActor) -> ApiResul
                 "perLotCents": plan.per_lot_cents,
                 "overridePct": plan.override_pct,
                 "clients": st.ib_of.values().filter(|i| *i == ib).count(),
-                "thisMonth": row(&cur, *ib),
-                "lastMonth": row(&prev, *ib),
+                "paidThrough": (paid_from > 0).then(|| day_str(paid_from - 1)),
                 "payouts": payouts,
             })
         })
         .collect();
+    let (this_m, last_m) = month_start(now_ns());
+    // on the read replica: a client opening its IB tab never holds up trading
+    let (cur, prev) = ctx
+        .qr(move |e| {
+            (
+                views::ib_report(e, &st, this_m, u64::MAX),
+                views::ib_report(e, &st, last_m, this_m),
+            )
+        })
+        .await?;
+    let row = |rep: &Value, ib: u64| {
+        rep["rows"]
+            .as_array()
+            .and_then(|r| r.iter().find(|x| x["ib"] == json!(ib)).cloned())
+            .unwrap_or(Value::Null)
+    };
+    for (v, ib) in out.iter_mut().zip(&mine) {
+        v["thisMonth"] = row(&cur, *ib);
+        v["lastMonth"] = row(&prev, *ib);
+    }
     Ok(Json(json!({ "ibs": out })))
 }
 
@@ -3670,7 +3923,8 @@ struct IbLinkReq {
     code: String,
 }
 
-/// A client joins an IB with its referral code (once; changes go through support).
+/// A client joins an IB with its referral code: once, explicitly (the terminal
+/// asks), and only before the account's first trade (changes go through support).
 async fn client_ib_link(
     State(ctx): State<AdminCtx>,
     client: ClientActor,
@@ -3681,25 +3935,50 @@ async fn client_ib_link(
         .login_of(&req.account)
         .ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "forbidden", "not your account"))?;
     let code = req.code.trim().to_uppercase();
+    let ib = {
+        let st = &ctx.store.lock().await.state;
+        if st.ib_of.contains_key(&login) {
+            return Ok(Json(json!({ "ok": true, "already": true })));
+        }
+        st.ib_plan
+            .iter()
+            .find(|(_, p)| !p.code.is_empty() && p.code == code)
+            .map(|(a, _)| *a)
+            .ok_or_else(|| ApiError::not_found("unknown referral code"))?
+    };
+    if ib == login || client.owns(ib) {
+        return Err(ApiError::bad("cannot refer yourself"));
+    }
+    let [own_ccy, ib_ccy] = ccy_of(&ctx, [login, ib]).await?;
+    if own_ccy.is_none() || own_ccy != ib_ccy {
+        return Err(ApiError::bad(
+            "this referral code is for accounts in another currency",
+        ));
+    }
+    // an existing client cannot be attached to an IB after the fact
+    let traded = ctx
+        .qr(move |e| e.deals().iter().any(|d| d.account == login))
+        .await?;
+    if traded {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "has_trades",
+            "a referral code can only be added before the account's first trade",
+        ));
+    }
     let mut store = ctx.store.lock().await;
     if store.state.ib_of.contains_key(&login) {
         return Ok(Json(json!({ "ok": true, "already": true })));
     }
-    let ib = store
-        .state
-        .ib_plan
-        .iter()
-        .find(|(_, p)| !p.code.is_empty() && p.code == code)
-        .map(|(a, _)| *a)
-        .ok_or_else(|| ApiError::not_found("unknown referral code"))?;
-    if ib == login || client.owns(ib) {
-        return Err(ApiError::bad("cannot refer yourself"));
+    if ib_loop(&store.state, login, ib) {
+        return Err(ApiError::bad("this referral would form a loop"));
     }
     store.append(
         &client_as_actor(&client),
         AdminCmd::IbLinked {
             account: login,
             ib: Some(ib),
+            dated: true,
         },
     )?;
     drop(store);

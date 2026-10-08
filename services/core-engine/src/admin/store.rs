@@ -64,6 +64,10 @@ pub struct BalanceOp {
     pub decision_note: Option<String>,
     pub new_balance: i64,
     pub new_credit: i64,
+    /// IB payout: the UTC days `[from, to)` (days since epoch) whose accrual
+    /// this deposit pays; applying the op moves the IB's paid-through mark to `to`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ib_days: Option<(u64, u64)>,
 }
 
 /// Introducing-broker terms (the commission share lives in `ib_share`).
@@ -429,6 +433,10 @@ pub enum AdminCmd {
     IbLinked {
         account: u64,
         ib: Option<u64>,
+        /// The link counts for deals from this record's time on. Records
+        /// written before link history existed lack it and count from 0.
+        #[serde(default)]
+        dated: bool,
     },
     GroupSaved {
         group: String,
@@ -581,6 +589,13 @@ pub struct AdminState {
     /// client account -> IB account
     #[serde(default)]
     pub ib_of: BTreeMap<u64, u64>,
+    /// Link history per client account, oldest first: (since ns, IB; `None` =
+    /// unlinked). A deal belongs to the IB the client was linked to at its time.
+    #[serde(default)]
+    pub ib_links: BTreeMap<u64, Vec<(u64, Option<u64>)>>,
+    /// IB account -> first UTC day (days since epoch) not paid out yet.
+    #[serde(default)]
+    pub ib_paid_to: BTreeMap<u64, u64>,
     /// IB terms beyond the share: per-lot rebate, override on sub-IBs, referral code.
     #[serde(default)]
     pub ib_plan: BTreeMap<u64, IbPlan>,
@@ -623,6 +638,61 @@ impl AdminState {
     }
     pub fn kyc_of(&self, account: u64) -> &str {
         self.kyc.get(&account).map_or("none", |s| s.as_str())
+    }
+
+    /// An introducing broker: has a share or plan, or linked clients.
+    pub fn is_ib(&self, login: u64) -> bool {
+        self.ib_share.contains_key(&login)
+            || self.ib_plan.contains_key(&login)
+            || self.ib_of.values().any(|i| *i == login)
+    }
+
+    /// The IB `account` was linked to at `ts`: the last link made at or
+    /// before it. Without history (state built elsewhere) the current link.
+    pub fn ib_at(&self, account: u64, ts: u64) -> Option<u64> {
+        match self.ib_links.get(&account) {
+            Some(h) => h.iter().rev().find(|(since, _)| *since <= ts)?.1,
+            None => self.ib_of.get(&account).copied(),
+        }
+    }
+
+    /// First UTC day (days since epoch) of an IB's unpaid accrual: the
+    /// paid-through mark, or the day after the last payout booked before the
+    /// mark existed (key `ibpay:<ib>:<from>:<to>`, `to` an inclusive date).
+    pub fn ib_paid_from(&self, ib: u64) -> u64 {
+        let prefix = format!("ibpay:{ib}:");
+        let legacy = self
+            .ops
+            .values()
+            .filter(|o| o.account == ib && o.ib_days.is_none() && o.status != OpStatus::Rejected)
+            .filter_map(|o| {
+                let to = o
+                    .idempotency_key
+                    .strip_prefix(&prefix)?
+                    .rsplit(':')
+                    .next()?;
+                super::routes::parse_iso_ns(to).map(|ns| ns / 86_400_000_000_000 + 1)
+            })
+            .max()
+            .unwrap_or(0);
+        self.ib_paid_to.get(&ib).copied().unwrap_or(0).max(legacy)
+    }
+
+    /// An IB payout of `ib` waiting for its second approval.
+    pub fn ib_payout_pending(&self, ib: u64) -> Option<&BalanceOp> {
+        let prefix = format!("ibpay:{ib}:");
+        self.ops.values().find(|o| {
+            o.account == ib
+                && o.status == OpStatus::PendingApproval
+                && (o.ib_days.is_some() || o.idempotency_key.starts_with(&prefix))
+        })
+    }
+
+    fn apply_ib_payout(&mut self, op: &BalanceOp) {
+        if let Some((_, to)) = op.ib_days {
+            let paid = self.ib_paid_to.entry(op.account).or_default();
+            *paid = (*paid).max(to);
+        }
     }
 
     fn audit(&mut self, r: &AdminRecord, action: String, target: String, details: String) {
@@ -688,6 +758,7 @@ impl AdminState {
         match &r.cmd {
             AdminCmd::BalanceApplied { op } => {
                 self.apply_credit(op);
+                self.apply_ib_payout(op);
                 self.keys.insert(op.idempotency_key.clone(), op.id.clone());
                 self.ops.insert(op.id.clone(), op.clone());
                 self.audit(
@@ -732,6 +803,7 @@ impl AdminState {
                 op.new_balance = *new_balance;
                 op.new_credit = *new_credit;
                 self.apply_credit(&op);
+                self.apply_ib_payout(&op);
                 self.ops.insert(id.clone(), op.clone());
                 self.audit(
                     r,
@@ -873,7 +945,7 @@ impl AdminState {
                     ),
                 )
             }
-            AdminCmd::IbLinked { account, ib } => {
+            AdminCmd::IbLinked { account, ib, dated } => {
                 let old = self.ib_of.get(account).copied();
                 match ib {
                     Some(i) => {
@@ -883,6 +955,11 @@ impl AdminState {
                         self.ib_of.remove(account);
                     }
                 }
+                let since = if *dated { r.ts } else { 0 };
+                self.ib_links
+                    .entry(*account)
+                    .or_default()
+                    .push((since, *ib));
                 self.audit(
                     r,
                     "ib.link".into(),
