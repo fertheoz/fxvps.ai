@@ -105,3 +105,74 @@ describe('renko', () => {
     expect(r.map((x) => x.time)).toEqual([60, 61, 62, 180, 181, 182]);
   });
 });
+
+describe('backtestMaCross', () => {
+  it('trades crosses at the next open, deterministically, with costs', async () => {
+    const { backtestMaCross } = await import('../backtest');
+    // falls, then rises, then falls: one long and one short leg
+    const closes = [10, 9, 8, 7, 8, 9, 10, 11, 12, 11, 10, 9, 8, 7];
+    const bars = closes.map((c, i) => ({ time: i * 60, open: c, high: c + 0.5, low: c - 0.5, close: c, volume: 1 }));
+    const p = { fast: 2, slow: 3, kind: 'sma' as const, units: 1, costPrice: 0.1 };
+    const r = backtestMaCross(bars, p);
+    expect(r.trades.map((t) => t.side)).toEqual(['buy', 'sell']);
+    expect(r.trades[0]?.entryTime).toBeGreaterThan(0);
+    // same input, same output
+    expect(backtestMaCross(bars, p)).toEqual(r);
+    expect(r.net).toBeCloseTo(r.trades.reduce((a, t) => a + t.pnl, 0));
+    expect(r.equity.length).toBe(r.trades.length);
+  });
+
+  // fast 1 / slow 2 SMA: a cross at bar i only depends on closes i-3..i-1, so
+  // the bars below place the signals exactly: long at bar 3's open (100),
+  // short at bar 5's open. SL / TP 5 price units, no costs, 1 unit.
+  type B = [open: number, high: number, low: number, close: number];
+  const mk = (rows: B[]) => rows.map(([open, high, low, close], i) => ({ time: i * 60, open, high, low, close, volume: 1 }));
+  const head: B[] = [
+    [100, 100, 100, 100],
+    [100, 100, 99, 99],
+    [99, 101, 99, 101], // up cross -> long at the next open
+    [100, 102, 99, 101], // long @100, SL 95 / TP 105 untouched
+  ];
+  const quiet: B = [101, 101.5, 97.5, 98]; // no signal, no SL / TP; down cross -> short at the next open
+  const sl = { fast: 1, slow: 2, kind: 'sma' as const, units: 1, costPrice: 0, stopPrice: 5, takePrice: 5 };
+  const brief = (r: { trades: { side: string; entry: number; exit: number; reason: string; pnl: number }[] }) =>
+    r.trades.map((t) => [t.side, t.entry, t.exit, t.reason, t.pnl]);
+
+  it('executes the signal at the open before the bar range, then checks the new position on its entry bar', async () => {
+    const { backtestMaCross } = await import('../backtest');
+    // the reversal bar opens at 96 and later trades up to 106: the long is closed by
+    // the signal at 96 (not by its 105 target, which comes after the exit), and the
+    // short opened at 96 is stopped at 101 inside the same bar
+    const r = backtestMaCross(mk([...head, quiet, [96, 106, 95.5, 100]]), sl);
+    expect(brief(r)).toEqual([
+      ['buy', 100, 96, 'signal', -4],
+      ['sell', 96, 101, 'stop', -5],
+    ]);
+    expect(r.trades[1]).toMatchObject({ entryTime: 300, exitTime: 300 });
+    // stop and target both inside the entry bar: the stop wins
+    const both = backtestMaCross(mk([...head, quiet, [96, 106, 90, 100]]), sl);
+    expect(brief(both)[1]).toEqual(['sell', 96, 101, 'stop', -5]);
+  });
+
+  it('closes a held position on its target inside a bar with no signal; the later signal opens a fresh one', async () => {
+    const { backtestMaCross } = await import('../backtest');
+    const r = backtestMaCross(mk([...head, [101, 106, 97.5, 98], [96, 97, 95, 95.5]]), sl);
+    expect(brief(r)).toEqual([
+      ['buy', 100, 105, 'take', 5],
+      ['sell', 96, 95.5, 'end', 0.5],
+    ]);
+  });
+
+  it('fills a stop the bar gaps through at the open, a gapped target at the target', async () => {
+    const { backtestMaCross } = await import('../backtest');
+    const longGap = backtestMaCross(mk([...head, [93, 94, 92, 93.5]]), sl);
+    expect(brief(longGap)).toEqual([['buy', 100, 93, 'stop', -7]]);
+    // mirror image around 100: a short gapped through its stop at 105
+    const m = (rows: B[]) => rows.map(([o, h, l, c]): B => [200 - o, 200 - l, 200 - h, 200 - c]);
+    const shortGap = backtestMaCross(mk(m([...head, [93, 94, 92, 93.5]])), sl);
+    expect(brief(shortGap)).toEqual([['sell', 100, 107, 'stop', -7]]);
+    // a favourable gap past the target is still booked at the target (pessimistic)
+    const takeGap = backtestMaCross(mk([...head, [107, 108, 106.5, 107]]), sl);
+    expect(brief(takeGap)).toEqual([['buy', 100, 105, 'take', 5]]);
+  });
+});
