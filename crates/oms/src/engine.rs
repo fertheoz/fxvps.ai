@@ -2008,16 +2008,30 @@ impl Engine {
             } else {
                 1
             };
-            let scaled = risk::swap_scaled(&spec, p.side, p.volume, g.swap_multiplier_pct) * days;
-            if scaled == 0 {
-                continue;
-            }
-            let m = Money::from_scaled(scaled, spec.quote, Rounding::HalfEven).map_err(e2s)?;
-            let m = self
-                .st
-                .quotes
-                .convert(m, g.currency, Rounding::HalfEven)
-                .map_err(e2s)?;
+            let m = if g.swap_multiplier_pct == 0 {
+                // swap-free: flat fee per lot after the grace period
+                let age_days = self.st.now.saturating_sub(p.opened_ts) / 86_400_000_000_000;
+                if g.swap_free_fee_per_lot <= 0 || age_days < g.swap_free_grace_days as u64 {
+                    continue;
+                }
+                let scaled = -(g.swap_free_fee_per_lot as i128)
+                    * (money::SCALE as i128 / 100)
+                    * p.volume.raw() as i128
+                    / money::SCALE as i128
+                    * days;
+                Money::from_scaled(scaled, g.currency, Rounding::HalfEven).map_err(e2s)?
+            } else {
+                let scaled =
+                    risk::swap_scaled(&spec, p.side, p.volume, g.swap_multiplier_pct) * days;
+                if scaled == 0 {
+                    continue;
+                }
+                let m = Money::from_scaled(scaled, spec.quote, Rounding::HalfEven).map_err(e2s)?;
+                self.st
+                    .quotes
+                    .convert(m, g.currency, Rounding::HalfEven)
+                    .map_err(e2s)?
+            };
             if m.is_zero() {
                 continue;
             }

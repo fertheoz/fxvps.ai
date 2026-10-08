@@ -1614,3 +1614,24 @@ fn weekend_leverage_raises_margin_before_the_gap() {
     let (ev, _) = h.order(NewOrder::market(1, "y", "EURUSD", Side::Buy, qty("1")));
     assert!(ev.iter().any(|e| matches!(e, Event::OrderRejected { .. })));
 }
+
+#[test]
+fn rollover_swap_free_fee_after_grace() {
+    let mut h = b();
+    let mut eu = h.e.symbol_spec("EURUSD").unwrap().clone();
+    eu.triple_swap_day = 9; // never triple
+    h.cmd(Command::AddSymbol(eu));
+    let mut g = h.e.group("b").unwrap().clone();
+    g.swap_multiplier_pct = 0;
+    g.swap_free_fee_per_lot = 500; // $5 per lot per night
+    g.swap_free_grace_days = 1;
+    h.cmd(Command::SetGroup(g));
+    h.market(1, "l", Side::Buy, "2");
+    // day 0: inside the grace period, no charge
+    h.cmd(Command::Rollover);
+    assert_eq!(h.bal(1), usd("10000"));
+    // day 1: 2 lots × $5
+    h.ts += 86_400_000_000_000;
+    h.cmd(Command::Rollover);
+    assert_eq!(h.bal(1), usd("9990"));
+}

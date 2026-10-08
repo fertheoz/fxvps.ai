@@ -360,6 +360,52 @@ pub struct GroupConfig {
     /// Ad-hoc caps (news events): `leverage` applies from `from_ns` to `to_ns`.
     #[serde(default)]
     pub leverage_windows: Vec<LeverageWindow>,
+    /// Volume tiers: the part of a symbol's notional (group currency) above
+    /// `from` gets at most `leverage` (progressive, like income-tax brackets).
+    #[serde(default)]
+    pub leverage_tiers: Vec<LeverageTier>,
+    /// Swap-free (Islamic) accounts: instead of swap, a flat fee per lot per
+    /// rollover night (minor units, e.g. cents) after `swap_free_grace_days` days (0 fee = none).
+    #[serde(default)]
+    pub swap_free_fee_per_lot: i64,
+    #[serde(default)]
+    pub swap_free_grace_days: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub struct LeverageTier {
+    /// Notional threshold in whole units of the group currency.
+    pub from: i64,
+    pub leverage: u32,
+}
+
+/// Margin for `notional` (scaled 1e8, group ccy) at base leverage `lev`
+/// with progressive `tiers`.
+pub fn tiered_margin(notional: i128, lev: u32, tiers: &[LeverageTier]) -> i128 {
+    let mut ts: Vec<LeverageTier> = tiers
+        .iter()
+        .copied()
+        .filter(|t| t.from > 0 && t.leverage > 0)
+        .collect();
+    ts.sort_by_key(|t| t.from);
+    let mut out = 0i128;
+    let mut start = 0i128;
+    let mut cur = lev.max(1);
+    for t in &ts {
+        let edge = t.from as i128 * SCALE as i128;
+        if edge >= notional {
+            break;
+        }
+        if t.leverage >= cur {
+            continue; // never raises leverage; no split, no extra rounding
+        }
+        if edge > start {
+            out += money::div_round(edge - start, cur as i128, Rounding::Ceiling).unwrap_or(0);
+            start = edge;
+        }
+        cur = cur.min(t.leverage);
+    }
+    out + money::div_round(notional - start, cur as i128, Rounding::Ceiling).unwrap_or(0)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -414,6 +460,9 @@ impl GroupConfig {
             swap_multiplier_pct: 100,
             weekend_leverage: None,
             leverage_windows: Vec::new(),
+            leverage_tiers: Vec::new(),
+            swap_free_fee_per_lot: 0,
+            swap_free_grace_days: 0,
         }
     }
 
@@ -671,7 +720,17 @@ pub fn symbol_margin(
         spec.margin_currency,
         Rounding::Ceiling,
     )?;
-    quotes.convert(m, group.currency, Rounding::Ceiling)
+    let m = quotes.convert(m, group.currency, Rounding::Ceiling)?;
+    if group.leverage_tiers.is_empty() {
+        return Ok(m);
+    }
+    let full = m.to_scaled()?;
+    let tiered = tiered_margin(full * lev, lev as u32, &group.leverage_tiers);
+    Ok(Money::from_scaled(
+        tiered.max(full),
+        group.currency,
+        Rounding::Ceiling,
+    )?)
 }
 
 /// Total margin across all positions.

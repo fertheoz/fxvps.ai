@@ -94,6 +94,13 @@ function GroupDialog({ group, onClose }: { group: Group; onClose: () => void }) 
         <LeverageWindowsField value={draft.leverageWindows ?? []} onChange={(v) => set("leverageWindows", v)} />
         <SelectField label={t("groups.priceImprovement")} value={draft.passPriceImprovement ? "client" : "broker"} options={["client", "broker"] as const} onChange={(v) => set("passPriceImprovement", v === "client")} />
         <NumField label={t("groups.swapMult")} value={draft.swapMultiplier} onChange={(v) => set("swapMultiplier", v)} error={errors.swapMultiplier} step={0.1} />
+        {draft.swapMultiplier === 0 && (
+          <>
+            <NumField label={t("groups.swapFreeFee")} value={draft.swapFreeFee ?? 0} onChange={(v) => set("swapFreeFee", v)} step={0.5} />
+            <NumField label={t("groups.swapFreeGrace")} value={draft.swapFreeGraceDays ?? 0} onChange={(v) => set("swapFreeGraceDays", v)} step={1} />
+          </>
+        )}
+        <LeverageTiersField value={draft.leverageTiers ?? []} onChange={(v) => set("leverageTiers", v)} />
       </div>
       <FieldError msg={errors._} />
     </Dialog>
@@ -122,6 +129,27 @@ function LeverageWindowsField({ value, onChange }: { value: { fromMs: number; to
       ))}
       <Button type="button" variant="outline" size="sm" onClick={() => { const from = Date.now() + 3_600_000; onChange([...value, { fromMs: from - (from % 60_000), toMs: from - (from % 60_000) + 1_800_000, leverage: 50 }]); }} data-testid="add-leverage-window">
         + {t("groups.newsAdd")}
+      </Button>
+    </div>
+  );
+}
+
+/** Volume leverage tiers: the notional above each threshold gets at most that leverage. */
+function LeverageTiersField({ value, onChange }: { value: { from: number; leverage: number }[]; onChange: (v: { from: number; leverage: number }[]) => void }) {
+  const t = useT();
+  const upd = (i: number, w: Partial<{ from: number; leverage: number }>) => onChange(value.map((x, k) => (k === i ? { ...x, ...w } : x)));
+  return (
+    <div className="sm:col-span-2 space-y-2" data-testid="leverage-tiers">
+      <div className="text-xs font-medium text-muted-foreground">{t("groups.leverageTiers")}</div>
+      {value.map((w, i) => (
+        <div key={i} className="grid grid-cols-[1fr_6rem_auto] items-end gap-2">
+          <NumField label={t("groups.tierFrom")} value={w.from} onChange={(v) => upd(i, { from: v })} step={50000} />
+          <NumField label="1:N" value={w.leverage} onChange={(v) => upd(i, { leverage: v })} step={1} />
+          <Button type="button" variant="outline" size="sm" onClick={() => onChange(value.filter((_, k) => k !== i))}>×</Button>
+        </div>
+      ))}
+      <Button type="button" variant="outline" size="sm" onClick={() => { const last = value[value.length - 1]; onChange([...value, { from: last ? last.from * 5 : 100000, leverage: last ? Math.max(1, Math.floor(last.leverage / 2)) : 50 }]); }}>
+        + {t("groups.tierAdd")}
       </Button>
     </div>
   );

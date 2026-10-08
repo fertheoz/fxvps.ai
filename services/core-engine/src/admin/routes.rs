@@ -1897,6 +1897,13 @@ async fn list_groups(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct LeverageTierDto {
+    from: i64,
+    leverage: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LeverageWindowDto {
     from_ms: u64,
     to_ms: u64,
@@ -1939,6 +1946,14 @@ struct GroupDto {
     /// News windows: leverage cap between two instants (ms since epoch).
     #[serde(default)]
     leverage_windows: Option<Vec<LeverageWindowDto>>,
+    /// Volume tiers: notional (group ccy) above `from` gets at most `leverage`.
+    #[serde(default)]
+    leverage_tiers: Option<Vec<LeverageTierDto>>,
+    /// Swap-free fee per lot per night (account currency) and grace days.
+    #[serde(default)]
+    swap_free_fee: Option<f64>,
+    #[serde(default)]
+    swap_free_grace_days: Option<u32>,
     #[serde(default)]
     pass_price_improvement: Option<bool>,
     /// "symbol" (use the symbol's per-lot commission) | "per_lot" | "per_million"; value in minor units.
@@ -2080,6 +2095,35 @@ async fn save_group(
         cfg.symbol_markup_points = sm;
     }
     cfg.max_slippage_points = pts(g.max_slippage_points, "maxSlippagePoints")?;
+    if let Some(ts) = g.leverage_tiers {
+        if ts.len() > 20
+            || ts
+                .iter()
+                .any(|t| t.from <= 0 || !(1..=1000).contains(&t.leverage))
+        {
+            return Err(ApiError::bad(
+                "leverageTiers: from > 0, leverage 1..1000, at most 20",
+            ));
+        }
+        let mut out: Vec<risk::LeverageTier> = ts
+            .into_iter()
+            .map(|t| risk::LeverageTier {
+                from: t.from,
+                leverage: t.leverage,
+            })
+            .collect();
+        out.sort_by_key(|t| t.from);
+        cfg.leverage_tiers = out;
+    }
+    if let Some(f) = g.swap_free_fee {
+        if !(0.0..=1000.0).contains(&f) {
+            return Err(ApiError::bad("swapFreeFee must be 0..1000"));
+        }
+        cfg.swap_free_fee_per_lot = (f * 100.0).round() as i64;
+    }
+    if let Some(d) = g.swap_free_grace_days {
+        cfg.swap_free_grace_days = d.min(365);
+    }
     if let Some(ws) = g.leverage_windows {
         if ws.len() > 50 {
             return Err(ApiError::bad("at most 50 leverage windows"));
