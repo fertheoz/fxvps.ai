@@ -1917,3 +1917,69 @@ async fn swap_free_fee_on_a_book_is_reported_as_broker_revenue() {
     assert_eq!(activity["revenue"], expected as i64);
     t.stop();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tenant_hostnames_are_validated_and_drive_the_public_brand() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), false).await;
+    let a = admin_t();
+    let put = |body: Value| {
+        let a = a.clone();
+        let t = &t;
+        async move {
+            t.req(Method::PUT, "/v1/tenants", Some(&a), Some(body), &[])
+                .await
+        }
+    };
+    // scheme, port, path and spaces can never match `location.hostname`
+    for bad in [
+        "https://trade.acme.com",
+        "trade.acme.com:443",
+        "trade.acme.com/",
+        "trade acme.com",
+    ] {
+        let (s, v) = put(json!([{ "id": "acme", "name": "Acme", "hostnames": [bad] }])).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {v}");
+    }
+    // one hostname cannot brand two tenants
+    let (s, v) = put(json!([
+        { "id": "acme", "name": "Acme", "hostnames": ["trade.shared.com"] },
+        { "id": "zeta", "name": "Zeta", "hostnames": [" Trade.Shared.COM "] },
+    ]))
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    // stored trimmed, lower-cased, without blanks and repeats
+    let (s, v) = put(json!([{
+        "id": "acme", "name": "Acme", "brandColor": "#112233",
+        "hostnames": [" Trade.ACME.com ", "trade.acme.com", ""],
+    }]))
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v[0]["hostnames"], json!(["trade.acme.com"]));
+    // the brand lookup needs no token
+    let (s, b) = t
+        .req(
+            Method::GET,
+            "/v1/client/brand?host=TRADE.acme.com",
+            None,
+            None,
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(b["tenant"], "acme");
+    assert_eq!(b["brandColor"], "#112233");
+    let (s, b) = t
+        .req(
+            Method::GET,
+            "/v1/client/brand?host=other.example",
+            None,
+            None,
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(b["tenant"], Value::Null);
+    assert_eq!(b["brandColor"], "");
+    t.stop();
+}

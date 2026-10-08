@@ -494,6 +494,13 @@ fn stop_out_largest_loss_first_and_nbp() {
         .any(|e| matches!(e, Event::NegativeBalanceCompensated { .. })));
     assert!(h.pos(1).is_empty());
     assert_eq!(h.bal(1), usd("0"));
+    // the compensation is kept for the client statement
+    let m = h.e.cash_moves().last().expect("nbp cash move");
+    assert_eq!(
+        (m.account, m.kind),
+        (1, CashMoveKind::NegativeBalanceCompensation)
+    );
+    assert!(m.amount.minor > 0);
 }
 
 #[test]
@@ -1680,11 +1687,26 @@ fn copy_trading_mirrors_scales_and_charges_hwm_fee() {
     assert!(sub.realized > 0, "{sub:?}");
     let before = h.bal(2);
     h.cmd(Command::CopySettle { provider: 1 });
+    let settled_at = h.e.now_ns();
     let fee = sub.realized * 2_000 / 10_000;
     assert_eq!(h.bal(2).minor, before.minor - fee);
     // settling again charges nothing (high-water mark)
     h.cmd(Command::CopySettle { provider: 1 });
     assert_eq!(h.bal(2).minor, before.minor - fee);
+    // both sides of the fee are kept for the statements
+    let moves: Vec<_> =
+        h.e.cash_moves()
+            .iter()
+            .map(|m| (m.account, m.kind, m.amount.minor, m.counterparty))
+            .collect();
+    assert_eq!(
+        moves,
+        vec![
+            (2, CashMoveKind::CopyFee, -fee, Some(1)),
+            (1, CashMoveKind::CopyFeeIncome, fee, Some(2)),
+        ]
+    );
+    assert!(h.e.cash_moves().iter().all(|m| m.ts == settled_at));
     // replay reproduces the same state
     let replayed = Engine::replay(h.config.clone(), &h.journal);
     assert_eq!(replayed.state_digest(), h.e.state_digest());

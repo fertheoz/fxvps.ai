@@ -171,7 +171,8 @@ export function AccountDialog() {
         {tab === 'copy' && me && acc && <CopyTab acc={acc} />}
         {tab === 'ib' && me && acc && <IbTab acc={acc} />}
 
-        {tab === 'statement' && me && acc && <StatementTab acc={acc} />}
+        {/* keyed: another account starts with an empty statement, a late load for the old one is dropped */}
+        {tab === 'statement' && me && acc && <StatementTab key={acc.externalId} acc={acc} />}
 
         {tab === 'verification' && me && acc && (
           <>
