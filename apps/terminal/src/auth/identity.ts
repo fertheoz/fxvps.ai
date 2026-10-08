@@ -186,6 +186,16 @@ export class IdentityClient {
   totpDisable(token: string, code: string): Promise<void> {
     return this.call('/v1/2fa/totp/disable', { body: { code }, token });
   }
+  apiKeys(token: string): Promise<{ keys: ApiKeyInfo[] }> {
+    return this.call('/v1/api-keys', { token });
+  }
+  /** The returned `secret` is shown once; the server keeps only its hash. */
+  apiKeyCreate(token: string, name: string, scope: 'read' | 'trade', ips: string[]): Promise<ApiKeyInfo & { secret: string }> {
+    return this.call('/v1/api-keys', { body: { name, scope, ips }, token });
+  }
+  apiKeyRevoke(token: string, id: string): Promise<void> {
+    return this.call('/v1/api-keys/revoke', { body: { id }, token });
+  }
 
   async registerPasskey(token: string, name: string): Promise<void> {
     const start = await this.call<{ registration_id: string; options: unknown }>('/v1/passkeys/register/start', { body: {}, token });
@@ -205,4 +215,14 @@ export class IdentityClient {
       body: { authentication_id: start.authentication_id, credential: credentialJson(cred), session: 'cookie' },
     });
   }
+}
+
+export interface ApiKeyInfo {
+  id: string;
+  name: string;
+  scope: 'read' | 'trade';
+  ips: string[];
+  created_at: number;
+  last_used: number | null;
+  revoked: boolean;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useT } from '../hooks';
 import type { MessageKey } from '../i18n';
-import { IdentityError, isMfa, passkeysSupported, type Me } from '../auth/identity';
+import { type ApiKeyInfo, IdentityError, isMfa, passkeysSupported, type Me } from '../auth/identity';
 import { useSession } from '../store/session';
 import { useTerminal } from '../store/terminal';
 import { getApi, isGatewayApi } from '../store/api';
@@ -607,10 +607,107 @@ export function SecurityDialog({ onClose }: { onClose: () => void }) {
             {t('sec.addPasskey')}
           </button>
         </section>
+        <ApiKeysSection />
         {error && <Notice tone="error">{error}</Notice>}
         {info && <Notice tone="ok">{info}</Notice>}
       </div>
     </Modal>
+  );
+}
+
+/** Personal API keys: create (secret shown once), list, revoke. */
+function ApiKeysSection() {
+  const t = useT();
+  const errText = useErrorText();
+  const client = useSession((s) => s.client)!;
+  const token = useSession((s) => s.accessToken);
+  const [keys, setKeys] = useState<ApiKeyInfo[]>([]);
+  const [name, setName] = useState('');
+  const [scope, setScope] = useState<'read' | 'trade'>('read');
+  const [ips, setIps] = useState('');
+  const [secret, setSecret] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = (tok: string) => client.apiKeys(tok).then((r) => setKeys(r.keys), (e: unknown) => setError(errText(e)));
+  useEffect(() => {
+    if (token) void load(token);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, token]);
+  async function create() {
+    if (!token) return;
+    setError(null);
+    try {
+      const list = ips.split(/[\s,]+/).filter(Boolean);
+      const r = await client.apiKeyCreate(token, name.trim(), scope, list);
+      setSecret(r.secret);
+      setName('');
+      setIps('');
+      await load(token);
+    } catch (e) {
+      setError(errText(e));
+    }
+  }
+  async function revoke(id: string) {
+    if (!token) return;
+    try {
+      await client.apiKeyRevoke(token, id);
+      await load(token);
+    } catch (e) {
+      setError(errText(e));
+    }
+  }
+  const live = keys.filter((k) => !k.revoked);
+  return (
+    <section className="flex flex-col gap-2" data-testid="api-keys">
+      <h3 className="m-0 font-semibold text-[12px]">{t('sec.apiKeys')}</h3>
+      <p className="text-muted text-[11px] m-0">{t('sec.apiKeysHint')}</p>
+      {secret && (
+        <div className="flex flex-col gap-1" data-testid="api-key-secret">
+          <div className="text-[11px] font-semibold">{t('sec.apiKeyOnce')}</div>
+          <code className="num bg-panel-2 border border-line rounded px-2 py-1 break-all select-all">{secret}</code>
+          <button type="button" className={`${secondary} self-end`} onClick={() => setSecret(null)}>
+            {t('sec.done')}
+          </button>
+        </div>
+      )}
+      {live.length > 0 && (
+        <ul className="m-0 pl-0 list-none text-[12px] flex flex-col gap-1">
+          {live.map((k) => (
+            <li key={k.id} className="flex items-center gap-2">
+              <span className="flex-1 truncate">{k.name}</span>
+              <span className={k.scope === 'trade' ? 'text-down' : 'text-muted'}>{k.scope}</span>
+              <span className="text-muted num text-[11px]">{k.last_used ? new Date(k.last_used * 1000).toLocaleDateString() : '—'}</span>
+              <button type="button" className={secondary} onClick={() => void revoke(k.id)}>
+                {t('sec.revoke')}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        className="grid grid-cols-[1fr_auto] gap-2 items-end"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void create();
+        }}
+      >
+        <Field label={t('sec.apiKeyName')}>
+          <input className={input} value={name} onChange={(e) => setName(e.target.value)} maxLength={64} data-testid="api-key-name" />
+        </Field>
+        <Field label={t('sec.apiKeyScope')}>
+          <select className={input} value={scope} onChange={(e) => setScope(e.target.value as 'read' | 'trade')}>
+            <option value="read">{t('sec.scopeRead')}</option>
+            <option value="trade">{t('sec.scopeTrade')}</option>
+          </select>
+        </Field>
+        <Field label={t('sec.apiKeyIps')}>
+          <input className={`${input} num`} value={ips} onChange={(e) => setIps(e.target.value)} placeholder="203.0.113.7, ..." />
+        </Field>
+        <button type="submit" className={primary} disabled={!name.trim()} data-testid="api-key-create">
+          {t('sec.apiKeyCreate')}
+        </button>
+      </form>
+      {error && <Notice tone="error">{error}</Notice>}
+    </section>
   );
 }
 

@@ -39,6 +39,16 @@ pub struct Claims {
     /// Authentication methods (RFC 8176), e.g. `pwd`, `otp`, `mfa`, `hwk`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub amr: Vec<String>,
+    /// API-key tokens: `read` (no trading) or `trade`; `None` = interactive login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+}
+
+impl Claims {
+    /// Read-only API keys may subscribe and query but never trade.
+    pub fn may_trade(&self) -> bool {
+        self.scope.as_deref() != Some("read")
+    }
 }
 
 impl Claims {
@@ -367,6 +377,7 @@ pub fn issue_hs256(secret: &[u8], sub: &str, accounts: &[&str], ttl_secs: u64) -
         accounts: accounts.iter().map(|s| s.to_string()).collect(),
         roles: Vec::new(),
         amr: Vec::new(),
+        scope: None,
     };
     encode(
         &Header::new(Algorithm::HS256),
@@ -400,6 +411,7 @@ mod tests {
                 accounts: vec![],
                 roles: vec![],
                 amr: vec![],
+                scope: None,
             },
             &EncodingKey::from_secret(b"k1"),
         )
@@ -414,11 +426,36 @@ mod tests {
                 accounts: vec![],
                 roles: vec![],
                 amr: vec![],
+                scope: None,
             },
             &EncodingKey::from_secret(b"k1"),
         )
         .unwrap();
         assert!(matches!(a.verify(&hs384), Err(AuthError::NoKey { .. })));
+    }
+
+    #[test]
+    fn read_scope_cannot_trade() {
+        let a = Authenticator::hs256(b"k1");
+        let t = encode(
+            &Header::new(Algorithm::HS256),
+            &Claims {
+                sub: "u".into(),
+                exp: u64::MAX / 2,
+                accounts: vec!["A1".into()],
+                roles: vec!["client".into()],
+                amr: vec!["apikey".into()],
+                scope: Some("read".into()),
+            },
+            &EncodingKey::from_secret(b"k1"),
+        )
+        .unwrap();
+        let c = a.verify(&t).unwrap();
+        assert!(c.may_access("A1") && !c.may_trade());
+        assert!(a
+            .verify(&issue_hs256(b"k1", "u", &["A1"], 60))
+            .unwrap()
+            .may_trade());
     }
 
     #[test]

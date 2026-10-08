@@ -452,6 +452,9 @@ fn reply(out: &mut Outbox, request_id: &str, r: Result<(), CmdError>) -> Result<
 }
 
 fn check_account(hub: &Hub, st: &ConnState, account_id: &str) -> Result<(), CmdError> {
+    if !st.claims.may_trade() {
+        return Err(CmdError(ErrorCode::Forbidden, "read-only API key".into()));
+    }
     if !st.claims.may_access(account_id) {
         return Err(CmdError(
             ErrorCode::Forbidden,

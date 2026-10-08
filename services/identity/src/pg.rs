@@ -500,4 +500,76 @@ impl Store for PgStore {
             })
             .collect())
     }
+
+    async fn put_api_key(&self, k: &ApiKey) -> StoreResult<()> {
+        sqlx::query("INSERT INTO api_keys (id, user_id, name, hash, scope, ips, created_at, last_used, revoked) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+            .bind(&k.id)
+            .bind(&k.user_id)
+            .bind(&k.name)
+            .bind(&k.hash)
+            .bind(&k.scope)
+            .bind(&k.ips)
+            .bind(k.created_at)
+            .bind(k.last_used)
+            .bind(k.revoked)
+            .execute(&self.pool)
+            .await
+            .map_err(be)?;
+        Ok(())
+    }
+
+    async fn api_keys(&self, user_id: &str) -> StoreResult<Vec<ApiKey>> {
+        let rows = sqlx::query("SELECT * FROM api_keys WHERE user_id=$1 ORDER BY created_at")
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(be)?;
+        Ok(rows.iter().map(api_key).collect())
+    }
+
+    async fn api_key_by_hash(&self, hash: &str) -> StoreResult<Option<ApiKey>> {
+        let r = sqlx::query("SELECT * FROM api_keys WHERE hash=$1")
+            .bind(hash)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(be)?;
+        Ok(r.as_ref().map(api_key))
+    }
+
+    async fn revoke_api_key(&self, user_id: &str, id: &str) -> StoreResult<bool> {
+        Ok(
+            sqlx::query("UPDATE api_keys SET revoked = TRUE WHERE id=$1 AND user_id=$2")
+                .bind(id)
+                .bind(user_id)
+                .execute(&self.pool)
+                .await
+                .map_err(be)?
+                .rows_affected()
+                > 0,
+        )
+    }
+
+    async fn touch_api_key(&self, id: &str, ts: i64) -> StoreResult<()> {
+        sqlx::query("UPDATE api_keys SET last_used=$2 WHERE id=$1")
+            .bind(id)
+            .bind(ts)
+            .execute(&self.pool)
+            .await
+            .map_err(be)?;
+        Ok(())
+    }
+}
+
+fn api_key(r: &PgRow) -> ApiKey {
+    ApiKey {
+        id: r.get("id"),
+        user_id: r.get("user_id"),
+        name: r.get("name"),
+        hash: r.get("hash"),
+        scope: r.get("scope"),
+        ips: r.get("ips"),
+        created_at: r.get("created_at"),
+        last_used: r.get("last_used"),
+        revoked: r.get("revoked"),
+    }
 }
