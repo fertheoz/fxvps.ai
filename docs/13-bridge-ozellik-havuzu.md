@@ -163,7 +163,7 @@ trading süreci kapalıyken gelen icra Denetçi farkı olarak görünür.
 | Tarih | Parça | Durum | PR | Not |
 |---|---|---|---|---|
 | 2026-10-09 | — | 📝 | — | havuz çıkarıldı; 15 parça sıralandı |
-| 2026-10-09 | 0 | 🔧 | #189 | LP'de yatan emirler v0: motor (TP + limit giriş, replace/cancel, fazlalık düzleştirme), köprü (GTC, revizyonlu ClOrdID), Denetçi (GTC ack), konsol grup seçeneği |
+| 2026-10-09 | 0 | ✅ | #189 #186 #185 #188 #190 | LP'de yatan emirler v0: motor (TP + limit giriş, replace/cancel, fazlalık düzleştirme), köprü (GTC, revizyonlu ClOrdID), Denetçi (GTC ack), konsol grup seçeneği; canlı. Kurucu tıkı: grupta "lp" seç, LP sayfasında SIM "Emir alır" kapat. v1: Stop OrdType (SL LP'de), netleştirme, terminal rozeti + "neden dolmadı" |
 
 ## Kaynaklar
 PrimeXM: https://primexm.com/xcore/solutions/ · https://primexm.com/xcore-aggregation/ ·
