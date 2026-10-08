@@ -289,7 +289,10 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     if (!chart) return;
     const { up, down } = schemeColors(colorScheme);
     chart.applyOptions({
-      layout: { textColor: cssVar('--muted') },
+      layout: {
+        textColor: cssVar('--muted'),
+        background: { type: ColorType.Solid, color: cssVar('--chart') },
+      },
       grid: {
         vertLines: { color: cssVar('--border') + '66', visible: showGrid },
         horzLines: { color: cssVar('--border') + '66', visible: showGrid },

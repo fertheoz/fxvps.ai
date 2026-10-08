@@ -17,16 +17,27 @@
   --up-bg: rgba(14, 159, 110, 0.14);
   --down-bg: rgba(224, 36, 36, 0.12);
   --hover: rgba(37, 99, 235, 0.08);
+  /* chart canvas a touch below the panel; raised = menus, popovers */
+  --chart: #f6f3ec;
+  --raised: #ffffff;
+  --border-strong: #c4bdac;
   color-scheme: light;
 }
 
 [data-theme='dark'] {
-  --bg: #0b0e13;
-  --panel: #12161d;
-  --panel-2: #181d26;
-  --border: #252b36;
+  /* Dark: the console's blue-grey ladder instead of near-black everywhere.
+     Gaps (bg) < chart < panel < panel-2 (headers, inputs) < raised (menus),
+     each one step lighter, borders one more; nothing is pure black.
+     Hex on purpose: the chart canvas and the `+ '66'` alpha suffix need it. */
+  --bg: #0d1117;
+  --chart: #11161d;
+  --panel: #161b23;
+  --panel-2: #1d232c;
+  --raised: #242b35;
+  --border: #2a313c;
+  --border-strong: #3a4350;
   --fg: #e6e9ef;
-  --muted: #8a93a3;
+  --muted: #8f98a8;
   --accent: #4c8dff;
   --up: #22c38e;
   --down: #f2545b;
@@ -49,6 +60,9 @@
   --color-up-bg: var(--up-bg);
   --color-down-bg: var(--down-bg);
   --color-hover: var(--hover);
+  --color-chart: var(--chart);
+  --color-raised: var(--raised);
+  --color-line-strong: var(--border-strong);
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
