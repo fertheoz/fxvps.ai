@@ -233,6 +233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // record would turn an open LP mismatch into "0 olay" (seen 8 Oct: LMAX
     // kept +1 XAU/USD after a deploy restarted the auditor).
     let held_file = dir.join("tutulan.json");
+    let mut restored_held = false;
     if let Ok(b) = std::fs::read(&held_file) {
         if let Ok(v) = serde_json::from_slice::<serde_json::Map<String, Value>>(&b) {
             let mut held = BTreeMap::new();
@@ -246,6 +247,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             tracing::info!(symbols = held.len(), "held net restored");
             a.restore_held(held);
+            restored_held = true;
         }
     }
     let cutoff = now_ns() / 1_000_000 - 72 * 3_600_000;
@@ -279,6 +281,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // staging LPs together (the staging legs were squared by hand)
     let mut applied_reset: Option<u64> = None;
     let mut first_apply = true;
+    // With a restored held-net the old zero point is already inside it: the
+    // quiet start-up re-apply would re-baseline on the core's record and
+    // hide an open mismatch again (seen 8 Oct, LMAX +1 XAU/USD).
+    if restored_held {
+        applied_reset = reset_at(&dir);
+        a.reset_ms = applied_reset;
+        first_apply = false;
+    }
     let lp_of = |subject: &str| subject.split('.').nth(2).unwrap_or("").to_string();
 
     loop {
