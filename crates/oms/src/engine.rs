@@ -492,6 +492,15 @@ impl Engine {
                 return Err(format!("position {} bad volume", p.id));
             }
         }
+        // LP fills held back for a one-shot client fill (tek kalem) are the
+        // client's exposure already; a close reduces, an open adds
+        for o in self.st.orders.values() {
+            if o.chain_fills.is_empty() || o.routing != Routing::ABook {
+                continue;
+            }
+            let held: i64 = o.chain_fills.iter().map(|f| f.volume.raw()).sum();
+            *net.entry(&o.req.symbol).or_default() += o.req.side.sign() * held;
+        }
         for (sym, v) in &self.st.omnibus_net {
             let expect = *net.get(sym.as_str()).unwrap_or(&0) + self.hedge_net(sym);
             if *v != expect {
@@ -950,6 +959,7 @@ impl Engine {
             partial_fill_override: rule.as_ref().and_then(|r| r.partial_fill),
             copy_from: self.st.pending_copy.take(),
             lp_resting: None,
+            chain_fills: Vec::new(),
         };
         self.st.orders.insert(id, order);
         if let Err(reason) = self.validate_order(id, &g) {
@@ -1224,7 +1234,7 @@ impl Engine {
         let volume = Qty::from_raw(
             children
                 .iter()
-                .map(|c| self.st.orders[c].remaining().raw())
+                .map(|c| self.st.orders[c].lp_open().raw())
                 .sum(),
         );
         // FOK only when every child's group wants all-or-none (a batch is one LP order).
@@ -1858,7 +1868,7 @@ impl Engine {
         let children: Vec<(OrderId, i64)> = lp
             .children
             .iter()
-            .map(|c| (*c, self.st.orders[c].remaining().raw()))
+            .map(|c| (*c, self.st.orders[c].lp_open().raw()))
             .collect();
         let (symbol, side) = (lp.symbol.clone(), lp.side);
         let allocs = allocate(volume.raw(), &children, self.st.config.allocation);
@@ -1875,21 +1885,32 @@ impl Engine {
             });
         }
         *self.st.omnibus_net.entry(symbol.clone()).or_default() += side.sign() * allocated;
+        let (done, single) = {
+            let lp = &self.st.lp_orders[&lp_id];
+            (lp.done, lp.children.len() == 1)
+        };
         for (oid, q) in allocs {
-            let o = &self.st.orders[&oid];
-            let acc = &self.st.accounts[&o.req.account];
-            let g = &self.st.groups[&acc.group];
-            let m = self.order_markup(o, g, side).raw() * side.sign();
-            let mut client_px = Price::from_raw(price.raw() + m);
-            // Asymmetric slippage: an improvement on the requested price stays with us.
-            if !g.pass_price_improvement {
-                if let Some(req) = o.req.requested_price {
-                    let better = (req.raw() - client_px.raw()) * side.sign() > 0;
-                    if better {
-                        client_px = req;
-                    }
+            if single && self.coalesces(oid) {
+                // tek kalem: hold the LP fill; the client sees one fill when
+                // the retry chain is over (this LP order done, or no retry left)
+                let now = self.st.now;
+                self.st
+                    .orders
+                    .get_mut(&oid)
+                    .expect("order")
+                    .chain_fills
+                    .push(LpExec {
+                        exec_id: exec_id.to_string(),
+                        volume: Qty::from_raw(q),
+                        price,
+                        ts: now,
+                    });
+                if done {
+                    self.flush_chain(oid);
                 }
+                continue;
             }
+            let client_px = self.client_fill_price(oid, side, price);
             self.fill_child(oid, Qty::from_raw(q), client_px, price);
         }
         let lp = &self.st.lp_orders[&lp_id];
@@ -1898,6 +1919,49 @@ impl Engine {
             self.detach_resting(lp_id, None, &children);
         }
         Ok(())
+    }
+
+    /// Client price of an LP fill: LP price plus the markup; an improvement
+    /// on the requested price stays with us unless the group passes it on.
+    fn client_fill_price(&self, oid: OrderId, side: Side, price: Price) -> Price {
+        let o = &self.st.orders[&oid];
+        let g = &self.st.groups[&self.st.accounts[&o.req.account].group];
+        let m = self.order_markup(o, g, side).raw() * side.sign();
+        let client_px = Price::from_raw(price.raw() + m);
+        if !g.pass_price_improvement {
+            if let Some(req) = o.req.requested_price {
+                if (req.raw() - client_px.raw()) * side.sign() > 0 {
+                    return req;
+                }
+            }
+        }
+        client_px
+    }
+
+    /// A market order whose LP remainder is retried (`PartialFill::Retry`)
+    /// is shown to the client as one fill at the end of the chain.
+    fn coalesces(&self, oid: OrderId) -> bool {
+        self.st.orders[&oid].req.order_type == OrderType::Market
+            && matches!(self.policy(oid), PartialFill::Retry { .. })
+    }
+
+    /// Applies the held chain fills of an order as one fill at their VWAP.
+    fn flush_chain(&mut self, oid: OrderId) {
+        let fills = std::mem::take(&mut self.st.orders.get_mut(&oid).expect("order").chain_fills);
+        if fills.is_empty() {
+            return;
+        }
+        let vol: i64 = fills.iter().map(|f| f.volume.raw()).sum();
+        let notional: i128 = fills
+            .iter()
+            .map(|f| f.volume.raw() as i128 * f.price.raw() as i128)
+            .sum();
+        let vwap = Price::from_raw(
+            money::div_round(notional, vol as i128, Rounding::HalfEven).unwrap_or(0) as i64,
+        );
+        let side = self.st.orders[&oid].req.side;
+        let client_px = self.client_fill_price(oid, side, vwap);
+        self.fill_child(oid, Qty::from_raw(vol), client_px, vwap);
     }
 
     fn on_lp_reject(&mut self, lp_id: LpOrderId, reason: &str) -> R<()> {
@@ -1958,7 +2022,12 @@ impl Engine {
                 }
                 _ => {}
             }
+            // the chain is over: whatever the LP gave reaches the client now, as one fill
+            self.flush_chain(c);
             let o = &self.st.orders[&c];
+            if o.status.is_terminal() {
+                continue;
+            }
             if o.filled.is_zero() {
                 self.reject(c, format!("LP: {reason}"));
             } else {

@@ -161,6 +161,10 @@ pub struct Order {
     /// Pending limit entry resting at the LP (`GroupConfig::lp_resting`).
     #[serde(default)]
     pub lp_resting: Option<LpOrderId>,
+    /// LP fills of a market order's retry chain held back until the chain is
+    /// over: the client then gets one fill at their VWAP (tek kalem).
+    #[serde(default)]
+    pub chain_fills: Vec<LpExec>,
 }
 
 /// Origin of an order (deal reason in the history).
@@ -261,6 +265,12 @@ pub struct OrderChange {
 impl Order {
     pub fn remaining(&self) -> Qty {
         Qty::from_raw(self.req.volume.raw() - self.filled.raw())
+    }
+    /// What still has to go to the LP: the remainder less the chain fills
+    /// already in hand (not yet applied to the client).
+    pub fn lp_open(&self) -> Qty {
+        let held: i64 = self.chain_fills.iter().map(|f| f.volume.raw()).sum();
+        Qty::from_raw(self.req.volume.raw() - self.filled.raw() - held)
     }
     /// Waiting for its trigger price (also a limit that came back from the LP
     /// partly filled: the remainder keeps waiting).
