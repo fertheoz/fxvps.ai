@@ -588,6 +588,7 @@ impl Auditor {
                 qty,
                 ord_type: domain::OrderType::Market,
                 limit_price: None,
+                stop_price: None,
                 tif: domain::TimeInForce::ImmediateOrCancel,
             },
             now_ns,
@@ -646,6 +647,7 @@ mod tests {
                 OrderType::Market
             },
             limit_price: limit.map(px),
+            stop_price: None,
             tif: TimeInForce::ImmediateOrCancel,
         }
     }

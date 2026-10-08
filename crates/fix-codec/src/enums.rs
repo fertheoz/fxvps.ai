@@ -22,7 +22,7 @@ macro_rules! fix_char {
 }
 
 fix_char!(Side { Side::Buy => b'1', Side::Sell => b'2' });
-fix_char!(OrderType { OrderType::Market => b'1', OrderType::Limit => b'2' });
+fix_char!(OrderType { OrderType::Market => b'1', OrderType::Limit => b'2', OrderType::Stop => b'3' });
 fix_char!(TimeInForce {
     TimeInForce::Day => b'0',
     TimeInForce::GoodTillCancel => b'1',

@@ -2631,3 +2631,88 @@ fn resting_limit_entry_rests_at_the_lp() {
     assert_eq!(h.router.take_cancelled(), vec![(lp2, 0)]);
     assert_eq!(h.e.order(id2).unwrap().status, OrderStatus::Cancelled);
 }
+
+#[test]
+fn resting_sl_rests_as_a_stop_and_the_lp_fill_closes_with_stop_loss() {
+    let mut h = resting_h();
+    let pid = resting_long(&mut h);
+    h.cmd(Command::ModifyPosition {
+        account: 1,
+        position_id: pid,
+        sl: Some(px("1.09900")),
+        tp: Some(px("1.10100")),
+        trailing_points: None,
+    });
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 2);
+    let tp = sent.iter().find(|r| r.limit.is_some()).expect("tp limit");
+    let sl = sent.iter().find(|r| r.stop.is_some()).expect("sl stop");
+    assert_eq!((sl.side, sl.limit), (Side::Sell, None));
+    // the client sells at LP bid − 5 points: the stop sits 5 points above the SL
+    assert_eq!(sl.stop, Some(px("1.09905")));
+    assert_eq!(h.pos(1)[0].lp_sl, Some(sl.lp_order_id));
+    // our own quote through the SL closes nothing: the LP's stop decides
+    h.quote("EURUSD", "1.09800", "1.09810");
+    assert_eq!(h.pos(1).len(), 1);
+    assert!(h.router.take().is_empty());
+    // the LP's stop fires and fills: closed as a stop loss at LP − markup;
+    // the resting TP is cancelled with the position
+    h.cmd(Command::LpFill {
+        lp_order_id: sl.lp_order_id,
+        exec_id: "s1".into(),
+        volume: qty("1"),
+        price: px("1.09890"),
+    });
+    assert!(h.pos(1).is_empty());
+    let d = h.e.deals().last().unwrap();
+    assert_eq!(d.price, px("1.09885"));
+    assert_eq!(d.reason, OrderOrigin::StopLoss);
+    assert_eq!(h.router.take_cancelled(), vec![(tp.lp_order_id, 0)]);
+    assert_eq!(h.e.omnibus_net("EURUSD"), 0);
+}
+
+#[test]
+fn resting_stop_entry_rests_at_the_lp() {
+    let mut h = resting_h();
+    let o = h.pending(1, "s1", Side::Buy, OrderType::Stop, None, Some("1.10500"));
+    let (_, id) = h.order(o);
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!((sent[0].limit, sent[0].stop), (None, Some(px("1.10495"))));
+    // our quote through the stop does not execute it
+    h.quote("EURUSD", "1.10600", "1.10610");
+    assert!(h.router.take().is_empty());
+    assert_eq!(h.e.order(id).unwrap().status, OrderStatus::Accepted);
+    h.cmd(Command::LpFill {
+        lp_order_id: sent[0].lp_order_id,
+        exec_id: "f".into(),
+        volume: qty("1"),
+        price: px("1.10500"),
+    });
+    assert_eq!(h.pos(1)[0].open_price, px("1.10505"));
+}
+
+#[test]
+fn trailing_stop_replaces_the_lp_stop_at_most_once_a_second() {
+    let mut h = resting_h();
+    let pid = resting_long(&mut h);
+    h.cmd(Command::ModifyPosition {
+        account: 1,
+        position_id: pid,
+        sl: Some(px("1.09900")),
+        tp: None,
+        trailing_points: Some(50),
+    });
+    h.router.take();
+    // in profit by more than 50 points: the SL trails, the LP stop is replaced
+    h.quote("EURUSD", "1.10200", "1.10210");
+    assert_eq!(h.router.take_replaced().len(), 1);
+    // a tick later (1 ms in this harness): trailed again here, not sent yet
+    h.quote("EURUSD", "1.10210", "1.10220");
+    assert!(h.router.take_replaced().is_empty());
+    h.ts += 1_000_000_000;
+    h.quote("EURUSD", "1.10220", "1.10230");
+    let rep = h.router.take_replaced();
+    assert_eq!(rep.len(), 1);
+    assert_eq!(rep[0].stop, Some(px("1.10170")));
+}

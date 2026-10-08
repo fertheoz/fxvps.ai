@@ -64,6 +64,7 @@ fn order(id: &str) -> Body {
         order_qty: Fixed::from_int(1),
         ord_type: OrderType::Market,
         price: None,
+        stop_px: None,
         time_in_force: Some(TimeInForce::ImmediateOrCancel),
     })
 }

@@ -77,9 +77,9 @@ GTC limit emri** olarak durur. Dolum LP'den gelir; müşteri fiyatı = LP dolumu
 + markup. LP işlem yapmadıysa bizde de hiçbir şey olmaz; müşteriye cevap:
 "emriniz LMAX'ta duruyordu, LMAX o fiyattan işlem yapmadı".
 
-**Kapsam (v0, bu PR):** A-book pozisyon TP'si + A-book bekleyen **limit**
-girişleri. SL ve stop girişleri tetik tabanlı kalır (geçit henüz Stop
-OrdType taşımıyor → v1). B-book'a dokunulmaz (orası için derinlik-VWAP tetik,
+**Kapsam:** v0 — A-book pozisyon TP'si + bekleyen **limit** girişleri (GTC
+limit). v1 (#193) — SL ve **stop** girişleri GTC **stop** (tetik LMAX'ta,
+dolum LMAX'ın tetik anı fiyatı). Stop-limit girişi tetik kipinde kalır (v2). B-book'a dokunulmaz (orası için derinlik-VWAP tetik,
 parça 1 ile).
 
 **Motor (oms, journal'lı, replay güvenli)**
@@ -164,6 +164,7 @@ trading süreci kapalıyken gelen icra Denetçi farkı olarak görünür.
 |---|---|---|---|---|
 | 2026-10-09 | — | 📝 | — | havuz çıkarıldı; 15 parça sıralandı |
 | 2026-10-09 | 0 | ✅ | #189 #186 #185 #188 #190 | LP'de yatan emirler v0: motor (TP + limit giriş, replace/cancel, fazlalık düzleştirme), köprü (GTC, revizyonlu ClOrdID), Denetçi (GTC ack), konsol grup seçeneği; canlı. Kurucu tıkı: grupta "lp" seç, LP sayfasında SIM "Emir alır" kapat. v1: Stop OrdType (SL LP'de), netleştirme, terminal rozeti + "neden dolmadı" |
+| 2026-10-09 | 0 v1 | 🔧 | #193 | SL ve stop girişleri LMAX'ta GTC **stop** (Stop OrdType 40=3/StopPx 99 codec→geçit→köprü→motor); trailing replace 1 sn kısıtlı; kaymaya açık kalan yalnız piyasa emirleri. Stop-limit girişi tetik kipinde (v2) |
 
 ## Kaynaklar
 PrimeXM: https://primexm.com/xcore/solutions/ · https://primexm.com/xcore-aggregation/ ·

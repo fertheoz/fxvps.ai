@@ -142,13 +142,16 @@ impl Engine {
                 return self.reject(nos, rej::OTHER, "market orders must be IOC or FOK");
             }
             (OrderType::Limit, tif) => tif.unwrap_or(TimeInForce::Day),
+            (OrderType::Stop, _) => {
+                return self.reject(nos, rej::OTHER, "stop orders are not supported here");
+            }
         };
         let limit = match (nos.ord_type, nos.price) {
             (OrderType::Limit, Some(p)) if p.is_positive() => Some(p),
             (OrderType::Limit, _) => {
                 return self.reject(nos, rej::OTHER, "limit order requires positive Price");
             }
-            (OrderType::Market, _) => None,
+            (OrderType::Market | OrderType::Stop, _) => None,
         };
 
         let marketable: Vec<_> = book
@@ -424,6 +427,7 @@ mod tests {
             order_qty: Fixed::from_int(qty),
             ord_type: ot,
             price,
+            stop_px: None,
             time_in_force: tif,
         }
     }
@@ -560,6 +564,7 @@ mod tests {
             order_qty: Fixed::from_int(2_000),
             ord_type: OrderType::Limit,
             price: Some(px(108_100)),
+            stop_px: None,
             time_in_force: None,
         });
         assert!(

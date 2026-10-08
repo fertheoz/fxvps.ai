@@ -303,6 +303,9 @@ pub struct Position {
     /// LP-resting order standing for the TP (`GroupConfig::lp_resting`).
     #[serde(default)]
     pub lp_tp: Option<LpOrderId>,
+    /// LP-resting STOP order standing for the SL.
+    #[serde(default)]
+    pub lp_sl: Option<LpOrderId>,
     /// Accumulated swap (minor units of the account currency, negative = charged).
     #[serde(default)]
     pub swap_minor: i128,
@@ -440,6 +443,12 @@ pub struct LpOrder {
     /// Cancel/replace count; the LP-side ClOrdID carries it.
     #[serde(default)]
     pub revision: u32,
+    /// Stop trigger of a resting STOP order (SL / stop entry at the LP).
+    #[serde(default)]
+    pub stop: Option<Price>,
+    /// Last cancel/replace (ns): price-only replaces are throttled.
+    #[serde(default)]
+    pub replaced_ts: u64,
 }
 
 /// One LP execution report applied to an [`LpOrder`].

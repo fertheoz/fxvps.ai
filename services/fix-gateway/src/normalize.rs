@@ -137,6 +137,7 @@ pub fn new_order_single(cfg: &GatewayConfig, o: &Order) -> Option<NewOrderSingle
         order_qty: o.qty,
         ord_type: o.ord_type,
         price: o.limit_price,
+        stop_px: o.stop_price,
         time_in_force: Some(o.tif),
     })
 }
