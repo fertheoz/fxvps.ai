@@ -210,8 +210,8 @@ impl AdminCtx {
     /// Credit/KYC view of the admin state (cheap clone for engine queries).
     pub(super) async fn view_state(&self) -> AdminState {
         let st = &self.store.lock().await.state;
-        // Everything the read views use; not the secrets (alert channels,
-        // users), the idempotency index or the audit trail.
+        // Everything the read views and the alerter use; not the users, the
+        // idempotency index or the audit trail. Never serialized whole.
         AdminState {
             credit: st.credit.clone(),
             kyc: st.kyc.clone(),
@@ -224,6 +224,8 @@ impl AdminCtx {
             ib_of: st.ib_of.clone(),
             tenants: st.tenants.clone(),
             strategies: st.strategies.clone(),
+            // the alerter reads its channels and thresholds through this view
+            alerts: st.alerts.clone(),
             ..Default::default()
         }
     }
