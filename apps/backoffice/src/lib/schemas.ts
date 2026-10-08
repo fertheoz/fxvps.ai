@@ -112,6 +112,8 @@ export const Client = z.object({
   /** Introducing broker (stage 12). */
   ibSharePct: z.number().int().min(0).max(100).optional(),
   ibAccount: z.number().int().nullable().optional(),
+  /** IB terms: rebate per closed lot (minor units), override on sub-IBs (%), referral code. */
+  ibPlan: z.object({ perLotCents: z.number().int(), overridePct: z.number().int(), code: z.string() }).nullable().optional(),
   kycDocs: z.number().int().optional(),
 });
 export type Client = z.infer<typeof Client>;

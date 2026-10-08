@@ -54,7 +54,7 @@ export default function ClientCardPage() {
   const kycMut = useApiMutation((k: Client["kyc"]) => api().setKyc(client!.id, k, actor));
   const groupMut = useApiMutation((g: string) => api().setGroup(client!.id, g, actor));
   const leiMut = useApiMutation((lei: string) => api().setProfile(client!.id, { lei: lei.trim() || null }, actor));
-  const ibMut = useApiMutation((p: { sharePct?: number; ibAccount?: number | null }) => api().setIb(client!.id, p, actor));
+  const ibMut = useApiMutation((p: { sharePct?: number; ibAccount?: number | null; perLotCents?: number; overridePct?: number; code?: string }) => api().setIb(client!.id, p, actor));
   const docs = useApiQuery("listKycDocs", [client?.id ?? ""], { enabled: !!client, live: 15000 });
   const openDoc = async (doc: string) => { const b = await api().kycDocBlob(client!.id, doc); window.open(URL.createObjectURL(b), "_blank"); };
   const [lei, setLei] = React.useState<string | null>(null);
@@ -300,6 +300,15 @@ export default function ClientCardPage() {
               </label>
               <label className="grid gap-1">{t("card.ibAccount")}
                 <input type="number" className="w-40 rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" defaultValue={client.ibAccount ?? ""} disabled={!actor.can("clients.edit") || ibMut.isPending} onBlur={(e) => { const v = e.target.value.trim() === "" ? null : Number(e.target.value); if (v !== (client.ibAccount ?? null)) ibMut.mutate({ ibAccount: v }); }} data-testid="card-ib-account" />
+              </label>
+              <label className="grid gap-1">{t("card.ibPerLot")}
+                <input type="number" min={0} step={0.5} className="w-32 rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" defaultValue={(client.ibPlan?.perLotCents ?? 0) / 100} disabled={!actor.can("clients.edit") || ibMut.isPending} onBlur={(e) => { const v = Math.max(0, Math.round(Number(e.target.value) * 100)); if (v !== (client.ibPlan?.perLotCents ?? 0)) ibMut.mutate({ perLotCents: v }); }} data-testid="card-ib-perlot" />
+              </label>
+              <label className="grid gap-1">{t("card.ibOverride")}
+                <input type="number" min={0} max={50} className="w-32 rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" defaultValue={client.ibPlan?.overridePct ?? 0} disabled={!actor.can("clients.edit") || ibMut.isPending} onBlur={(e) => { const v = Math.max(0, Math.min(50, Math.round(Number(e.target.value)))); if (v !== (client.ibPlan?.overridePct ?? 0)) ibMut.mutate({ overridePct: v }); }} />
+              </label>
+              <label className="grid gap-1">{t("card.ibCode")}
+                <input className="w-40 rounded-md border border-border bg-background px-2 py-1 text-sm uppercase text-foreground" defaultValue={client.ibPlan?.code ?? ""} maxLength={20} disabled={!actor.can("clients.edit") || ibMut.isPending} onBlur={(e) => { const v = e.target.value.trim().toUpperCase(); if (v !== (client.ibPlan?.code ?? "")) ibMut.mutate({ code: v }); }} data-testid="card-ib-code" />
               </label>
               {ibMut.error && <span className="text-xs text-red-600 dark:text-red-400">{String((ibMut.error as Error).message ?? ibMut.error)}</span>}
             </CardContent>
