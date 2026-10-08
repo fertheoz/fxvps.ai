@@ -2716,3 +2716,106 @@ fn trailing_stop_replaces_the_lp_stop_at_most_once_a_second() {
     assert_eq!(rep.len(), 1);
     assert_eq!(rep[0].stop, Some(px("1.10170")));
 }
+
+#[test]
+fn retry_chain_reaches_the_client_as_one_fill() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 5;
+    g.partial_fill = risk::PartialFill::Retry { max_attempts: 3 };
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "100000");
+    let id = h.market(1, "x", Side::Buy, "5");
+    let lp1 = h.router.take()[0].lp_order_id;
+    // the LP fills 3 of 5 and cancels the rest (IOC)
+    let ev = h.cmd(Command::LpFill {
+        lp_order_id: lp1,
+        exec_id: "a".into(),
+        volume: qty("3"),
+        price: px("1.10010"),
+    });
+    assert!(
+        !ev.iter().any(|e| matches!(e, Event::OrderFilled { .. })),
+        "nothing shown yet"
+    );
+    assert_eq!(h.e.order(id).unwrap().status, OrderStatus::Accepted);
+    assert!(h.pos(1).is_empty());
+    assert_eq!(h.e.omnibus_net("EURUSD"), qty("3").raw(), "omnibus is live");
+    h.cmd(Command::LpReject {
+        lp_order_id: lp1,
+        reason: "Canceled".into(),
+    });
+    // the remainder (2, not 5) goes out at once
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].volume, qty("2"));
+    let ev = h.cmd(Command::LpFill {
+        lp_order_id: sent[0].lp_order_id,
+        exec_id: "b".into(),
+        volume: qty("2"),
+        price: px("1.10030"),
+    });
+    // one fill, one position, one deal: VWAP 1.10018 + 5 points
+    let fills: Vec<_> = ev
+        .iter()
+        .filter(|e| matches!(e, Event::OrderFilled { .. }))
+        .collect();
+    assert_eq!(fills.len(), 1);
+    assert!(
+        matches!(fills[0], Event::OrderFilled { status: OrderStatus::Filled, volume, .. } if *volume == qty("5"))
+    );
+    let p = &h.pos(1)[0];
+    assert_eq!((p.volume, p.open_price), (qty("5"), px("1.10023")));
+    assert_eq!(
+        h.e.deals().iter().filter(|d| d.position_id == p.id).count(),
+        1
+    );
+    assert_eq!(h.e.omnibus_net("EURUSD"), qty("5").raw());
+}
+
+#[test]
+fn retry_chain_exhausted_shows_the_partial_once_and_cancels_the_rest() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.partial_fill = risk::PartialFill::Retry { max_attempts: 2 };
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "100000");
+    let id = h.market(1, "x", Side::Buy, "5");
+    let lp1 = h.router.take()[0].lp_order_id;
+    h.cmd(Command::LpFill {
+        lp_order_id: lp1,
+        exec_id: "a".into(),
+        volume: qty("3"),
+        price: px("1.10010"),
+    });
+    h.cmd(Command::LpReject {
+        lp_order_id: lp1,
+        reason: "Canceled".into(),
+    });
+    let lp2 = h.router.take()[0].lp_order_id;
+    h.cmd(Command::LpFill {
+        lp_order_id: lp2,
+        exec_id: "b".into(),
+        volume: qty("1"),
+        price: px("1.10020"),
+    });
+    let ev = h.cmd(Command::LpReject {
+        lp_order_id: lp2,
+        reason: "Canceled".into(),
+    });
+    // attempts exhausted: 4 lots reach the client as one fill, 1 lot is cancelled
+    assert_eq!(
+        ev.iter()
+            .filter(|e| matches!(e, Event::OrderFilled { .. }))
+            .count(),
+        1
+    );
+    let o = h.e.order(id).unwrap();
+    assert_eq!((o.status, o.filled), (OrderStatus::Cancelled, qty("4")));
+    assert_eq!(h.pos(1)[0].volume, qty("4"));
+    assert!(h.router.take().is_empty());
+}
