@@ -13,15 +13,15 @@
 //! never logged.
 
 use super::auth::Actor;
-use super::store::{AdminCmd, AdminState, AdminUserRec, BalanceKind, OpStatus, StatementMonth};
-use super::{need, views, AdminCtx, ApiError, ApiResult};
+use super::store::{AdminCmd, AdminState, AdminUserRec, StatementMonth};
+use super::{need, AdminCtx, ApiError, ApiResult};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
 use lettre::message::{Mailbox, MultiPart};
 use lettre::transport::stub::AsyncStubTransport;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
-use oms::{Deal, DealEntry, Engine, Side};
+use oms::Engine;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -41,127 +41,27 @@ pub fn enabled() -> bool {
 
 // ---------------------------------------------------------------- data
 
-fn side(s: Side) -> &'static str {
-    if s == Side::Buy {
-        "buy"
-    } else {
-        "sell"
-    }
-}
-
-fn in_window(d: &Deal, from: u64, to: u64) -> bool {
-    d.entry == DealEntry::Out && d.ts >= from && d.ts < to
-}
-
-fn body_from(e: &Engine, login: u64, deals: &[&Deal], from: u64, to: u64) -> Option<Value> {
-    let a = e.account(login)?;
-    let g = e.group(&a.group)?;
-    let trades: Vec<Value> = deals
-        .iter()
-        .map(|d| {
-            json!({
-                "at": views::iso(d.ts), "symbol": d.symbol, "side": side(d.side),
-                "lots": views::qty_f(d.volume), "price": views::price_f(d.price),
-                "pnl": d.pnl.minor as i64, "commission": d.commission.minor as i64, "swap": d.swap as i64,
-                "position": d.position_id,
-            })
-        })
-        .collect();
-    let sum = |k: &str| {
-        trades
-            .iter()
-            .map(|t| t[k].as_i64().unwrap_or(0))
-            .sum::<i64>()
-    };
-    let totals = json!({
-        "trades": trades.len(),
-        "lots": trades.iter().map(|t| t["lots"].as_f64().unwrap_or(0.0)).sum::<f64>(),
-        "pnl": sum("pnl"), "commission": sum("commission"), "swap": sum("swap"),
-    });
-    let positions: Vec<Value> = e
-        .positions_of(login)
-        .iter()
-        .map(|p| {
-            json!({
-                "id": p.id, "symbol": p.symbol, "side": side(p.side),
-                "lots": views::qty_f(p.volume), "openPrice": views::price_f(p.open_price),
-                "openedAt": views::iso(p.opened_ts), "swap": p.swap_minor as i64,
-            })
-        })
-        .collect();
-    let r = e.account_risk(login).ok()?;
-    Some(json!({
-        "account": login, "group": a.group, "currency": g.currency.to_string(),
-        "from": views::iso(from), "to": if to == u64::MAX { Value::Null } else { json!(views::iso(to - 1)) },
-        "generatedAt": views::iso(e.now_ns()),
-        "balance": r.balance.minor as i64, "equity": r.equity.minor as i64, "margin": r.margin.minor as i64,
-        "trades": trades, "totals": totals, "positions": positions,
-    }))
-}
-
-/// Engine part of the statement of `login` for [from, to): closed trades,
-/// totals, open positions and the current balance. `None`: unknown account.
-pub(super) fn engine_body(e: &Engine, login: u64, from: u64, to: u64) -> Option<Value> {
-    let deals: Vec<&Deal> = e
-        .deals()
-        .iter()
-        .filter(|d| d.account == login && in_window(d, from, to))
-        .collect();
-    body_from(e, login, &deals, from, to)
-}
-
-/// [`engine_body`] for many accounts with one pass over the deal history.
+/// Statement bodies of `logins` for [from, to): [`super::routes::statement_body`]
+/// with each account's cash rows (the same body the terminal shows).
 pub(super) fn engine_bodies(
     e: &Engine,
-    logins: &[u64],
+    logins: &[(u64, Vec<(u64, Value)>)],
     from: u64,
     to: u64,
 ) -> Vec<(u64, Option<Value>)> {
-    let mut by: BTreeMap<u64, Vec<&Deal>> = logins.iter().map(|l| (*l, Vec::new())).collect();
-    for d in e.deals().iter().filter(|d| in_window(d, from, to)) {
-        if let Some(v) = by.get_mut(&d.account) {
-            v.push(d);
-        }
-    }
     logins
         .iter()
-        .map(|l| {
-            let deals = by.get(l).map_or(&[][..], |v| v.as_slice());
-            (*l, body_from(e, *l, deals, from, to))
+        .map(|(l, cash)| {
+            (
+                *l,
+                super::routes::statement_body(e, *l, from, to, cash.clone()),
+            )
         })
         .collect()
 }
 
-/// Adds the admin-store part (applied deposits / withdrawals, client name,
-/// broker name) to an [`engine_body`].
-pub(super) fn complete(
-    mut body: Value,
-    st: &AdminState,
-    login: u64,
-    from: u64,
-    to: u64,
-    fallback_name: &str,
-) -> Value {
-    let cash: Vec<Value> = st
-        .ops
-        .values()
-        .filter(|o| {
-            o.account == login && o.status == OpStatus::Applied && o.kind != BalanceKind::Credit
-        })
-        .filter(|o| {
-            let t = o.decided_at.unwrap_or(o.requested_at);
-            t >= from && t < to
-        })
-        .map(|o| {
-            json!({
-                "at": views::iso(o.decided_at.unwrap_or(o.requested_at)),
-                "kind": if o.kind == BalanceKind::Deposit { "deposit" } else { "withdraw" },
-                "amount": o.amount,
-                "reason": o.reason,
-            })
-        })
-        .collect();
-    body["cash"] = json!(cash);
+/// Adds the client name and the broker name to a statement body.
+pub(super) fn complete(mut body: Value, st: &AdminState, login: u64, fallback_name: &str) -> Value {
     body["name"] = json!(st
         .profiles
         .get(&login)
@@ -266,13 +166,16 @@ async fn run_once(
         return Ok(None);
     };
     let st = ctx.view_state().await;
-    let logins: Vec<u64> = todo.iter().map(|(a, _)| *a).collect();
+    let logins: Vec<(u64, Vec<(u64, Value)>)> = todo
+        .iter()
+        .map(|(a, _)| (*a, super::routes::ops_cash(&st, *a, from, to)))
+        .collect();
     let bodies = ctx.qr(move |e| engine_bodies(e, &logins, from, to)).await?;
     let (mut sent, mut failed) = (0u32, 0u32);
     for ((account, to_addr), (_, body)) in todo.iter().zip(bodies) {
         // accounts gone from the engine are skipped, not retried
         let Some(body) = body else { continue };
-        let s = complete(body, &st, *account, from, to, "");
+        let s = complete(body, &st, *account, "");
         let subj = subject(&s, &month, false);
         match mailer
             .send(
@@ -739,11 +642,12 @@ pub async fn mail_test(
         .or_else(|| st.profiles.keys().next().copied())
         .ok_or_else(|| ApiError::bad("no client account to render; pass {\"account\": <login>}"))?;
     let (month, from, to) = last_month(super::routes::now_ns());
+    let cash = super::routes::ops_cash(&st, account, from, to);
     let body = ctx
-        .qr(move |e| engine_body(e, account, from, to))
+        .qr(move |e| super::routes::statement_body(e, account, from, to, cash))
         .await?
         .ok_or_else(|| ApiError::not_found("unknown account"))?;
-    let s = complete(body, &st, account, from, to, "");
+    let s = complete(body, &st, account, "");
     mailer
         .send(
             &to_addr,
@@ -769,6 +673,7 @@ pub async fn mail_test(
 #[cfg(test)]
 mod tests {
     use super::super::store::{AdminRecord, ClientProfile};
+    use super::super::views;
     use super::*;
 
     fn ns(y: i64, m: u32, d: u32, h: u64) -> u64 {

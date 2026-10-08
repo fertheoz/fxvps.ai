@@ -2837,3 +2837,101 @@ fn client_token_as(sub: &str, accounts: &[&str]) -> String {
     )
     .unwrap()
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tenant_scoped_staff_cannot_touch_tenants_or_other_users() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), false).await;
+    let a = admin_t();
+    let (s, _) = t
+        .req(
+            Method::PUT,
+            "/v1/tenants",
+            Some(&a),
+            Some(json!([
+                { "id": "acme", "name": "Acme", "groups": ["a"] },
+                { "id": "zeta", "name": "Zeta", "groups": ["b"] },
+            ])),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let user = |id: &str, tenant: Value| {
+        json!({ "id": id, "name": format!("{id} name"), "email": format!("{id}@x.test"),
+                "role": "admin", "mfa": false, "active": true, "lastLogin": null, "tenant": tenant })
+    };
+    for (id, tn) in [
+        ("tadmin", json!("acme")),
+        ("zuser", json!("zeta")),
+        ("root", Value::Null),
+    ] {
+        let (s, v) = t
+            .req(
+                Method::PUT,
+                &format!("/v1/admin-users/{id}"),
+                Some(&a),
+                Some(user(id, tn)),
+                &[],
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+    }
+    // a white-label admin (tenant acme) with users.edit
+    let w = token("tadmin", Role::Admin);
+    let (s, _) = t.get("/v1/tenants", &w).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = t
+        .req(
+            Method::PUT,
+            "/v1/tenants",
+            Some(&w),
+            Some(json!([{ "id": "acme", "name": "Acme", "groups": ["a", "b"] }])),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    // cannot drop its own scope, nor edit another tenant's user
+    let (s, _) = t
+        .req(
+            Method::PUT,
+            "/v1/admin-users/tadmin",
+            Some(&w),
+            Some(user("tadmin", Value::Null)),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = t
+        .req(
+            Method::PUT,
+            "/v1/admin-users/zuser",
+            Some(&w),
+            Some(user("zuser", json!("acme"))),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    // may add staff to its own tenant, and lists only those
+    let (s, _) = t
+        .req(
+            Method::PUT,
+            "/v1/admin-users/t2",
+            Some(&w),
+            Some(user("t2", json!("acme"))),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, v) = t.get("/v1/admin-users", &w).await;
+    let ids: Vec<&str> = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|u| u["id"].as_str())
+        .collect();
+    assert_eq!(ids, ["t2", "tadmin"]);
+    // platform staff still see everything
+    let (_, v) = t.get("/v1/admin-users", &a).await;
+    assert_eq!(v.as_array().unwrap().len(), 4);
+    t.stop();
+}

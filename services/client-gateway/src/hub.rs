@@ -198,7 +198,7 @@ impl NewOrder {
     }
 }
 
-fn order_type(k: OrderKind) -> client_proto::OrderType {
+pub(crate) fn order_type(k: OrderKind) -> client_proto::OrderType {
     use client_proto::OrderType as P;
     match k {
         OrderKind::Market => P::Market,

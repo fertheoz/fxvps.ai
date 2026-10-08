@@ -3080,9 +3080,35 @@ async fn perf(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     })))
 }
 
+/// Tenant id of a tenant-scoped staff user (matched like [`tenant_logins`]);
+/// `None` for platform staff.
+pub(super) fn actor_tenant(st: &AdminState, actor: &Actor) -> Option<String> {
+    st.users
+        .values()
+        .find(|u| {
+            u.id == actor.sub || u.email.eq_ignore_ascii_case(&actor.name) || u.name == actor.name
+        })
+        .and_then(|u| u.tenant.clone())
+        .filter(|t| !t.is_empty())
+}
+
+/// Tenant records and other tenants' users are platform-staff only: a
+/// white-label admin must not widen its own scope or rebrand another tenant.
+fn platform_only(st: &AdminState, actor: &Actor) -> Result<(), ApiError> {
+    match actor_tenant(st, actor) {
+        Some(_) => Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "platform staff only",
+        )),
+        None => Ok(()),
+    }
+}
+
 async fn list_tenants(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "users.view")?;
     let st = &ctx.store.lock().await.state;
+    platform_only(st, &actor)?;
     Ok(Json(json!(st.tenants.values().collect::<Vec<_>>())))
 }
 
@@ -3092,6 +3118,7 @@ async fn save_tenants(
     Json(mut ts): Json<Vec<super::store::TenantRec>>,
 ) -> ApiResult {
     need(&actor, "users.edit")?;
+    platform_only(&ctx.store.lock().await.state, &actor)?;
     if ts.len() > 50 {
         return Err(ApiError::bad("at most 50 tenants"));
     }
@@ -3537,10 +3564,23 @@ async fn audit(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
 // users / settings
 // ---------------------------------------------------------------------------
 
+/// An existing user record that belongs to no tenant or to another tenant.
+fn existing_is_other(st: &AdminState, id: &str, mine: &str) -> bool {
+    st.users
+        .get(id)
+        .is_some_and(|e| e.tenant.as_deref() != Some(mine))
+}
+
 async fn list_users(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "users.view")?;
     let st = &ctx.store.lock().await.state;
-    Ok(Json(json!(st.users.values().collect::<Vec<_>>())))
+    // a tenant-scoped admin sees its own tenant's staff only
+    let mine = actor_tenant(st, &actor);
+    Ok(Json(json!(st
+        .users
+        .values()
+        .filter(|u| mine.is_none() || u.tenant == mine)
+        .collect::<Vec<_>>())))
 }
 
 async fn save_user(
@@ -3555,6 +3595,24 @@ async fn save_user(
     }
     if u.name.trim().chars().count() < 2 || !u.email.contains('@') {
         return Err(ApiError::bad("name (min 2) and a valid email are required"));
+    }
+    // a tenant-scoped admin may only manage users of its own tenant, and
+    // cannot move anyone (itself included) out of that tenant
+    {
+        let st = &ctx.store.lock().await.state;
+        if let Some(mine) = actor_tenant(st, &actor) {
+            let existing = st.users.get(&id).and_then(|e| e.tenant.clone());
+            if u.tenant.as_deref() != Some(mine.as_str())
+                || existing.is_some_and(|t| t != mine)
+                || (st.users.contains_key(&id) && existing_is_other(st, &id, &mine))
+            {
+                return Err(ApiError::new(
+                    StatusCode::FORBIDDEN,
+                    "forbidden",
+                    "users of your own tenant only",
+                ));
+            }
+        }
     }
     let mut store = ctx.store.lock().await;
     store.append(&actor, AdminCmd::UserSaved { user: u.clone() })?;
@@ -4136,25 +4194,12 @@ async fn client_statement(
     // copied under a short lock (no `view_state` clone of the whole state).
     let (ops, profile, broker) = {
         let st = &ctx.store.lock().await.state;
-        let ops: Vec<(u64, Value)> = st
-            .ops
-            .values()
-            .filter(|o| {
-                o.account == login && o.status == OpStatus::Applied && o.kind != BalanceKind::Credit
-            })
-            .map(|o| (o.decided_at.unwrap_or(o.requested_at), o))
-            .filter(|(t, _)| *t >= from && *t < to)
-            .map(|(t, o)| {
-                let kind = if o.kind == BalanceKind::Deposit {
-                    "deposit"
-                } else {
-                    "withdraw"
-                };
-                (t, json!({ "at": views::iso(t), "kind": kind, "amount": o.amount, "reason": o.reason }))
-            })
-            .collect();
         let profile = st.profiles.get(&login).map(|p| p.name.clone());
-        (ops, profile, st.settings.broker_name.clone())
+        (
+            ops_cash(st, login, from, to),
+            profile,
+            st.settings.broker_name.clone(),
+        )
     };
     // Full deal-history scan: on the read replica, never the writer thread.
     let body = ctx
@@ -4171,7 +4216,28 @@ async fn client_statement(
 /// (commission of every deal in the period, opening side included), cash
 /// rows (admin `ops` plus the engine's own balance moves: copy fees, negative
 /// balance compensation), open positions and the current balance.
-fn statement_body(
+/// The account's applied deposits / withdrawals in [from, to) as statement
+/// cash rows (time, row), for [`statement_body`].
+pub(super) fn ops_cash(st: &AdminState, login: u64, from: u64, to: u64) -> Vec<(u64, Value)> {
+    st.ops
+        .values()
+        .filter(|o| o.account == login && o.status == OpStatus::Applied && o.kind != BalanceKind::Credit)
+        .map(|o| (o.decided_at.unwrap_or(o.requested_at), o))
+        .filter(|(t, _)| *t >= from && *t < to)
+        .map(|(t, o)| {
+            let kind = if o.kind == BalanceKind::Deposit {
+                "deposit"
+            } else {
+                "withdraw"
+            };
+            (t, json!({ "at": views::iso(t), "kind": kind, "amount": o.amount, "reason": o.reason }))
+        })
+        .collect()
+}
+
+/// Statement of `login` for `[from, to)`: the ONE body the terminal
+/// statement, the monthly e-mail and its console preview all use.
+pub(super) fn statement_body(
     e: &Engine,
     login: u64,
     from: u64,
