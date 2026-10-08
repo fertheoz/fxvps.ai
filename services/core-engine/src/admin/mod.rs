@@ -19,6 +19,7 @@ pub mod seed;
 pub mod statement;
 pub mod store;
 mod stream;
+pub mod usdt_watch;
 pub mod views;
 
 use crate::EngineHandle;
@@ -57,6 +58,8 @@ pub struct AdminConfig {
     pub names: Option<crate::api::AccountNames>,
     /// Statement mailer; `None`: from the environment ([`statement::Mailer::from_env`]).
     pub mailer: Option<Arc<statement::Mailer>>,
+    /// hazine.io payment links for USDT deposits (`HAZINE_PAYLINK_KEY`); `None`: manual.
+    pub hazine: Option<usdt_watch::Hazine>,
 }
 
 /// fix-gateway admin endpoint (`FIX_ADMIN_TOKEN` on the gateway side).
@@ -81,6 +84,7 @@ impl AdminConfig {
             agg: None,
             names: None,
             mailer: None,
+            hazine: None,
         }
     }
 
@@ -103,6 +107,7 @@ impl AdminConfig {
                 self.cors_origins = Some(list);
             }
         }
+        self.hazine = usdt_watch::Hazine::from_env();
         Ok(self)
     }
 }
@@ -130,6 +135,8 @@ pub struct AdminCtx {
     pub http: reqwest::Client,
     /// SMTP channel of the monthly statement e-mail; `None`: not configured.
     pub mailer: Option<Arc<statement::Mailer>>,
+    /// hazine.io payment links for USDT deposits (`usdt_watch`).
+    pub hazine: Option<usdt_watch::Hazine>,
 }
 
 impl AdminCtx {
@@ -382,10 +389,12 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
             .mailer
             .clone()
             .or_else(|| statement::Mailer::from_env().map(Arc::new)),
+        hazine: cfg.hazine.clone(),
     };
     stream::spawn_ticker(ctx.clone(), cfg.live_interval_ms);
     alerts::spawn(ctx.clone());
     statement::spawn(ctx.clone());
+    usdt_watch::spawn(ctx.clone());
     let legacy =
         crate::router(engine).layer(middleware::from_fn_with_state(ctx.clone(), legacy_guard));
     let mut app = routes::router()

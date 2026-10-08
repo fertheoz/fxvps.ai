@@ -1117,6 +1117,8 @@ async fn client_me(State(ctx): State<AdminCtx>, client: ClientActor) -> ApiResul
         "funding": funding,
         "documents": documents,
         "instructions": st.settings.funding,
+        // USDT deposits open a hazine.io payment card (no address to copy)
+        "cryptoCard": ctx.hazine.is_some(),
     })))
 }
 
@@ -1144,8 +1146,13 @@ async fn client_funding_request(
     if req.amount <= 0 {
         return Err(ApiError::bad("amount must be positive (minor units)"));
     }
+    // USDT deposits are paid on a hazine card when hazine is configured: no
+    // reference from the client, hazine finds the payment
+    let card = req.kind == FundingKind::Deposit
+        && req.method == FundingMethod::UsdtTrc20
+        && ctx.hazine.is_some();
     let details: String = req.details.trim().chars().take(300).collect();
-    if details.is_empty() {
+    if details.is_empty() && !card {
         return Err(ApiError::bad(
             "details are required (tx hash, sender, destination address or IBAN)",
         ));
@@ -1161,10 +1168,77 @@ async fn client_funding_request(
         })
         .await?
         .ok_or_else(|| ApiError::not_found("unknown account"))?;
+    // the card asks for USDT 1:1 with the amount in cents
+    if card && ccy != "USD" {
+        return Err(ApiError::bad(
+            "USDT deposits are available for USD accounts only",
+        ));
+    }
+    funding_gate(&ctx.store.lock().await.state, &req, login, balance, card)?;
+    // Card deposit: open the hazine link first (outside the store lock) and
+    // journal the request only once it exists, so a hazine outage or an
+    // aborted call never leaves a request the client cannot pay.
+    let link = match &ctx.hazine {
+        Some(hz) if card => Some(hz.open_link(&ctx.http, login, req.amount).await.map_err(
+            |e| {
+                tracing::warn!(account = login, error = %e, "hazine payment link failed");
+                ApiError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "unavailable",
+                    "crypto deposits are temporarily unavailable, please try again shortly",
+                )
+            },
+        )?),
+        _ => None,
+    };
     let mut store = ctx.store.lock().await;
-    let fi = store.state.settings.funding.clone();
+    // the lock was released during the hazine call
+    funding_gate(&store.state, &req, login, balance, card)?;
+    let fr = FundingRequest {
+        id: format!("fr-{}", store.next_seq()),
+        account: login,
+        kind: req.kind,
+        method: req.method,
+        amount: req.amount,
+        currency: ccy,
+        details,
+        requested_by: client.name.clone(),
+        requested_at: now_ns(),
+        status: FundingStatus::Requested,
+        decided_by: None,
+        decided_at: None,
+        note: None,
+        op_id: None,
+        expected_micro: link.as_ref().map(|l| l.micro),
+        tx_hash: None,
+        pay_id: link.as_ref().map(|l| l.id.clone()),
+        pay_url: link.map(|l| l.url),
+        received_micro: None,
+        paid_after_decision: false,
+        late_handled_by: None,
+    };
+    store.append(
+        &client_as_actor(&client),
+        AdminCmd::FundingRequested { req: fr.clone() },
+    )?;
+    drop(store);
+    ctx.notify(&["listFunding", "listAudit"]);
+    Ok(Json(json!(fr)))
+}
+
+/// Settings and limits a client funding request must pass.
+fn funding_gate(
+    st: &AdminState,
+    req: &ClientFundingReq,
+    login: u64,
+    balance: i64,
+    card: bool,
+) -> Result<(), ApiError> {
+    let fi = &st.settings.funding;
     match (req.kind, req.method) {
-        (FundingKind::Deposit, FundingMethod::UsdtTrc20) if fi.usdt_trc20_address.is_empty() => {
+        (FundingKind::Deposit, FundingMethod::UsdtTrc20)
+            if fi.usdt_trc20_address.is_empty() && !card =>
+        {
             return Err(ApiError::bad("crypto deposits are not enabled"))
         }
         (FundingKind::Deposit, FundingMethod::Bank) if fi.bank_details.is_empty() => {
@@ -1186,8 +1260,7 @@ async fn client_funding_request(
         }
         _ => {}
     }
-    let open = store
-        .state
+    let open = st
         .funding
         .values()
         .filter(|f| f.account == login && f.status == FundingStatus::Requested)
@@ -1195,29 +1268,7 @@ async fn client_funding_request(
     if open >= 5 {
         return Err(ApiError::bad("too many open requests"));
     }
-    let fr = FundingRequest {
-        id: format!("fr-{}", store.next_seq()),
-        account: login,
-        kind: req.kind,
-        method: req.method,
-        amount: req.amount,
-        currency: ccy,
-        details,
-        requested_by: client.name.clone(),
-        requested_at: now_ns(),
-        status: FundingStatus::Requested,
-        decided_by: None,
-        decided_at: None,
-        note: None,
-        op_id: None,
-    };
-    store.append(
-        &client_as_actor(&client),
-        AdminCmd::FundingRequested { req: fr.clone() },
-    )?;
-    drop(store);
-    ctx.notify(&["listFunding", "listAudit"]);
-    Ok(Json(json!(fr)))
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1551,7 +1602,7 @@ async fn funding_list(
 
 #[derive(Deserialize)]
 struct DecideReq {
-    /// "approve" | "reject" | "paid"
+    /// "approve" | "reject" | "paid" | "handled" (late USDT payment reviewed)
     decision: String,
     #[serde(default)]
     note: Option<String>,
@@ -1576,6 +1627,30 @@ async fn funding_decide(
         .get(&id)
         .cloned()
         .ok_or_else(|| ApiError::not_found("unknown funding request"))?;
+    if req.decision == "handled" {
+        // a USDT payment that arrived after the decision: staff say what was
+        // done with it (credited by hand, refunded, ...); clears the flag
+        need(&actor, "clients.edit")?;
+        if !super::usdt_watch::late_unhandled(&fr) {
+            return Err(ApiError::bad("no unreviewed late payment on this request"));
+        }
+        let Some(note) = note else {
+            return Err(ApiError::bad(
+                "a note is required (what was done with the payment)",
+            ));
+        };
+        store.append(
+            &actor,
+            AdminCmd::FundingLateHandled {
+                id: id.clone(),
+                note: Some(note),
+            },
+        )?;
+        let out = store.state.funding.get(&id).cloned();
+        drop(store);
+        ctx.notify(&["listFunding", "listAudit"]);
+        return Ok(Json(json!(out)));
+    }
     let (status, op_id) = match req.decision.as_str() {
         "reject" => {
             need(&actor, "clients.edit")?;
@@ -1614,7 +1689,9 @@ async fn funding_decide(
                 currency: fr.currency.clone(),
                 reason: format!(
                     "client request {} via {:?}: {}",
-                    fr.id, fr.method, fr.details
+                    fr.id,
+                    fr.method,
+                    super::usdt_watch::approval_note(&fr).unwrap_or_else(|| fr.details.clone())
                 ),
                 idempotency_key: format!("funding:{}", fr.id),
                 requested_by: actor.clone(),
@@ -1627,7 +1704,11 @@ async fn funding_decide(
                 new_credit: store.state.credit_of(account),
                 ib_days: None,
             };
-            if fr.amount >= store.state.settings.four_eyes_threshold {
+            // A USDT deposit hazine reported paid with exactly the tagged
+            // amount needs one internal approval: hazine's on-chain match is
+            // the second pair of eyes. Any other amount keeps four-eyes.
+            let hazine_confirmed = super::usdt_watch::exact_payment(&fr);
+            if fr.amount >= store.state.settings.four_eyes_threshold && !hazine_confirmed {
                 store.append(&actor, AdminCmd::BalanceQueued { op: op.clone() })?;
             } else {
                 let (b, c) = execute(&ctx, &store.state, &op).await?;
@@ -1638,7 +1719,11 @@ async fn funding_decide(
             }
             (FundingStatus::Approved, Some(op.id))
         }
-        _ => return Err(ApiError::bad("decision must be approve, reject or paid")),
+        _ => {
+            return Err(ApiError::bad(
+                "decision must be approve, reject, paid or handled",
+            ))
+        }
     };
     store.append(
         &actor,

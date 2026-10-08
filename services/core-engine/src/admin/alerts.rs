@@ -247,7 +247,34 @@ pub fn engine_conditions(
             });
         }
     }
+    out.extend(funding_conditions(admin));
     out
+}
+
+/// USDT that hazine bound to a request after staff had decided it (rejected,
+/// or approved before the money came): stays raised until someone marks the
+/// payment handled on the funding request.
+pub fn funding_conditions(admin: &super::store::AdminState) -> Vec<Condition> {
+    admin
+        .funding
+        .values()
+        .filter(|f| super::usdt_watch::late_unhandled(f))
+        .map(|f| Condition {
+            kind: "funding_late",
+            target: f.id.clone(),
+            severity: Severity::Warning,
+            title: "USDT paid after the request was decided".into(),
+            detail: format!(
+                "{} #{}: {} USDT arrived while the request was {:?}, tx {}",
+                f.id,
+                f.account,
+                f.received_micro
+                    .map_or_else(|| "?".into(), super::usdt_watch::fmt_micro),
+                f.status,
+                f.tx_hash.as_deref().unwrap_or("?")
+            ),
+        })
+        .collect()
 }
 
 /// Conditions from the FIX session table and the LP aggregator.
@@ -615,5 +642,48 @@ mod tests {
         assert_eq!(s["active"].as_array().unwrap().len(), 0);
         assert_eq!(s["recent"][0]["resolvedAt"], json!(3));
         assert_eq!(s["recent"][0]["acked"], json!(true));
+    }
+
+    #[test]
+    fn late_usdt_payment_stays_raised_until_handled() {
+        use super::super::store::{
+            AdminState, FundingKind, FundingMethod, FundingRequest, FundingStatus,
+        };
+        let mut f = FundingRequest {
+            id: "fr-3".into(),
+            account: 7,
+            kind: FundingKind::Deposit,
+            method: FundingMethod::UsdtTrc20,
+            amount: 10_000,
+            currency: "USD".into(),
+            details: String::new(),
+            requested_by: "c".into(),
+            requested_at: 1,
+            status: FundingStatus::Rejected,
+            decided_by: Some("staff".into()),
+            decided_at: Some(2),
+            note: None,
+            op_id: None,
+            expected_micro: Some(100_000_000),
+            tx_hash: Some("abc".into()),
+            pay_id: Some("p".into()),
+            pay_url: None,
+            received_micro: Some(100_000_000),
+            paid_after_decision: false,
+            late_handled_by: None,
+        };
+        let mut st = AdminState::default();
+        st.funding.insert(f.id.clone(), f.clone());
+        // paid while still open: the normal approval handles it
+        assert!(funding_conditions(&st).is_empty());
+        f.paid_after_decision = true;
+        st.funding.insert(f.id.clone(), f.clone());
+        let c = funding_conditions(&st);
+        assert_eq!(c.len(), 1);
+        assert_eq!((c[0].kind, c[0].target.as_str()), ("funding_late", "fr-3"));
+        assert!(c[0].detail.contains("100.000000 USDT"), "{}", c[0].detail);
+        f.late_handled_by = Some("staff".into());
+        st.funding.insert(f.id.clone(), f);
+        assert!(funding_conditions(&st).is_empty());
     }
 }

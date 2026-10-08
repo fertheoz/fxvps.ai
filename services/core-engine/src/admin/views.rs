@@ -493,7 +493,11 @@ pub fn funding(admin: &AdminState, status: Option<&str>) -> Value {
         .values()
         .filter(|f| match status {
             None | Some("all") | Some("") => true,
-            Some("open") => f.status == super::store::FundingStatus::Requested,
+            // open: waiting for a decision, or paid after it and not reviewed yet
+            Some("open") => {
+                f.status == super::store::FundingStatus::Requested
+                    || super::usdt_watch::late_unhandled(f)
+            }
             Some(s) => format!("{:?}", f.status).to_lowercase() == s,
         })
         .collect();

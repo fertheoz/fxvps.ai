@@ -277,6 +277,29 @@ pub struct FundingRequest {
     pub note: Option<String>,
     /// Balance operation created on approval.
     pub op_id: Option<String>,
+    /// USDT deposits: exact amount the hazine card asks for (micro-USDT).
+    #[serde(default)]
+    pub expected_micro: Option<i64>,
+    /// On-chain transfer hazine reported for this request (`usdt_watch`).
+    #[serde(default)]
+    pub tx_hash: Option<String>,
+    /// hazine.io payment link (id and the `/pay` card URL shown to the client).
+    #[serde(default)]
+    pub pay_id: Option<String>,
+    #[serde(default)]
+    pub pay_url: Option<String>,
+    /// What actually arrived on chain (hazine `receivedAmount`, micro-USDT).
+    /// hazine binds any transfer between 1x and 2x the invoice, so this can
+    /// differ from `expected_micro`; only an exact match skips the 4-eyes step.
+    #[serde(default)]
+    pub received_micro: Option<i64>,
+    /// hazine reported the payment after staff had already decided the
+    /// request (rejected, or approved before the money came).
+    #[serde(default)]
+    pub paid_after_decision: bool,
+    /// Staff member who reviewed such a late payment (clears the flag).
+    #[serde(default)]
+    pub late_handled_by: Option<String>,
 }
 
 /// Metadata of an uploaded KYC document (bytes live under `<data_dir>/kyc/<account>/`).
@@ -397,6 +420,28 @@ pub enum AdminCmd {
     /// Client self-service (stage 12).
     FundingRequested {
         req: FundingRequest,
+    },
+    /// A hazine payment link was opened for a USDT deposit request. New
+    /// requests carry the link in `FundingRequested`; kept for older journals.
+    FundingPayLink {
+        id: String,
+        pay_id: String,
+        pay_url: String,
+        micro: Option<i64>,
+    },
+    /// hazine reported the payment link paid (no money moves). `micro` is the
+    /// invoice amount hazine reports, `received` what actually arrived.
+    FundingMatched {
+        id: String,
+        tx: String,
+        micro: i64,
+        #[serde(default)]
+        received: Option<i64>,
+    },
+    /// Staff reviewed a payment that arrived after the request was decided.
+    FundingLateHandled {
+        id: String,
+        note: Option<String>,
     },
     FundingDecided {
         id: String,
@@ -896,9 +941,92 @@ impl AdminState {
                         }
                     ),
                     format!("#{}", req.account),
+                    match (&req.pay_id, req.expected_micro) {
+                        (Some(pay), Some(m)) => format!(
+                            "{} {} {} via {:?}: hazine {pay}, {} USDT",
+                            req.id,
+                            req.amount,
+                            req.currency,
+                            req.method,
+                            super::usdt_watch::fmt_micro(m)
+                        ),
+                        _ => format!(
+                            "{} {} {} via {:?}: {}",
+                            req.id, req.amount, req.currency, req.method, req.details
+                        ),
+                    },
+                )
+            }
+            AdminCmd::FundingPayLink {
+                id,
+                pay_id,
+                pay_url,
+                micro,
+            } => {
+                let acc = self.funding.get(id).map(|f| f.account).unwrap_or(0);
+                if let Some(f) = self.funding.get_mut(id) {
+                    f.pay_id = Some(pay_id.clone());
+                    f.pay_url = Some(pay_url.clone());
+                    f.expected_micro = *micro;
+                }
+                self.audit(
+                    r,
+                    "funding.paylink".into(),
+                    format!("#{acc}"),
+                    format!("{id}: hazine {pay_id}"),
+                )
+            }
+            AdminCmd::FundingMatched {
+                id,
+                tx,
+                micro,
+                received,
+            } => {
+                let mut acc = 0;
+                let mut late = None;
+                if let Some(f) = self.funding.get_mut(id) {
+                    acc = f.account;
+                    f.tx_hash = Some(tx.clone());
+                    f.received_micro = *received;
+                    // money that arrives after the decision needs a human look
+                    if f.status != FundingStatus::Requested {
+                        f.paid_after_decision = true;
+                        late = Some(f.status);
+                    }
+                }
+                let got = received.map_or("?".into(), super::usdt_watch::fmt_micro);
+                self.audit(
+                    r,
+                    "funding.onchain".into(),
+                    format!("#{acc}"),
                     format!(
-                        "{} {} {} via {:?}: {}",
-                        req.id, req.amount, req.currency, req.method, req.details
+                        "{id}: received {got} USDT for {} USDT, tx {tx}{}{}",
+                        super::usdt_watch::fmt_micro(*micro),
+                        if *received == Some(*micro) {
+                            ""
+                        } else {
+                            " (amount differs)"
+                        },
+                        late.map(|s| format!(", after the request was {s:?}"))
+                            .unwrap_or_default()
+                    ),
+                )
+            }
+            AdminCmd::FundingLateHandled { id, note } => {
+                let mut acc = 0;
+                if let Some(f) = self.funding.get_mut(id) {
+                    acc = f.account;
+                    f.late_handled_by = Some(r.actor.name.clone());
+                }
+                self.audit(
+                    r,
+                    "funding.late_handled".into(),
+                    format!("#{acc}"),
+                    format!(
+                        "{id}{}",
+                        note.as_deref()
+                            .map(|n| format!(" ({n})"))
+                            .unwrap_or_default()
                     ),
                 )
             }

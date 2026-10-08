@@ -32,6 +32,14 @@ export interface FundingRequest {
   requestedAt: number;
   status: 'requested' | 'approved' | 'rejected' | 'paid';
   note: string | null;
+  /** USDT deposits: the exact amount to send (micro-USDT), unique per open request. */
+  expectedMicro?: number | null;
+  /** Matching on-chain transfer, once seen. */
+  txHash?: string | null;
+  /** hazine.io payment card for USDT deposits. */
+  payUrl?: string | null;
+  /** The payment arrived after the request was decided (staff review it). */
+  paidAfterDecision?: boolean;
 }
 export interface KycDocument {
   id: string;
@@ -55,6 +63,8 @@ export interface ClientMe {
   funding: FundingRequest[];
   documents: KycDocument[];
   instructions: FundingInstructions;
+  /** USDT deposits (USD accounts) are paid on a hazine.io card opened with the request. */
+  cryptoCard?: boolean;
 }
 
 /** `wss://trade.fxvps.ai/ws` -> `https://trade.fxvps.ai/api/client`; null without a gateway. */

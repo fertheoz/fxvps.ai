@@ -55,15 +55,20 @@ export function AccountDialog() {
     );
   }
   const acc = me?.accounts.find((a) => a.externalId === account) ?? me?.accounts[0];
-  const minor = (v: string) => Math.round(Number(v.replace(',', '.')) * 100);
+  // USDT deposits go through the hazine card, for USD accounts only
+  const card = !!me?.cryptoCard && kind === 'deposit' && method === 'usdt_trc20';
+  const cardUsd = acc?.currency === 'USD';
+  const minor =(v: string) => Math.round(Number(v.replace(',', '.')) * 100);
   const submitFunding = async () => {
     if (!acc) return;
     const m = minor(amount);
     if (!Number.isFinite(m) || m <= 0) return toast('error', t('acct.badAmount'));
     setBusy(true);
     try {
-      await clientApi.requestFunding({ account: acc.externalId, kind, method, amount: m, details });
+      const fr = await clientApi.requestFunding({ account: acc.externalId, kind, method, amount: m, details: card ? '' : details });
       toast('ok', t('acct.requested'));
+      // USDT deposit: the hazine card takes the payment (wallet connect / QR)
+      if (fr.payUrl) window.open(fr.payUrl, '_blank', 'noopener');
       setAmount('');
       setDetails('');
       await reload();
@@ -124,11 +129,12 @@ export function AccountDialog() {
           <>
             <div className="grid gap-2 border border-line rounded p-2">
               <div className="text-[10px] uppercase text-muted">{t('acct.instructions')}</div>
-              {ins?.usdtTrc20Address ? (
+              {me.cryptoCard && <div><span className="text-muted">USDT (TRC-20): </span>{t(cardUsd ? 'acct.usdtCard' : 'acct.usdtUsdOnly')}</div>}
+              {!me.cryptoCard && ins?.usdtTrc20Address ? (
                 <div><span className="text-muted">USDT (TRC-20): </span><code className="select-all break-all">{ins.usdtTrc20Address}</code></div>
               ) : null}
               {ins?.bankDetails ? <pre className="whitespace-pre-wrap font-sans text-[12px]">{ins.bankDetails}</pre> : null}
-              {!ins?.usdtTrc20Address && !ins?.bankDetails && <div className="text-muted">{t('acct.noMethods')}</div>}
+              {!me.cryptoCard && !ins?.usdtTrc20Address && !ins?.bankDetails && <div className="text-muted">{t('acct.noMethods')}</div>}
               <div className="text-muted text-[11px]">{t('acct.depositHint')}</div>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -147,9 +153,12 @@ export function AccountDialog() {
               <label className="grid gap-1">{t('acct.amount')} ({acc.currency})
                 <input className={`${inp} num`} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="100.00" data-testid="acct-amount" />
               </label>
-              <label className="grid gap-1">{kind === 'deposit' ? t('acct.detailsDeposit') : t('acct.detailsWithdraw')}
-                <input className={inp} value={details} onChange={(e) => setDetails(e.target.value)} data-testid="acct-details" />
-              </label>
+              {/* the hazine card finds the payment itself: no reference to type */}
+              {!card && (
+                <label className="grid gap-1">{kind === 'deposit' ? t('acct.detailsDeposit') : t('acct.detailsWithdraw')}
+                  <input className={inp} value={details} onChange={(e) => setDetails(e.target.value)} data-testid="acct-details" />
+                </label>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <button className="px-3 h-8 rounded bg-accent text-white disabled:opacity-40 text-[12px]" disabled={busy} onClick={() => void submitFunding()} data-testid="acct-submit">{t('acct.submit')}</button>
@@ -159,9 +168,27 @@ export function AccountDialog() {
               <div className="text-[10px] uppercase text-muted mb-1">{t('acct.history')}</div>
               {me.funding.length === 0 && <div className="text-muted">{t('tb.empty')}</div>}
               {me.funding.slice().sort((a, b) => b.requestedAt - a.requestedAt).map((f) => (
-                <div key={f.id} className="flex items-center justify-between gap-2 border-t border-line/60 py-1">
+                <div key={f.id}>
+                <div className="flex items-center justify-between gap-2 border-t border-line/60 py-1">
                   <span>{f.id} · {t(f.kind === 'deposit' ? 'acct.deposit' : 'acct.withdraw')} · <span className="num">{formatMoney(f.amount)} {f.currency}</span> · {f.method === 'usdt_trc20' ? 'USDT' : t('acct.bank')}</span>
                   <span className={f.status === 'rejected' ? 'text-down' : f.status === 'requested' ? 'text-muted' : 'text-up'}>{t(`acct.status.${f.status}`)}{f.note ? ` · ${f.note}` : ''}</span>
+                </div>
+                {f.status === 'requested' && f.expectedMicro && (
+                  <div className="text-[11px] pb-1" data-testid={`usdt-exact-${f.id}`}>
+                    {f.txHash ? (
+                      <span className="text-up">{t('acct.usdtSeen')}</span>
+                    ) : f.payUrl ? (
+                      <a className="text-accent underline" href={f.payUrl} target="_blank" rel="noopener noreferrer" data-testid={`usdt-pay-${f.id}`}>
+                        {t('acct.usdtPay')} · {(f.expectedMicro / 1e6).toFixed(6)} USDT
+                      </a>
+                    ) : (
+                      <>{t('acct.usdtExact')}: <code className="select-all num text-fg">{(f.expectedMicro / 1e6).toFixed(6)}</code> USDT</>
+                    )}
+                  </div>
+                )}
+                {f.status !== 'requested' && f.paidAfterDecision && (
+                  <div className="text-[11px] pb-1 text-up" data-testid={`usdt-late-${f.id}`}>{t('acct.usdtLate')}</div>
+                )}
                 </div>
               ))}
             </div>

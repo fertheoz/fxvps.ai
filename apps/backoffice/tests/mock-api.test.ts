@@ -27,6 +27,19 @@ describe("mock AdminApi", () => {
     expect(last).toMatchObject({ action: "balance.deposit", actor: "S", target: `#${c!.login}` });
   });
 
+  it("keeps a USDT payment that arrived after the decision open until handled", async () => {
+    const api = createMockApi({ latencyMs: 0 });
+    const open = async () => (await api.listFunding("open")).map((f) => f.id);
+    // rejected, but hazine bound a payment to its card afterwards
+    expect(await open()).toContain("fr-3");
+    await expect(api.decideFunding("fr-3", "handled", undefined, admin)).rejects.toThrow(/note/);
+    const f = await api.decideFunding("fr-3", "handled", "refunded to sender", admin);
+    expect(f.lateHandledBy).toBe("A");
+    expect(f.status).toBe("rejected");
+    expect(await open()).not.toContain("fr-3");
+    await expect(api.decideFunding("fr-3", "handled", "again", admin)).rejects.toThrow(/no unreviewed/);
+  });
+
   it("is idempotent on the idempotency key", async () => {
     const api = createMockApi({ latencyMs: 0 });
     const [c] = await api.listClients();
