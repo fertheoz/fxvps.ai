@@ -83,19 +83,22 @@ Errors: `{"error": "<code>", "message": "..."}`.
 | `POST /v1/verify-email` `{token}` | — | |
 | `POST /v1/verify-email/resend` `{email}` | — | `202` |
 | `POST /v1/password/forgot` `{email}` | — | `202` |
-| `POST /v1/password/reset` `{token,password}` | — | clears lockout, revokes sessions |
+| `POST /v1/password/reset` `{token,password}` | — | clears lockout, revokes sessions and API keys |
 | `POST /v1/login` `{email,password,session?}` | — | tokens, or `{mfa_required, mfa_token, methods}` |
 | `POST /v1/login/2fa` `{mfa_token, code \| recovery_code, session?}` | — | tokens |
 | `POST /v1/passkeys/login/start` `{email}` → `{authentication_id, options}` | — | |
 | `POST /v1/passkeys/login/finish` `{authentication_id, credential, session?}` | — | tokens (`amr: hwk,mfa`) |
 | `POST /v1/token/refresh` `{refresh_token?}` | refresh | rotate |
 | `POST /v1/token/revoke` `{refresh_token?}` | refresh | logout (`204`) |
-| `GET /v1/me`, `GET /v1/accounts` | bearer | profile / trading accounts |
-| `POST /v1/sessions/revoke-all` | bearer | |
+| `GET /v1/me`, `GET /v1/accounts` | bearer or key | profile / trading accounts |
+| `POST /v1/sessions/revoke-all` → `{revoked, api_keys_revoked}` | bearer | revokes sessions and API keys |
 | `POST /v1/2fa/totp/enroll` → `{secret, otpauth_url}` | bearer | |
 | `POST /v1/2fa/totp/confirm` `{code}` → `{recovery_codes}` | bearer | 10 single-use codes, shown once |
 | `POST /v1/2fa/totp/disable` `{code}` | bearer | |
 | `POST /v1/passkeys/register/start` / `finish` | bearer | |
+| `GET /v1/api-keys`, `POST /v1/api-keys` `{name, scope, ips?}` | bearer | secret shown once; `ips` stored canonical |
+| `POST /v1/api-keys/revoke` `{id}` | bearer | |
+| `POST /v1/api-keys/token` (`X-API-Key: fxk_...`) | — | 15-minute token with `scope` and `amr: apikey` |
 | `GET /v1/admin/users?email=\|id=` | admin | |
 | `POST /v1/admin/users/roles` `{user_id\|email, roles}` | admin | |
 | `POST /v1/admin/accounts/link` `{user_id\|email, account_id}` | admin | idempotent; `409` if another user owns it |
@@ -104,10 +107,13 @@ Errors: `{"error": "<code>", "message": "..."}`.
 | `POST /v1/admin/keys/rotate` | admin | new in-memory signing key (old stays in JWKS) |
 
 `admin` = an access token with the `admin` role **or** `Authorization: Bearer $IDENTITY_SERVICE_TOKEN`.
+`bearer` = an access token from an interactive login; API-key tokens get
+`403 api_key_forbidden` there. `bearer or key` also accepts API-key tokens.
 
 ## Brute-force protection
 
-* Per-IP token bucket on all unauthenticated auth endpoints (`429 rate_limited`).
+* Per-IP token bucket on all unauthenticated auth endpoints, the API-key exchange
+  and the security-changing routes (`429 rate_limited`).
 * Per-account lockout: 5 failed passwords / second factors → `423 account_locked`
   for 15 minutes. Unknown emails get the same `401` and a dummy argon2 verification.
 * TOTP codes are single use (last accepted time step is stored); MFA step tokens

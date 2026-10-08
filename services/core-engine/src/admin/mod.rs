@@ -223,11 +223,25 @@ pub struct ClientActor {
     pub account_ids: Vec<String>,
     /// (external id, engine login) for the accounts known to this engine.
     pub logins: Vec<(String, u64)>,
-    /// Read-only API-key token: may look, never move money or positions.
-    pub read_only: bool,
+    /// API-key token (`read` or `trade`): may look here; orders go through
+    /// the client gateway. See [`ClientActor::interactive`].
+    pub api_key: bool,
 }
 
 impl ClientActor {
+    /// Refuses API-key tokens (`403`): funding requests, KYC documents, IB
+    /// links and copy subscriptions need an interactive login, so a leaked
+    /// bot key can never ask for a withdrawal.
+    pub fn interactive(&self) -> Result<(), ApiError> {
+        if self.api_key {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "api_key_forbidden",
+                "API keys cannot do this; sign in to the terminal",
+            ));
+        }
+        Ok(())
+    }
     pub fn login_of(&self, external: &str) -> Option<u64> {
         self.logins
             .iter()
@@ -264,7 +278,7 @@ impl FromRequestParts<AdminCtx> for ClientActor {
             sub: c.sub,
             account_ids: c.accounts,
             logins,
-            read_only: c.read_only,
+            api_key: c.api_key,
         })
     }
 }

@@ -1110,6 +1110,7 @@ async fn client_funding_request(
     client: ClientActor,
     Json(req): Json<ClientFundingReq>,
 ) -> ApiResult {
+    client.interactive()?;
     let login = client
         .login_of(&req.account)
         .ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "forbidden", "not your account"))?;
@@ -1208,6 +1209,7 @@ async fn client_kyc_upload(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> ApiResult {
+    client.interactive()?;
     let login = client
         .login_of(&q.account)
         .ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "forbidden", "not your account"))?;
@@ -3289,13 +3291,7 @@ async fn client_ib_link(
     client: ClientActor,
     Json(req): Json<IbLinkReq>,
 ) -> ApiResult {
-    if client.read_only {
-        return Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "read-only API key",
-        ));
-    }
+    client.interactive()?;
     let login = client
         .login_of(&req.account)
         .ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "forbidden", "not your account"))?;

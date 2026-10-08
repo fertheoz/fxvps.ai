@@ -188,6 +188,9 @@ pub trait Store: Send + Sync + 'static {
     async fn api_key_by_hash(&self, hash: &str) -> StoreResult<Option<ApiKey>>;
     /// Revokes the user's key; `false` when there is no such key.
     async fn revoke_api_key(&self, user_id: &str, id: &str) -> StoreResult<bool>;
+    /// Revokes every live key of the user (password reset, sign out
+    /// everywhere); returns how many were live.
+    async fn revoke_user_api_keys(&self, user_id: &str) -> StoreResult<u64>;
     async fn touch_api_key(&self, id: &str, ts: i64) -> StoreResult<()>;
     async fn audit_events(&self, user_id: Option<&str>, limit: i64)
         -> StoreResult<Vec<AuditEvent>>;
@@ -479,6 +482,20 @@ impl Store for MemoryStore {
             }
             None => Ok(false),
         }
+    }
+
+    async fn revoke_user_api_keys(&self, user_id: &str) -> StoreResult<u64> {
+        let mut n = 0;
+        for k in self
+            .lock()
+            .api_keys
+            .iter_mut()
+            .filter(|k| k.user_id == user_id && !k.revoked)
+        {
+            k.revoked = true;
+            n += 1;
+        }
+        Ok(n)
     }
 
     async fn touch_api_key(&self, id: &str, ts: i64) -> StoreResult<()> {
