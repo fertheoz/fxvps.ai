@@ -46,6 +46,11 @@ pub struct LpPolicy {
     /// Kill switch: `false` = no orders and no contribution to prices.
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// `false` = quote-only: contributes to prices and backs up the feed but
+    /// never takes an order (a simulator, a reference feed). With no LP left
+    /// to take an order the engine rejects it instead of filling it here.
+    #[serde(default = "yes")]
+    pub orders: bool,
     /// 1 = preferred. Also the tie-breaker of the other modes.
     #[serde(default = "one")]
     pub priority: u32,
@@ -71,6 +76,7 @@ impl LpPolicy {
         LpPolicy {
             name: name.into(),
             enabled: true,
+            orders: true,
             priority,
             min_lots: None,
             max_lots: None,
@@ -384,6 +390,7 @@ impl Aggregator {
         let cfg = self.config();
         let b = self.books.read().unwrap_or_else(|e| e.into_inner());
         let mut cands = eligible(&cfg, &b, symbol, Some(lots));
+        cands.retain(|(lp, _)| cfg.policy(lp).orders);
         if cands.is_empty() {
             return Vec::new();
         }
@@ -607,6 +614,26 @@ mod tests {
         let first = a.choose("EURUSD", Side::Buy, qty("1"))[0].clone();
         let second = a.choose("EURUSD", Side::Buy, qty("1"))[0].clone();
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn quote_only_lp_prices_but_never_takes_an_order() {
+        let mut sim = LpPolicy::new("SIM", 2);
+        sim.orders = false;
+        let a = Aggregator::new(AggConfig {
+            mode: AggMode::BestPrice,
+            lps: vec![LpPolicy::new("LMAX", 1), sim],
+            max_deviation_points: 0,
+            ..AggConfig::default()
+        });
+        // the simulator quotes first (a fresh process after a take-over)
+        a.update("SIM", "EURUSD", book("1.10005", "1.10025", "10"));
+        assert!(!a.merged("EURUSD").bids.is_empty());
+        // nobody may take the order: the engine rejects instead of filling here
+        assert!(a.choose("EURUSD", Side::Sell, qty("1")).is_empty());
+        a.update("LMAX", "EURUSD", book("1.10000", "1.10020", "5"));
+        assert_eq!(a.choose("EURUSD", Side::Sell, qty("1")), vec!["LMAX"]);
+        assert_eq!(a.choose("EURUSD", Side::Buy, qty("1")), vec!["LMAX"]);
     }
 
     #[test]

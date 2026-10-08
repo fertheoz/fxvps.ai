@@ -198,7 +198,7 @@ function LpConfigForm({ initial }: { initial: LpConfig }) {
 type PolicyDraft = LpPolicy & { symbolsText: string };
 
 const toDraft = (a: LpAggregation): PolicyDraft[] => a.lps.map((p) => ({
-  name: p.name, enabled: p.enabled, priority: p.priority,
+  name: p.name, enabled: p.enabled, orders: p.orders ?? true, priority: p.priority,
   minLots: p.minLots == null ? null : String(p.minLots), maxLots: p.maxLots == null ? null : String(p.maxLots),
   symbols: p.symbols, symbolsText: p.symbols.join(" "),
 }));
@@ -208,7 +208,7 @@ function AggregationCard() {
   const q = useApiQuery("getLpAggregation", [], { live: 5000 });
   if (q.isLoading) return <Card className="mt-4 p-4">{t("common.loading")}</Card>;
   if (q.error || !q.data) return <Card className="mt-4 p-4 text-sm text-muted-foreground" data-testid="lp-agg-none">{t("lp.aggNone")}</Card>;
-  return <AggregationForm key={JSON.stringify([q.data.mode, q.data.maxDeviationPoints, q.data.maxQuoteAgeMs, q.data.lps.map((p) => [p.name, p.enabled, p.priority, p.minLots, p.maxLots, p.symbols])])} data={q.data} />;
+  return <AggregationForm key={JSON.stringify([q.data.mode, q.data.maxDeviationPoints, q.data.maxQuoteAgeMs, q.data.lps.map((p) => [p.name, p.enabled, p.orders, p.priority, p.minLots, p.maxLots, p.symbols])])} data={q.data} />;
 }
 
 function AggregationForm({ data }: { data: LpAggregation }) {
@@ -249,7 +249,7 @@ function AggregationForm({ data }: { data: LpAggregation }) {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-xs text-muted-foreground">
-              <tr>{["LP", t("lp.enabled"), t("lp.priority"), t("lp.minLots"), t("lp.maxLots"), t("lp.symbols"), t("common.status"), t("lp.quoting"), t("lp.lastQuote"), ""].map((h, i) => <th key={i} className="whitespace-nowrap px-2 py-2 text-left font-medium">{h}</th>)}</tr>
+              <tr>{["LP", t("lp.enabled"), t("lp.takesOrders"), t("lp.priority"), t("lp.minLots"), t("lp.maxLots"), t("lp.symbols"), t("common.status"), t("lp.quoting"), t("lp.lastQuote"), ""].map((h, i) => <th key={i} className="whitespace-nowrap px-2 py-2 text-left font-medium">{h}</th>)}</tr>
             </thead>
             <tbody>
               {lps.map((p, i) => {
@@ -258,6 +258,7 @@ function AggregationForm({ data }: { data: LpAggregation }) {
                   <tr key={p.name} className="border-t border-border align-top" data-testid={`lp-agg-row-${p.name}`}>
                     <td className="px-2 py-2 font-medium">{p.name}</td>
                     <td className="px-2 py-2"><input type="checkbox" checked={p.enabled} onChange={(e) => upd(i, { enabled: e.target.checked })} disabled={!editable} aria-label={t("lp.enabled")} /></td>
+                    <td className="px-2 py-2"><input type="checkbox" checked={p.orders} onChange={(e) => upd(i, { orders: e.target.checked })} disabled={!editable} aria-label={t("lp.takesOrders")} title={t("lp.ordersHint")} data-testid={`lp-agg-orders-${p.name}`} /></td>
                     <td className="px-2 py-1"><Input type="number" min={1} max={1000} className="w-16" value={p.priority} onChange={(e) => upd(i, { priority: Math.max(1, Math.trunc(Number(e.target.value)) || 1) })} disabled={!editable} /></td>
                     <td className="px-2 py-1"><Input className="w-20" value={p.minLots ?? ""} placeholder="—" onChange={(e) => upd(i, { minLots: e.target.value || null })} disabled={!editable} /></td>
                     <td className="px-2 py-1"><Input className="w-20" value={p.maxLots ?? ""} placeholder="—" onChange={(e) => upd(i, { maxLots: e.target.value || null })} disabled={!editable} /></td>
@@ -283,7 +284,7 @@ function AggregationForm({ data }: { data: LpAggregation }) {
         {editable && (
           <div className="flex flex-wrap items-end gap-2">
             <TextField label={t("lp.lpName")} value={newLp} onChange={setNewLp} />
-            <Button variant="outline" disabled={!newLp.trim() || lps.some((p) => p.name === newLp.trim())} onClick={() => { setLps([...lps, { name: newLp.trim(), enabled: true, priority: lps.length + 1, minLots: null, maxLots: null, symbols: [], symbolsText: "" }]); setNewLp(""); }}>
+            <Button variant="outline" disabled={!newLp.trim() || lps.some((p) => p.name === newLp.trim())} onClick={() => { setLps([...lps, { name: newLp.trim(), enabled: true, orders: true, priority: lps.length + 1, minLots: null, maxLots: null, symbols: [], symbolsText: "" }]); setNewLp(""); }}>
               <Plus className="h-3 w-3" />{t("lp.addLp")}
             </Button>
             <Button className="ml-auto" onClick={save} disabled={mut.isPending} data-testid="lp-agg-save">{t("common.save")}</Button>

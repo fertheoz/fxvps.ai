@@ -86,8 +86,8 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     mode: "best_price",
     maxDeviationPoints: 300,
     lps: [
-      lpRuntime({ name: "LMAX", enabled: true, priority: 1, minLots: null, maxLots: null, symbols: [], quoting: 41, deviating: [], lastQuoteAt: new Date().toISOString(), mdUp: true, tradeUp: true }),
-      lpRuntime({ name: "SIM", enabled: true, priority: 2, minLots: 0.01, maxLots: 50, symbols: [], quoting: 5, deviating: [], lastQuoteAt: new Date().toISOString(), mdUp: true, tradeUp: true }),
+      lpRuntime({ name: "LMAX", enabled: true, orders: true, priority: 1, minLots: null, maxLots: null, symbols: [], quoting: 41, deviating: [], lastQuoteAt: new Date().toISOString(), mdUp: true, tradeUp: true }),
+      lpRuntime({ name: "SIM", enabled: true, orders: false, priority: 2, minLots: 0.01, maxLots: 50, symbols: [], quoting: 5, deviating: [], lastQuoteAt: new Date().toISOString(), mdUp: true, tradeUp: true }),
     ],
   };
   const redactLp = (c: LpConfig): LpConfig => ({

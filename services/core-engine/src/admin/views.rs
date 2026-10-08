@@ -1261,6 +1261,7 @@ pub fn lp_aggregation(
             json!({
                 "name": r.name,
                 "enabled": r.policy.enabled,
+                "orders": r.policy.orders,
                 "priority": r.policy.priority,
                 "minLots": r.policy.min_lots.map(qty_f),
                 "maxLots": r.policy.max_lots.map(qty_f),
