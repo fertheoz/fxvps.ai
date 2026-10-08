@@ -218,6 +218,11 @@ impl Engine {
             .filter(|p| p.account == account)
             .collect()
     }
+    /// Every open position in id order: one pass for whole-book reads
+    /// (`positions_of` per account would be accounts x positions).
+    pub fn positions(&self) -> impl Iterator<Item = &Position> {
+        self.st.positions.values()
+    }
     pub fn symbol_spec(&self, symbol: &str) -> Option<&SymbolSpec> {
         self.st.symbols.get(symbol)
     }

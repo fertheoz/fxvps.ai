@@ -51,6 +51,17 @@ fn load(ctx: &AdminCtx) -> Result<Vec<Institution>, ApiError> {
     }
 }
 
+/// Engine logins of the bridge institutions (their books are not client
+/// positions).
+pub(super) fn institution_logins(
+    ctx: &AdminCtx,
+) -> Result<std::collections::BTreeSet<u64>, ApiError> {
+    Ok(load(ctx)?
+        .iter()
+        .filter_map(|i| i.account.trim().parse().ok())
+        .collect())
+}
+
 fn save(ctx: &AdminCtx, list: &[Institution]) -> Result<(), ApiError> {
     std::fs::create_dir_all(dir(ctx)).map_err(|e| ApiError::internal(e.to_string()))?;
     let tmp = dir(ctx).join("kurumlar.json.tmp");

@@ -124,6 +124,13 @@ export interface CopyOverview {
 
 const json = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
+export interface Sentiment {
+  symbol: string;
+  /** Share of open lots that are long (0..100). */
+  longPct: number;
+  traders: number;
+}
+
 export interface IbPeriod {
   clients: number;
   deals: number;
@@ -165,6 +172,7 @@ export interface Statement {
 }
 
 export const clientApi = {
+  sentiment: () => call<Sentiment[]>('/sentiment'),
   ib: () => call<{ ibs: IbDashboard[] }>('/ib'),
   ibLink: (account: string, code: string) =>
     call<{ ok: boolean }>('/ib/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account, code }) }),
