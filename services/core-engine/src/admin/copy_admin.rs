@@ -273,17 +273,6 @@ pub async fn settle(
 
 // ------------------------------------------------------------- client (terminal)
 
-fn writable(client: &ClientActor) -> Result<(), ApiError> {
-    if client.read_only {
-        return Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "read-only API key",
-        ));
-    }
-    Ok(())
-}
-
 pub async fn client_list(State(ctx): State<AdminCtx>, client: ClientActor) -> ApiResult {
     let recs: Vec<StrategyRec> = ctx
         .view_state()
@@ -331,7 +320,7 @@ pub async fn client_subscribe(
     client: ClientActor,
     Json(r): Json<ClientSubscribeReq>,
 ) -> ApiResult {
-    writable(&client)?;
+    client.interactive()?;
     let login = client
         .login_of(&r.account)
         .ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "forbidden", "not your account"))?;
@@ -360,7 +349,7 @@ pub async fn client_unsubscribe(
     client: ClientActor,
     Json(r): Json<ClientUnsubscribeReq>,
 ) -> ApiResult {
-    writable(&client)?;
+    client.interactive()?;
     let login = client
         .login_of(&r.account)
         .ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "forbidden", "not your account"))?;

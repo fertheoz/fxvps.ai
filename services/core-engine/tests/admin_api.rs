@@ -83,6 +83,8 @@ impl T {
         let mut cfg = AdminConfig::new(dir);
         cfg.live_interval_ms = 50;
         cfg.cors_origins = Some(vec!["http://bo.test".into()]);
+        // client self-service (`/v1/client/*`): plain account numbers resolve
+        cfg.names = Some(core_engine::api::AccountNames::default());
         cfg.lp_status = Some(std::sync::Arc::new(std::sync::RwLock::new(vec![
             fix_gateway::SessionStatus {
                 kind: fix_gateway::SessionKind::Trading,
@@ -217,6 +219,25 @@ async fn next_frame(body: &mut Body) -> String {
 
 fn admin_t() -> String {
     token("alice", Role::Admin)
+}
+
+/// Identity client token for account 7: interactive (`scope: None`) or
+/// minted from an API key (`read` / `trade`, `amr: apikey`).
+fn client_t(scope: Option<&str>) -> String {
+    let mut c = json!({
+        "sub": "client-7", "exp": unix_now() + 600, "email": "c7@example.com",
+        "roles": ["client"], "accounts": ["7"], "amr": ["pwd"],
+    });
+    if let Some(s) = scope {
+        c["scope"] = json!(s);
+        c["amr"] = json!(["apikey"]);
+    }
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+        &c,
+        &jsonwebtoken::EncodingKey::from_secret(SECRET),
+    )
+    .unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1426,5 +1447,88 @@ async fn ib_multi_level_rebate_and_referral_code() {
     assert_eq!(sub["code"], "SUB-1");
     assert_eq!(sub["parent"], 9);
     assert_eq!(row(9)["overridePct"], 50);
+    t.stop();
+}
+
+/// API-key tokens (read or trade) reach /v1/client/* through the gateway. They
+/// may read, but a leaked bot key must never file a withdrawal to the
+/// attacker's address, upload KYC documents, join an IB or copy a strategy.
+#[tokio::test(flavor = "multi_thread")]
+async fn api_key_tokens_cannot_move_money_or_change_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), true).await;
+    let withdraw = json!({"account": "7", "kind": "withdraw", "method": "usdt_trc20",
+                          "amount": 100_000, "details": "TAttackerAddress"});
+    for scope in ["read", "trade"] {
+        let k = client_t(Some(scope));
+        let (s, v) = t.get("/v1/client/me", &k).await;
+        assert_eq!(s, StatusCode::OK, "{scope}: {v}");
+        assert_eq!(v["accounts"][0]["login"], 7);
+        for (path, body) in [
+            ("/v1/client/funding", withdraw.clone()),
+            ("/v1/client/ib/link", json!({"account": "7", "code": "ANY"})),
+            (
+                "/v1/client/copy/subscribe",
+                json!({"account": "7", "provider": 8}),
+            ),
+            (
+                "/v1/client/copy/unsubscribe",
+                json!({"account": "7", "provider": 8}),
+            ),
+        ] {
+            let (s, v) = t.req(Method::POST, path, Some(&k), Some(body), &[]).await;
+            assert_eq!(s, StatusCode::FORBIDDEN, "{scope} {path}: {v}");
+            assert_eq!(v["error"]["code"], "api_key_forbidden", "{scope} {path}");
+        }
+        let (s, _) = t
+            .req(
+                Method::POST,
+                "/v1/client/kyc/documents?account=7",
+                Some(&k),
+                None,
+                &[("content-type", "image/png"), ("x-doc-kind", "selfie")],
+            )
+            .await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{scope} kyc");
+        // and never a back-office route
+        assert_eq!(t.get("/v1/accounts", &k).await.0, StatusCode::UNAUTHORIZED);
+    }
+    let (_, me) = t.get("/v1/client/me", &client_t(None)).await;
+    assert_eq!(me["funding"], json!([]), "no request was filed");
+
+    // the interactive login of the same client passes the gate
+    let c = client_t(None);
+    let (s, v) = t
+        .req(
+            Method::POST,
+            "/v1/client/funding",
+            Some(&c),
+            Some(withdraw),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["requestedBy"], "c7@example.com");
+    // empty upload: refused for the file, not for the token
+    let (s, v) = t
+        .req(
+            Method::POST,
+            "/v1/client/kyc/documents?account=7",
+            Some(&c),
+            None,
+            &[("content-type", "image/png"), ("x-doc-kind", "selfie")],
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, _) = t
+        .req(
+            Method::POST,
+            "/v1/client/ib/link",
+            Some(&c),
+            Some(json!({"account": "7", "code": "NOPE"})),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
     t.stop();
 }

@@ -549,6 +549,17 @@ impl Store for PgStore {
         )
     }
 
+    async fn revoke_user_api_keys(&self, user_id: &str) -> StoreResult<u64> {
+        Ok(
+            sqlx::query("UPDATE api_keys SET revoked = TRUE WHERE user_id=$1 AND NOT revoked")
+                .bind(user_id)
+                .execute(&self.pool)
+                .await
+                .map_err(be)?
+                .rows_affected(),
+        )
+    }
+
     async fn touch_api_key(&self, id: &str, ts: i64) -> StoreResult<()> {
         sqlx::query("UPDATE api_keys SET last_used=$2 WHERE id=$1")
             .bind(id)

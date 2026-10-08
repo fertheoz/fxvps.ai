@@ -711,6 +711,10 @@ async fn handle(
             }))
         }
         Body::PrefsSet(r) => {
+            // A read-only key may look, never overwrite the owner's terminal state.
+            if !st.claims.may_trade() {
+                return out.error(&r.request_id, ErrorCode::Forbidden, "read-only API key");
+            }
             if !st.claims.may_access(&r.account_id) {
                 return out.error(
                     &r.request_id,

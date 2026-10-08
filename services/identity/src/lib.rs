@@ -62,6 +62,15 @@ pub struct AccessClaims {
     pub scope: Option<String>,
 }
 
+impl AccessClaims {
+    /// Token minted from an API key (`/v1/api-keys/token`): it carries a
+    /// `scope` claim and `amr: ["apikey"]`. Either marker is enough, so a token
+    /// missing one of them is still treated as a key token.
+    pub fn is_api_key(&self) -> bool {
+        self.scope.is_some() || self.amr.iter().any(|m| m == "apikey")
+    }
+}
+
 pub struct App {
     pub cfg: Config,
     pub store: Arc<dyn Store>,

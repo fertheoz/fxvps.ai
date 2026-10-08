@@ -96,6 +96,10 @@ impl Client {
     }
 
     async fn login(addr: &str, accounts: &[&str], hz: u32) -> Client {
+        Client::login_token(addr, issue_hs256(KEY, "u1", accounts, 60), hz).await
+    }
+
+    async fn login_token(addr: &str, token: String, hz: u32) -> Client {
         let mut c = Client::connect(addr).await;
         c.send(Body::Hello(Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -104,10 +108,7 @@ impl Client {
         }))
         .await;
         assert!(matches!(c.body().await, Body::Hello(_)));
-        c.send(Body::Auth(Auth {
-            token: issue_hs256(KEY, "u1", accounts, 60),
-        }))
-        .await;
+        c.send(Body::Auth(Auth { token })).await;
         let ok = c
             .until(|b| match b {
                 Body::AuthOk(a) => Some(a),
@@ -357,6 +358,67 @@ async fn order_commands_are_authorized_and_rate_limited() {
     assert_eq!(e.request_id, "o3");
     assert_eq!(e.code, ErrorCode::RateLimited as i32);
     assert_eq!(h.metrics.orders_rate_limited.get(), 1);
+}
+
+/// A `read` API key may read the terminal preferences but never overwrite
+/// them (the owner's chart drawings and settings).
+#[tokio::test]
+async fn read_only_key_cannot_write_preferences() {
+    let addr = server(hub(ClientGatewayConfig::default(), &[])).await;
+    let mut owner = Client::login(&addr, &["A1"], 0).await;
+    owner
+        .send(Body::PrefsSet(PrefsSet {
+            request_id: "own".into(),
+            account_id: "A1".into(),
+            json: r#"{"theme":"dark"}"#.into(),
+        }))
+        .await;
+    owner
+        .until(|b| matches!(b, Body::Ack(a) if a.request_id == "own").then_some(()))
+        .await;
+
+    let read_key = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+        &client_gateway::auth::Claims {
+            sub: "u1".into(),
+            exp: domain::now_ns() / 1_000_000_000 + 60,
+            accounts: vec!["A1".into()],
+            roles: vec!["client".into()],
+            amr: vec!["apikey".into()],
+            scope: Some("read".into()),
+        },
+        &jsonwebtoken::EncodingKey::from_secret(KEY),
+    )
+    .unwrap();
+    let mut bot = Client::login_token(&addr, read_key, 0).await;
+    bot.send(Body::PrefsSet(PrefsSet {
+        request_id: "p1".into(),
+        account_id: "A1".into(),
+        json: "{}".into(),
+    }))
+    .await;
+    let e = err(&mut bot).await;
+    assert_eq!(
+        (e.request_id.as_str(), e.code),
+        ("p1", ErrorCode::Forbidden as i32)
+    );
+    assert_eq!(e.message, "read-only API key");
+    // reading still works, and the stored preferences are unchanged
+    bot.send(Body::PrefsRequest(PrefsRequest {
+        request_id: "p2".into(),
+        account_id: "A1".into(),
+    }))
+    .await;
+    let p = bot
+        .until(|b| match b {
+            Body::Prefs(p) => Some(p),
+            _ => None,
+        })
+        .await;
+    assert_eq!(
+        (p.request_id.as_str(), p.json.as_str()),
+        ("p2", r#"{"theme":"dark"}"#)
+    );
 }
 
 #[tokio::test]

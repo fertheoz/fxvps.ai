@@ -216,8 +216,16 @@ pub struct ClientClaims {
     pub name: Option<String>,
     /// External account ids (`DEMO-1`, ...).
     pub accounts: Vec<String>,
-    /// Read-only API key (`scope: read`).
-    pub read_only: bool,
+    /// Token minted from an API key (`scope` claim or `amr: apikey`), `read`
+    /// or `trade` alike: keys are for market data and orders, never for
+    /// money movements, documents or account links.
+    pub api_key: bool,
+}
+
+impl RawClaims {
+    fn is_api_key(&self) -> bool {
+        self.scope.is_some() || self.amr.iter().any(|m| m == "apikey")
+    }
 }
 
 /// Back-office role of a token: `role`, else the most privileged back-office
@@ -653,11 +661,12 @@ impl Authenticator {
                     if c.accounts.is_empty() {
                         return Err(AuthError("token carries no trading accounts".into()));
                     }
+                    let api_key = c.is_api_key();
                     return Ok(ClientClaims {
                         sub: c.sub,
                         name: c.name.or(c.email),
                         accounts: c.accounts,
-                        read_only: c.scope.as_deref() == Some("read"),
+                        api_key,
                     });
                 }
                 Err(e) => last = AuthError(e.to_string()),
@@ -699,6 +708,13 @@ impl Authenticator {
             match decode::<RawClaims>(token, &k.key, &v) {
                 Ok(d) => {
                     let c = d.claims;
+                    // A key token carries the owner's e-mail: never let it map
+                    // to a back-office role (`email_roles`).
+                    if c.is_api_key() {
+                        return Err(AuthError(
+                            "API-key tokens have no back-office access".into(),
+                        ));
+                    }
                     let email = c.email.as_deref().map(str::to_lowercase);
                     let role = token_role(&c)
                         .or_else(|| {
@@ -887,5 +903,52 @@ mod tests {
                 .mfa_ok
         );
         assert!(needs_mfa("balance.deposit") && !needs_mfa("clients.view"));
+    }
+
+    #[test]
+    fn api_key_tokens_are_flagged_and_never_staff() {
+        #[derive(Serialize)]
+        struct C<'a> {
+            sub: &'a str,
+            exp: u64,
+            email: &'a str,
+            roles: Vec<&'a str>,
+            amr: Vec<&'a str>,
+            accounts: Vec<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            scope: Option<&'a str>,
+        }
+        let tok = |roles: Vec<&str>, amr: Vec<&str>, scope: Option<&str>| {
+            encode(
+                &Header::new(Algorithm::HS256),
+                &C {
+                    sub: "u",
+                    exp: unix_now() + 60,
+                    email: "boss@example.com",
+                    roles,
+                    amr,
+                    accounts: vec!["7"],
+                    scope,
+                },
+                &EncodingKey::from_secret(b"k"),
+            )
+            .unwrap()
+        };
+        let a = Authenticator::hs256(b"k")
+            .with_email_roles([("boss@example.com".to_string(), Role::Admin)]);
+        // interactive client login: not a key token; the e-mail maps to staff
+        let t = tok(vec!["client"], vec!["pwd"], None);
+        assert!(!a.verify_client(&t).unwrap().api_key);
+        assert_eq!(a.verify(&t).unwrap().role, Role::Admin);
+        // read and trade keys, and a key token missing either marker
+        for t in [
+            tok(vec!["client"], vec!["apikey"], Some("read")),
+            tok(vec!["client"], vec!["apikey"], Some("trade")),
+            tok(vec!["client"], vec![], Some("trade")),
+            tok(vec!["admin"], vec!["apikey"], None),
+        ] {
+            assert!(a.verify_client(&t).unwrap().api_key);
+            assert!(a.verify(&t).is_err());
+        }
     }
 }

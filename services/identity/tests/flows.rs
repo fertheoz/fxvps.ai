@@ -964,6 +964,27 @@ async fn store_conformance(s: Arc<dyn Store>) {
         ev.iter().map(|e| e.event.as_str()).collect::<Vec<_>>(),
         vec!["e2", "e1"]
     );
+
+    let key = |id: &str| ApiKey {
+        id: id.into(),
+        user_id: u.id.clone(),
+        name: id.into(),
+        hash: format!("hash-{id}"),
+        scope: "read".into(),
+        ips: vec!["2001:db8::1".into()],
+        created_at: 1,
+        last_used: None,
+        revoked: false,
+    };
+    for id in ["k1", "k2", "k3"] {
+        s.put_api_key(&key(id)).await.unwrap();
+    }
+    assert!(s.revoke_api_key(&u.id, "k1").await.unwrap());
+    // only the two still live count
+    assert_eq!(s.revoke_user_api_keys(&u.id).await.unwrap(), 2);
+    assert_eq!(s.revoke_user_api_keys(&u.id).await.unwrap(), 0);
+    assert!(s.api_keys(&u.id).await.unwrap().iter().all(|k| k.revoked));
+    assert!(s.api_key_by_hash("hash-k2").await.unwrap().unwrap().revoked);
 }
 
 #[tokio::test]
@@ -1181,4 +1202,218 @@ async fn api_keys_issue_scoped_tokens_and_revoke() {
         .post_auth("/v1/api-keys", &at, json!({"name": "x", "scope": "admin"}))
         .await;
     assert_eq!(r3.status, StatusCode::BAD_REQUEST);
+}
+
+/// Creates a key with an interactive token; returns the secret.
+async fn new_api_key(h: &H, at: &str, scope: &str, ips: Value) -> String {
+    let r = h
+        .post_auth(
+            "/v1/api-keys",
+            at,
+            json!({"name": scope, "scope": scope, "ips": ips}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    r.body["secret"].as_str().unwrap().to_string()
+}
+
+/// `/v1/api-keys/token` from `xff` (when the proxy is trusted).
+async fn key_exchange(h: &H, secret: &str, xff: Option<&str>) -> Resp {
+    let mut hdr = vec![("x-api-key", secret)];
+    if let Some(ip) = xff {
+        hdr.push(("x-forwarded-for", ip));
+    }
+    h.req("POST", "/v1/api-keys/token", None, &hdr).await
+}
+
+/// A leaked key, even a `read` one, must not reach the routes that change
+/// credentials or sessions: registering its own passkey or enrolling TOTP
+/// would turn it into a full interactive login (account takeover).
+#[tokio::test]
+async fn api_key_tokens_cannot_change_credentials_or_sessions() {
+    let mut cfg = test_config();
+    cfg.bootstrap_admins = vec!["owner@example.com".into()];
+    let h = H::with(Arc::new(MemoryStore::new()), cfg);
+    let email = "owner@example.com";
+    h.register_verified(email).await;
+    let tok = h.login(email).await;
+    let at = tok["access_token"].as_str().unwrap().to_string();
+    let rt = tok["refresh_token"].as_str().unwrap().to_string();
+    let bogus = json!({
+        "id": "AAAA", "rawId": "AAAA", "type": "public-key", "extensions": {},
+        "response": {"attestationObject": "AAAA", "clientDataJSON": "AAAA"}
+    });
+    for scope in ["read", "trade"] {
+        let secret = new_api_key(&h, &at, scope, json!([])).await;
+        let t = key_exchange(&h, &secret, None).await;
+        assert_eq!(t.status, StatusCode::OK, "{:?}", t.body);
+        let kt = t.body["access_token"].as_str().unwrap().to_string();
+        assert!(h.app.verify_access(&kt).unwrap().is_api_key());
+        // read-only account info stays available to bots
+        let me = h.get_auth("/v1/me", &kt).await;
+        assert_eq!(me.status, StatusCode::OK, "{:?}", me.body);
+        assert_eq!(me.body["email"], email);
+        assert_eq!(h.get_auth("/v1/accounts", &kt).await.status, StatusCode::OK);
+        for (path, body) in [
+            ("/v1/passkeys/register/start", json!({})),
+            (
+                "/v1/passkeys/register/finish",
+                json!({"registration_id": "x", "credential": bogus.clone()}),
+            ),
+            ("/v1/2fa/totp/enroll", json!({})),
+            ("/v1/2fa/totp/confirm", json!({"code": "123456"})),
+            ("/v1/2fa/totp/disable", json!({"code": "123456"})),
+            ("/v1/sessions/revoke-all", json!({})),
+            ("/v1/api-keys", json!({"name": "x", "scope": "trade"})),
+            ("/v1/api-keys/revoke", json!({"id": "x"})),
+        ] {
+            let r = h.post_auth(path, &kt, body).await;
+            assert_eq!(r.status, StatusCode::FORBIDDEN, "{scope} {path}");
+            assert_eq!(r.body["error"], "api_key_forbidden", "{scope} {path}");
+        }
+        for path in ["/v1/api-keys", "/v1/admin/audit"] {
+            let r = h.get_auth(path, &kt).await;
+            assert_eq!(r.status, StatusCode::FORBIDDEN, "{scope} {path}");
+        }
+    }
+    // nothing changed: no passkey, no TOTP, the owner's session still refreshes
+    let me = h.get_auth("/v1/me", &at).await;
+    assert_eq!(me.body["totp_enabled"], false);
+    assert_eq!(me.body["passkeys"], json!([]));
+    let r = h
+        .post("/v1/token/refresh", json!({"refresh_token": rt}))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+}
+
+/// A key minted from a stolen session must not survive the owner's recovery
+/// steps: password reset and "sign out everywhere" revoke every key.
+#[tokio::test]
+async fn password_reset_and_revoke_all_revoke_api_keys() {
+    let h = H::new();
+    let email = "rex@example.com";
+    h.register_verified(email).await;
+    let at = h.login(email).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let s1 = new_api_key(&h, &at, "trade", json!([])).await;
+    assert_eq!(key_exchange(&h, &s1, None).await.status, StatusCode::OK);
+    h.post("/v1/password/forgot", json!({"email": email})).await;
+    let t = h.link_token(email, "reset_password");
+    let r = h
+        .post("/v1/password/reset", json!({"token": t, "password": PW}))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    assert_eq!(
+        key_exchange(&h, &s1, None).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let at = h.login(email).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let s2 = new_api_key(&h, &at, "read", json!([])).await;
+    assert_eq!(key_exchange(&h, &s2, None).await.status, StatusCode::OK);
+    let r = h.post_auth("/v1/sessions/revoke-all", &at, json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    assert_eq!(r.body["api_keys_revoked"], 1);
+    assert_eq!(
+        key_exchange(&h, &s2, None).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    let keys = h.get_auth("/v1/api-keys", &at).await.body["keys"].clone();
+    let keys = keys.as_array().unwrap();
+    assert_eq!(keys.len(), 2);
+    assert!(keys.iter().all(|k| k["revoked"] == true), "{keys:?}");
+}
+
+#[tokio::test]
+async fn api_key_ip_allow_list_compares_addresses_not_strings() {
+    let mut cfg = test_config();
+    cfg.trust_proxy = true;
+    let store = Arc::new(MemoryStore::new());
+    let h = H::with(store.clone(), cfg);
+    let email = "v6@example.com";
+    h.register_verified(email).await;
+    let at = h.login(email).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = h
+        .post_auth(
+            "/v1/api-keys",
+            &at,
+            json!({"name": "v6", "scope": "read",
+                   "ips": ["2001:0DB8:0000:0000:0000:0000:0000:0001", "::ffff:203.0.113.7"]}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    // stored canonical
+    assert_eq!(r.body["ips"], json!(["2001:db8::1", "203.0.113.7"]));
+    let secret = r.body["secret"].as_str().unwrap().to_string();
+    for (xff, want) in [
+        ("2001:db8::1", StatusCode::OK),
+        ("203.0.113.7", StatusCode::OK),
+        ("::ffff:203.0.113.7", StatusCode::OK),
+        ("203.0.113.8", StatusCode::FORBIDDEN),
+    ] {
+        assert_eq!(
+            key_exchange(&h, &secret, Some(xff)).await.status,
+            want,
+            "{xff}"
+        );
+    }
+    // a key stored before canonicalisation still matches
+    let legacy = "fxk_legacy-key-stored-as-typed";
+    store
+        .put_api_key(&identity::store::ApiKey {
+            id: "legacy".into(),
+            user_id: h.app.verify_access(&at).unwrap().sub,
+            name: "legacy".into(),
+            hash: identity::crypto::sha256_hex(legacy),
+            scope: "read".into(),
+            ips: vec!["2001:DB8::1".into()],
+            created_at: 1,
+            last_used: None,
+            revoked: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        key_exchange(&h, legacy, Some("2001:db8::1")).await.status,
+        StatusCode::OK
+    );
+    // a malformed entry is refused at creation
+    let r = h
+        .post_auth(
+            "/v1/api-keys",
+            &at,
+            json!({"name": "bad", "scope": "read", "ips": ["300.1.1.1"]}),
+        )
+        .await;
+    assert_eq!(r.body["error"], "bad_ips");
+}
+
+/// The unauthenticated key exchange is behind the per-IP limiter (each try is
+/// a database lookup, and an IP-denied one writes an audit row).
+#[tokio::test]
+async fn api_key_exchange_is_rate_limited() {
+    let mut cfg = test_config();
+    cfg.ip_requests_per_minute = 3;
+    let h = H::with(Arc::new(MemoryStore::new()), cfg);
+    let mut codes = Vec::new();
+    for _ in 0..5 {
+        codes.push(key_exchange(&h, "fxk_nope", None).await.status);
+    }
+    assert_eq!(
+        codes
+            .iter()
+            .filter(|c| **c == StatusCode::TOO_MANY_REQUESTS)
+            .count(),
+        2,
+        "{codes:?}"
+    );
+    assert!(codes[..3].iter().all(|c| *c == StatusCode::UNAUTHORIZED));
 }

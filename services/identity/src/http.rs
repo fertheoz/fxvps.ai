@@ -145,20 +145,47 @@ impl FromRequestParts<Arc<App>> for ClientIp {
     }
 }
 
-/// A verified access token (`Authorization: Bearer`).
+/// A verified access token (`Authorization: Bearer`) from an interactive
+/// login. API-key tokens are refused with `403`: a leaked key, even a `read`
+/// one, must never reach the routes that change credentials or sessions
+/// (passkeys, TOTP, sign out everywhere, API keys), or it could register its
+/// own passkey and log in as the owner.
 pub struct Authed(pub AccessClaims);
+
+/// Like [`Authed`], but API-key tokens are accepted too. Only for read-only
+/// account info (`/v1/me`, `/v1/accounts`).
+pub struct AnyAuthed(pub AccessClaims);
 
 fn bearer(h: &HeaderMap) -> Option<&str> {
     h.get(AUTHORIZATION)?.to_str().ok()?.strip_prefix("Bearer ")
 }
 
-impl FromRequestParts<Arc<App>> for Authed {
+fn api_key_refused() -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        "api_key_forbidden",
+        "API-key tokens cannot use this endpoint",
+    )
+}
+
+impl FromRequestParts<Arc<App>> for AnyAuthed {
     type Rejection = ApiError;
     async fn from_request_parts(p: &mut Parts, app: &Arc<App>) -> ApiResult<Self> {
         let t = bearer(&p.headers).ok_or_else(ApiError::unauthorized)?;
         app.verify_access(t)
-            .map(Authed)
+            .map(AnyAuthed)
             .ok_or_else(ApiError::unauthorized)
+    }
+}
+
+impl FromRequestParts<Arc<App>> for Authed {
+    type Rejection = ApiError;
+    async fn from_request_parts(p: &mut Parts, app: &Arc<App>) -> ApiResult<Self> {
+        let AnyAuthed(c) = AnyAuthed::from_request_parts(p, app).await?;
+        if c.is_api_key() {
+            return Err(api_key_refused());
+        }
+        Ok(Authed(c))
     }
 }
 
@@ -180,6 +207,9 @@ impl FromRequestParts<Arc<App>> for Admin {
             }
         }
         let c = app.verify_access(t).ok_or_else(ApiError::unauthorized)?;
+        if c.is_api_key() {
+            return Err(api_key_refused());
+        }
         if !c.roles.iter().any(|r| r == "admin") {
             return Err(ApiError::forbidden());
         }
@@ -236,8 +266,9 @@ pub fn router(app: Arc<App>) -> Router {
             app.clone(),
             rate_limit,
         ));
-    // Authenticated routes that change security state or are worth guessing
-    // (TOTP codes, admin): same per-IP limiter as the login routes.
+    // Authenticated routes that change security state, and credentials worth
+    // guessing (TOTP codes, API keys, admin): same per-IP limiter as the login
+    // routes, without the refresh-cookie mapping (bots send no cookie or Origin).
     let sensitive = Router::new()
         .route("/v1/sessions/revoke-all", post(revoke_all))
         .route("/v1/2fa/totp/enroll", post(totp_enroll))
@@ -248,6 +279,9 @@ pub fn router(app: Arc<App>) -> Router {
             "/v1/passkeys/register/finish",
             post(passkey_register_finish),
         )
+        .route("/v1/api-keys", get(api_keys_list).post(api_key_create))
+        .route("/v1/api-keys/revoke", post(api_key_revoke))
+        .route("/v1/api-keys/token", post(api_key_token))
         .route("/v1/admin/users", get(admin_user))
         .route("/v1/admin/users/roles", post(admin_set_roles))
         .route("/v1/admin/accounts/link", post(admin_link))
@@ -264,9 +298,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/.well-known/openid-configuration", get(discovery))
         .route("/v1/me", get(me))
         .route("/v1/accounts", get(my_accounts))
-        .route("/v1/api-keys", get(api_keys_list).post(api_key_create))
-        .route("/v1/api-keys/revoke", post(api_key_revoke))
-        .route("/v1/api-keys/token", post(api_key_token))
         .merge(sensitive)
         .merge(limited)
         .layer(cors)
@@ -649,20 +680,23 @@ async fn revoke(
     Ok(r)
 }
 
+/// Signs out every session and revokes every API key: a key minted from a
+/// stolen session must not outlive "sign out everywhere".
 async fn revoke_all(
     State(app): State<Arc<App>>,
     ClientIp(ip): ClientIp,
     Authed(c): Authed,
 ) -> ApiResult<Json<Value>> {
     let n = app.store.revoke_user_sessions(&c.sub).await?;
+    let k = app.store.revoke_user_api_keys(&c.sub).await?;
     app.audit(
         Some(&c.sub),
         "sessions_revoked",
         ip.as_deref(),
-        &format!("{n} sessions"),
+        &format!("{n} sessions, {k} API keys"),
     )
     .await;
-    Ok(Json(json!({ "revoked": n })))
+    Ok(Json(json!({ "revoked": n, "api_keys_revoked": k })))
 }
 
 // ---------------------------------------------------------------- registration
@@ -869,7 +903,7 @@ struct ResetReq {
     password: String,
 }
 
-/// Sets a new password, clears lockout and revokes every session.
+/// Sets a new password, clears lockout and revokes every session and API key.
 async fn reset_password(
     State(app): State<Arc<App>>,
     ClientIp(ip): ClientIp,
@@ -894,11 +928,12 @@ async fn reset_password(
     u.email_verified = true;
     app.store.update_user(&u).await?;
     let n = app.store.revoke_user_sessions(&u.id).await?;
+    let k = app.store.revoke_user_api_keys(&u.id).await?;
     app.audit(
         Some(&u.id),
         "password_reset",
         ip.as_deref(),
-        &format!("{n} sessions revoked"),
+        &format!("{n} sessions, {k} API keys revoked"),
     )
     .await;
     Ok(Json(json!({ "status": "password_changed" })))
@@ -1113,7 +1148,7 @@ async fn login_2fa(
 
 // ---------------------------------------------------------------- account
 
-async fn me(State(app): State<Arc<App>>, Authed(c): Authed) -> ApiResult<Json<Value>> {
+async fn me(State(app): State<Arc<App>>, AnyAuthed(c): AnyAuthed) -> ApiResult<Json<Value>> {
     let u = app
         .store
         .user_by_id(&c.sub)
@@ -1140,7 +1175,10 @@ async fn me(State(app): State<Arc<App>>, Authed(c): Authed) -> ApiResult<Json<Va
     })))
 }
 
-async fn my_accounts(State(app): State<Arc<App>>, Authed(c): Authed) -> ApiResult<Json<Value>> {
+async fn my_accounts(
+    State(app): State<Arc<App>>,
+    AnyAuthed(c): AnyAuthed,
+) -> ApiResult<Json<Value>> {
     Ok(Json(
         json!({ "accounts": app.store.accounts(&c.sub).await? }),
     ))
@@ -1672,10 +1710,30 @@ fn api_key_json(k: &ApiKey) -> Value {
             "created_at": k.created_at, "last_used": k.last_used, "revoked": k.revoked })
 }
 
-async fn api_keys_list(State(app): State<Arc<App>>, Authed(c): Authed) -> ApiResult<Json<Value>> {
-    if c.scope.is_some() {
-        return Err(ApiError::forbidden());
+/// Canonical form of an allow-list entry or a client address: IPv4-mapped
+/// IPv6 (`::ffff:a.b.c.d`) becomes IPv4, IPv6 is compressed lower case.
+fn canonical_ip(s: &str) -> Option<std::net::IpAddr> {
+    s.trim()
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .map(|ip| ip.to_canonical())
+}
+
+/// Whether a key with allow list `allow` (empty = any address) may be used
+/// from `ip`. Compares parsed addresses, not strings, so `2001:DB8::1`,
+/// its expanded form and keys stored before canonicalisation all match.
+fn ip_allowed(allow: &[String], ip: Option<&str>) -> bool {
+    if allow.is_empty() {
+        return true;
     }
+    let Some(ip) = ip.and_then(canonical_ip) else {
+        return false;
+    };
+    allow.iter().any(|a| canonical_ip(a) == Some(ip))
+}
+
+/// API-key tokens never get here ([`Authed`] refuses them).
+async fn api_keys_list(State(app): State<Arc<App>>, Authed(c): Authed) -> ApiResult<Json<Value>> {
     let keys: Vec<Value> = app
         .store
         .api_keys(&c.sub)
@@ -1695,16 +1753,14 @@ struct NewApiKey {
 }
 
 /// Creates a key; the secret is returned once and only its hash is stored.
-/// API-key tokens cannot create keys (no privilege escalation by key).
+/// API-key tokens cannot create keys (no privilege escalation by key):
+/// [`Authed`] refuses them. Allow-list entries are stored canonical.
 async fn api_key_create(
     State(app): State<Arc<App>>,
     ClientIp(ip): ClientIp,
     Authed(c): Authed,
     Json(b): Json<NewApiKey>,
 ) -> ApiResult<Json<Value>> {
-    if c.scope.is_some() {
-        return Err(ApiError::forbidden());
-    }
     if !matches!(b.scope.as_str(), "read" | "trade") {
         return Err(ApiError::bad("bad_scope", "scope must be read or trade"));
     }
@@ -1712,12 +1768,13 @@ async fn api_key_create(
     if name.is_empty() || name.len() > 64 {
         return Err(ApiError::bad("bad_name", "name 1..64 characters"));
     }
-    if b.ips.len() > 20 || b.ips.iter().any(|i| i.parse::<std::net::IpAddr>().is_err()) {
-        return Err(ApiError::bad(
-            "bad_ips",
-            "ips must be up to 20 IP addresses",
-        ));
-    }
+    let ips = b
+        .ips
+        .iter()
+        .map(|i| canonical_ip(i).map(|ip| ip.to_string()))
+        .collect::<Option<Vec<String>>>()
+        .filter(|v| v.len() <= 20)
+        .ok_or_else(|| ApiError::bad("bad_ips", "ips must be up to 20 IP addresses"))?;
     let live = app
         .store
         .api_keys(&c.sub)
@@ -1735,7 +1792,7 @@ async fn api_key_create(
         name: name.into(),
         hash: sha256_hex(&secret),
         scope: b.scope,
-        ips: b.ips,
+        ips,
         created_at: now(),
         last_used: None,
         revoked: false,
@@ -1764,9 +1821,6 @@ async fn api_key_revoke(
     Authed(c): Authed,
     Json(b): Json<RevokeApiKey>,
 ) -> ApiResult<Json<Value>> {
-    if c.scope.is_some() {
-        return Err(ApiError::forbidden());
-    }
     if !app.store.revoke_api_key(&c.sub, &b.id).await? {
         return Err(StoreError::NotFound.into());
     }
@@ -1775,7 +1829,8 @@ async fn api_key_revoke(
     Ok(Json(json!({ "ok": true })))
 }
 
-/// `X-API-Key: fxk_...` -> short-lived access token (client role only, scope claim).
+/// `X-API-Key: fxk_...` -> short-lived access token (client role only, scope
+/// claim). Behind the per-IP limiter: every attempt is a database lookup.
 async fn api_key_token(
     State(app): State<Arc<App>>,
     ClientIp(ip): ClientIp,
@@ -1792,7 +1847,7 @@ async fn api_key_token(
         .await?
         .filter(|k| !k.revoked)
         .ok_or_else(ApiError::unauthorized)?;
-    if !k.ips.is_empty() && !ip.as_deref().is_some_and(|i| k.ips.iter().any(|a| a == i)) {
+    if !ip_allowed(&k.ips, ip.as_deref()) {
         app.audit(Some(&k.user_id), "api_key_ip_denied", ip.as_deref(), &k.id)
             .await;
         return Err(ApiError::forbidden());
@@ -1840,4 +1895,35 @@ async fn api_key_token(
         HeaderValue::from_static("no-store"),
     );
     Ok(r)
+}
+
+#[cfg(test)]
+mod ip_allow_tests {
+    use super::ip_allowed;
+
+    fn list(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn compares_parsed_addresses() {
+        // empty list: any address, even an unknown one
+        assert!(ip_allowed(&[], None));
+        assert!(!ip_allowed(&list(&["203.0.113.7"]), None));
+        // IPv6 spelled differently than the client address renders
+        for entry in ["2001:DB8::1", "2001:0db8:0000:0000:0000:0000:0000:0001"] {
+            assert!(ip_allowed(&list(&[entry]), Some("2001:db8::1")), "{entry}");
+        }
+        // IPv4-mapped client address matches a plain IPv4 entry and back
+        assert!(ip_allowed(
+            &list(&["203.0.113.7"]),
+            Some("::ffff:203.0.113.7")
+        ));
+        assert!(ip_allowed(
+            &list(&["::ffff:203.0.113.7"]),
+            Some("203.0.113.7")
+        ));
+        assert!(!ip_allowed(&list(&["203.0.113.7"]), Some("203.0.113.8")));
+        assert!(!ip_allowed(&list(&["not-an-ip"]), Some("203.0.113.7")));
+    }
 }
