@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use client_proto::{
@@ -18,7 +19,7 @@ use domain::{Fixed, Side};
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use tokio::sync::broadcast;
 
-use crate::auth::Authenticator;
+use crate::auth::{Authenticator, Claims};
 use crate::candles::{mid, CandleStore};
 use crate::config::ClientGatewayConfig;
 use crate::metrics::Metrics;
@@ -109,6 +110,11 @@ pub struct Hub {
     /// Group whose quotes feed the candle store (mid is markup-neutral).
     candle_group: Option<String>,
     limiter: DefaultKeyedRateLimiter<String>,
+    /// REST requests per API key / login session ([`Hub::allow_rest`]).
+    rest_limiter: DefaultKeyedRateLimiter<String>,
+    /// REST checks since start; every few thousand, idle keys are dropped
+    /// (session ids keep coming, unlike accounts).
+    rest_checks: AtomicU64,
 }
 
 /// Command validation / routing failure, mapped to a protocol `Error`.
@@ -118,6 +124,12 @@ pub struct CmdError(pub ErrorCode, pub String);
 impl CmdError {
     fn new(code: ErrorCode, msg: impl Into<String>) -> Self {
         CmdError(code, msg.into())
+    }
+
+    /// The engine already holds an order with this client order id (account
+    /// scoped): a retried request, answered from the stored order.
+    pub fn is_duplicate_order(&self) -> bool {
+        self.0 == ErrorCode::BadRequest && self.1.contains("duplicate client order id")
     }
 }
 
@@ -353,6 +365,8 @@ impl Hub {
         let (accounts, _) = broadcast::channel(4096);
         let rate = NonZeroU32::new(cfg.orders_per_second).unwrap_or(NonZeroU32::MIN);
         let burst = NonZeroU32::new(cfg.order_burst).unwrap_or(NonZeroU32::MIN);
+        let rest_rate = NonZeroU32::new(cfg.rest_requests_per_second).unwrap_or(NonZeroU32::MIN);
+        let rest_burst = NonZeroU32::new(cfg.rest_burst).unwrap_or(NonZeroU32::MIN);
         let symbols: BTreeMap<String, String> = symbols
             .into_iter()
             .map(|s| (client_symbol(&s), s))
@@ -368,6 +382,8 @@ impl Hub {
             prefs: Mutex::new(HashMap::new()),
             prefs_path: Mutex::new(None),
             limiter: RateLimiter::keyed(Quota::per_second(rate).allow_burst(burst)),
+            rest_limiter: RateLimiter::keyed(Quota::per_second(rest_rate).allow_burst(rest_burst)),
+            rest_checks: AtomicU64::new(0),
             symbols,
             candle_group: core.as_ref().and_then(|c| c.groups().into_iter().next()),
             core,
@@ -574,6 +590,56 @@ impl Hub {
         ok
     }
 
+    /// The one gate every order command passes, WebSocket and REST alike:
+    /// trading scope of the token (read-only API keys never trade), the
+    /// account claim, then the per-account order rate limit.
+    pub fn authorize_trade(&self, claims: &Claims, account_id: &str) -> Result<(), CmdError> {
+        if !claims.may_trade() {
+            return Err(CmdError::new(ErrorCode::Forbidden, "read-only API key"));
+        }
+        if !claims.may_access(account_id) {
+            return Err(CmdError::new(
+                ErrorCode::Forbidden,
+                "account not authorized",
+            ));
+        }
+        if !self.allow_order(account_id) {
+            return Err(CmdError::new(
+                ErrorCode::RateLimited,
+                "order rate limit exceeded",
+            ));
+        }
+        Ok(())
+    }
+
+    /// REST request rate limit per API key (identity `sid` = `apikey:<id>`)
+    /// or, for interactive tokens, per session / subject. `true` = allowed.
+    pub fn allow_rest(&self, claims: &Claims) -> bool {
+        if self.rest_checks.fetch_add(1, Ordering::Relaxed) % 4096 == 4095 {
+            self.rest_limiter.retain_recent();
+            self.rest_limiter.shrink_to_fit();
+        }
+        let key = claims.sid.as_deref().unwrap_or(&claims.sub).to_string();
+        let ok = self.rest_limiter.check_key(&key).is_ok();
+        if !ok {
+            self.metrics.rest_rate_limited.inc();
+        }
+        ok
+    }
+
+    /// First order of `account_id` matching `hit`: working orders first, then
+    /// the recent history (newest first).
+    pub async fn find_order(
+        &self,
+        account_id: &str,
+        hit: impl Fn(&OrderUpdate) -> bool,
+    ) -> Result<Option<OrderUpdate>, CmdError> {
+        if let Some(o) = self.orders(account_id).await?.into_iter().find(&hit) {
+            return Ok(Some(o));
+        }
+        Ok(self.order_history(account_id).await?.into_iter().find(hit))
+    }
+
     /// Group of an account (quote visibility), if a core is attached.
     pub fn account_group(&self, account_id: &str) -> Option<String> {
         self.core.as_ref()?.account_group(account_id)
@@ -593,7 +659,8 @@ impl Hub {
             .map(|a| (account_info(&a), account_snapshot(&a)))
     }
 
-    pub async fn place_order(&self, o: NewOrder) -> Result<(), CmdError> {
+    /// Validates and places an order; returns the engine order id.
+    pub async fn place_order(&self, o: NewOrder) -> Result<u64, CmdError> {
         if !self.symbols.contains_key(&o.symbol) {
             return Err(CmdError::new(ErrorCode::UnknownSymbol, o.symbol.clone()));
         }
@@ -628,24 +695,25 @@ impl Hub {
         }
         let core = self.core.as_ref().ok_or_else(unavailable)?;
         self.metrics.orders_received.inc();
-        core.place_order(PlaceOrderRequest {
-            account: o.account_id,
-            client_order_id: o.request_id,
-            symbol: o.symbol,
-            side: o.side,
-            kind,
-            qty: o.qty,
-            limit_price: o.limit_price,
-            stop_price: o.stop_price,
-            sl: o.sl,
-            tp: o.tp,
-            trailing_distance: o.trailing_distance,
-            oco_group: o.oco_group,
-            expire_at_ns: o.expire_at_ns,
-            max_deviation_points: o.max_deviation_points,
-        })
-        .await?;
-        Ok(())
+        let ack = core
+            .place_order(PlaceOrderRequest {
+                account: o.account_id,
+                client_order_id: o.request_id,
+                symbol: o.symbol,
+                side: o.side,
+                kind,
+                qty: o.qty,
+                limit_price: o.limit_price,
+                stop_price: o.stop_price,
+                sl: o.sl,
+                tp: o.tp,
+                trailing_distance: o.trailing_distance,
+                oco_group: o.oco_group,
+                expire_at_ns: o.expire_at_ns,
+                max_deviation_points: o.max_deviation_points,
+            })
+            .await?;
+        Ok(ack.order_id)
     }
 
     pub async fn cancel_order(&self, account_id: &str, target: &str) -> Result<(), CmdError> {
@@ -678,22 +746,24 @@ impl Hub {
         Ok(core.modify_position(account_id, pid, protection).await?)
     }
 
+    /// Closes `qty` (all if `None`) of a position; returns the closing order id.
     pub async fn close_position(
         &self,
         account_id: &str,
         position_id: &str,
         qty: Option<Fixed>,
         request_id: &str,
-    ) -> Result<(), CmdError> {
+    ) -> Result<u64, CmdError> {
         let core = self.core.as_ref().ok_or_else(unavailable)?;
         let pid = parse_position_id(position_id)?;
         if qty.is_some_and(|q| !q.is_positive()) {
             return Err(CmdError::new(ErrorCode::BadRequest, "qty must be > 0"));
         }
         self.metrics.orders_received.inc();
-        core.close_position(account_id, pid, qty, request_id)
+        let ack = core
+            .close_position(account_id, pid, qty, request_id)
             .await?;
-        Ok(())
+        Ok(ack.order_id)
     }
 
     /// Working orders of an account (OrderUpdate shape).
@@ -927,6 +997,81 @@ mod tests {
         // Independent bucket per account.
         assert!(hub.allow_order("A2"));
         assert_eq!(hub.metrics.orders_rate_limited.get(), 7);
+    }
+
+    fn claims(scope: Option<&str>, sid: Option<&str>) -> Claims {
+        Claims {
+            sub: "u".into(),
+            exp: 0,
+            accounts: vec!["A1".into()],
+            roles: vec![],
+            amr: vec![],
+            scope: scope.map(str::to_string),
+            sid: sid.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn trade_gate_checks_scope_then_account_then_rate() {
+        let cfg = ClientGatewayConfig {
+            orders_per_second: 1,
+            order_burst: 1,
+            ..Default::default()
+        };
+        let hub = Hub::new(cfg, Authenticator::hs256(b"k"), Vec::new(), None);
+        let read = claims(Some("read"), None);
+        assert_eq!(
+            hub.authorize_trade(&read, "A1"),
+            Err(CmdError::new(ErrorCode::Forbidden, "read-only API key"))
+        );
+        let trade = claims(Some("trade"), None);
+        assert_eq!(
+            hub.authorize_trade(&trade, "B2"),
+            Err(CmdError::new(
+                ErrorCode::Forbidden,
+                "account not authorized"
+            ))
+        );
+        // The refusals above did not spend the account's order budget.
+        assert_eq!(hub.authorize_trade(&trade, "A1"), Ok(()));
+        assert_eq!(
+            hub.authorize_trade(&claims(None, None), "A1")
+                .unwrap_err()
+                .0,
+            ErrorCode::RateLimited
+        );
+    }
+
+    #[test]
+    fn rest_rate_limit_per_api_key() {
+        let cfg = ClientGatewayConfig {
+            rest_requests_per_second: 1,
+            rest_burst: 2,
+            ..Default::default()
+        };
+        let hub = Hub::new(cfg, Authenticator::hs256(b"k"), Vec::new(), None);
+        let k1 = claims(Some("read"), Some("apikey:k1"));
+        let k2 = claims(Some("read"), Some("apikey:k2"));
+        let login = claims(None, None);
+        assert_eq!((0..5).filter(|_| hub.allow_rest(&k1)).count(), 2);
+        // Another key of the same user, and the user's own login, are separate.
+        assert!(hub.allow_rest(&k2));
+        assert!(hub.allow_rest(&login));
+        assert_eq!(hub.metrics.rest_rate_limited.get(), 3);
+    }
+
+    #[test]
+    fn duplicate_order_errors_are_recognised() {
+        assert!(CmdError::from(CoreError::new(
+            CoreErrorCode::BadRequest,
+            "duplicate client order id"
+        ))
+        .is_duplicate_order());
+        assert!(
+            !CmdError::new(ErrorCode::OrderRejected, "duplicate client order id")
+                .is_duplicate_order()
+        );
+        assert!(!CmdError::new(ErrorCode::BadRequest, "qty must be > 0").is_duplicate_order());
     }
 
     #[tokio::test]

@@ -1,0 +1,703 @@
+openapi: 3.0.3
+info:
+  title: fxvps.ai Client REST API
+  version: "1.0.0"
+  description: |
+    Accounts, positions, orders, deal history and market data over HTTP, next
+    to the WebSocket protocol (`wss://trade.fxvps.ai/ws`). Both accept the
+    same bearer tokens: interactive logins and API-key tokens from
+    `POST https://id.fxvps.ai/v1/api-keys/token` (header `X-API-Key: fxk_...`).
+    Tokens with `scope: read` can read but never trade.
+
+    Prices and quantities are decimal strings (JSON numbers are accepted on
+    input). Quantities are base units: 1 lot = the symbol's `contract_size`.
+    Response times are nanoseconds since the Unix epoch (`*_ns`); time
+    parameters take Unix milliseconds or RFC 3339.
+
+    When the token holds exactly one trading account, `account` may be left
+    out everywhere. See `docs/api.md` for curl examples.
+servers:
+  - url: https://trade.fxvps.ai/api/v1
+security:
+  - bearer: []
+
+tags:
+  - name: accounts
+  - name: market data
+  - name: orders
+  - name: positions
+
+paths:
+  /accounts:
+    get:
+      tags: [accounts]
+      summary: Accounts of the token, with balance and margin
+      operationId: listAccounts
+      responses:
+        "200":
+          description: Accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accounts]
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: "#/components/schemas/Account" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /accounts/{id}:
+    get:
+      tags: [accounts]
+      summary: One account
+      operationId: getAccount
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Account
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account]
+                properties:
+                  account: { $ref: "#/components/schemas/Account" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /positions:
+    get:
+      tags: [positions]
+      summary: Open positions of an account
+      operationId: listPositions
+      parameters:
+        - $ref: "#/components/parameters/AccountQuery"
+      responses:
+        "200":
+          description: Positions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account, positions]
+                properties:
+                  account: { type: string }
+                  positions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Position" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /positions/{id}:
+    patch:
+      tags: [positions]
+      summary: Set or remove SL / TP / trailing stop of a position
+      description: Omitted fields keep their value; `null` removes the level.
+      operationId: modifyPosition
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/AccountQuery"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModifyPosition" }
+      responses:
+        "200":
+          description: The levels now in force
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  position_id: { type: string }
+                  account: { type: string }
+                  sl: { $ref: "#/components/schemas/NullableDecimal" }
+                  tp: { $ref: "#/components/schemas/NullableDecimal" }
+                  trailing_distance: { $ref: "#/components/schemas/NullableDecimal" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Rejected" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /positions/{id}/close:
+    post:
+      tags: [positions]
+      summary: Close a position at market, fully or partly
+      description: |
+        Idempotent with `client_order_id` (or the `Idempotency-Key` header): a
+        retry answers `200` with `replayed: true` and the closing order.
+      operationId: closePosition
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/AccountQuery"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClosePosition" }
+      responses:
+        "201":
+          description: Closing order placed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OrderAccepted"
+                  - type: object
+                    properties:
+                      position_id: { type: string }
+        "200": { $ref: "#/components/responses/Replayed" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Rejected" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /orders:
+    get:
+      tags: [orders]
+      summary: Working orders, or finished orders with history=1
+      operationId: listOrders
+      parameters:
+        - $ref: "#/components/parameters/AccountQuery"
+        - name: history
+          in: query
+          description: "`1` / `true`: finished orders (filled, canceled, rejected, expired), newest first, up to 500."
+          schema: { type: string, enum: ["0", "1", "true", "false"] }
+      responses:
+        "200":
+          description: Orders
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account, orders]
+                properties:
+                  account: { type: string }
+                  orders:
+                    type: array
+                    items: { $ref: "#/components/schemas/Order" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    post:
+      tags: [orders]
+      summary: Place an order (market, limit, stop, stop limit)
+      description: |
+        Needs a token that may trade (`scope` `trade`, or an interactive
+        login) and is subject to the per-account order rate limit shared with
+        the WebSocket. Idempotent with `client_order_id` (or the
+        `Idempotency-Key` header): a retry answers `200` with
+        `replayed: true` and the stored order; the same id for a different
+        order answers `409`.
+      operationId: placeOrder
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlaceOrder" }
+      responses:
+        "201":
+          description: Order accepted (fills arrive asynchronously)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderAccepted" }
+        "200": { $ref: "#/components/responses/Replayed" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Rejected" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /orders/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The engine `order_id` or your `client_order_id` of a working order.
+        schema: { type: string }
+      - $ref: "#/components/parameters/AccountQuery"
+    patch:
+      tags: [orders]
+      summary: Modify a working order in place
+      description: Omitted fields keep their value; `null` removes SL / TP / trailing / expiry.
+      operationId: modifyOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModifyOrder" }
+      responses:
+        "200":
+          description: Modified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  modified: { type: boolean }
+                  client_order_id: { type: string }
+                  account: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Rejected" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      tags: [orders]
+      summary: Cancel a working order
+      operationId: cancelOrder
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cancelled: { type: boolean }
+                  client_order_id: { type: string }
+                  account: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Rejected" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /deals:
+    get:
+      tags: [orders]
+      summary: Deal (execution) history, oldest first, paged
+      operationId: listDeals
+      parameters:
+        - $ref: "#/components/parameters/AccountQuery"
+        - { name: from, in: query, description: "Inclusive; Unix ms or RFC 3339.", schema: { type: string } }
+        - { name: to, in: query, description: "Inclusive; Unix ms or RFC 3339.", schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
+        - { name: cursor, in: query, description: "`next_cursor` of the previous page.", schema: { type: string } }
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account, deals, next_cursor]
+                properties:
+                  account: { type: string }
+                  deals:
+                    type: array
+                    items: { $ref: "#/components/schemas/Deal" }
+                  next_cursor:
+                    type: string
+                    nullable: true
+                    description: "`null` on the last page."
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /symbols:
+    get:
+      tags: [market data]
+      summary: Tradable symbols
+      operationId: listSymbols
+      responses:
+        "200":
+          description: Symbols
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [symbols]
+                properties:
+                  symbols:
+                    type: array
+                    items: { $ref: "#/components/schemas/Symbol" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /quotes/{symbol}:
+    get:
+      tags: [market data]
+      summary: Latest bid / ask of your price group
+      operationId: getQuote
+      parameters:
+        - { name: symbol, in: path, required: true, schema: { type: string, example: EURUSD } }
+        - name: account
+          in: query
+          description: "Price group of this account (default: the token's accounts)."
+          schema: { type: string }
+      responses:
+        "200":
+          description: Quote
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Quote" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /candles/{symbol}:
+    get:
+      tags: [market data]
+      summary: Price history (mid) bars
+      operationId: getCandles
+      parameters:
+        - { name: symbol, in: path, required: true, schema: { type: string, example: EURUSD } }
+        - name: timeframe
+          in: query
+          required: true
+          schema: { type: string, enum: [M1, M5, M15, M30, H1, H4, D1] }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 5000, default: 500 } }
+      responses:
+        "200":
+          description: Bars, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbol: { type: string }
+                  timeframe: { type: string }
+                  candles:
+                    type: array
+                    items: { $ref: "#/components/schemas/Candle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    AccountQuery:
+      name: account
+      in: query
+      description: Trading account; optional when the token holds exactly one.
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Client order id when the body has no `client_order_id`.
+      schema: { type: string, pattern: "^[A-Za-z0-9._:-]{1,64}$" }
+
+  responses:
+    Replayed:
+      description: Retry of a request already executed (same client order id)
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/OrderAccepted"
+              - type: object
+                properties:
+                  order: { $ref: "#/components/schemas/Order" }
+    BadRequest:
+      description: Invalid body or parameter (`bad_request`, `unknown_symbol`)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthenticated:
+      description: Missing, invalid or expired token (`unauthenticated`)
+      headers:
+        WWW-Authenticate: { schema: { type: string, example: Bearer } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Read-only API key, or the account is not in the token (`forbidden`)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: "`unknown_order`, `unknown_position`, `unknown_account`, `unknown_symbol`, `no_quote`"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: The client order id is used by another order (`client_order_id_conflict`, `duplicate_client_order_id`)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Rejected:
+      description: Rejected by the risk check or market rules (`insufficient_margin`, `order_rejected`)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: Request or per-account order rate limit (`rate_limited`)
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: Trading temporarily unavailable (`unavailable`)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Decimal:
+      type: string
+      pattern: "^-?[0-9]+(\\.[0-9]{1,8})?$"
+      example: "1.08512"
+    NullableDecimal:
+      type: string
+      nullable: true
+      example: "1.08512"
+    DecimalInput:
+      description: Decimal string (exact) or JSON number.
+      oneOf:
+        - type: string
+        - type: number
+    TimeInput:
+      description: Unix milliseconds (number or digits) or RFC 3339.
+      oneOf:
+        - type: integer
+        - type: string
+      example: "2026-10-01T00:00:00Z"
+    ClientOrderId:
+      type: string
+      pattern: "^[A-Za-z0-9._:-]{1,64}$"
+      description: Idempotency key, unique per account.
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: forbidden }
+            message: { type: string, example: read-only API key }
+
+    Account:
+      type: object
+      properties:
+        id: { type: string }
+        currency: { type: string, example: USD }
+        group: { type: string }
+        margin_mode: { type: string, enum: [netting, hedging, unspecified] }
+        leverage: { type: integer, example: 30 }
+        balance: { $ref: "#/components/schemas/NullableDecimal" }
+        equity: { $ref: "#/components/schemas/NullableDecimal" }
+        margin: { $ref: "#/components/schemas/NullableDecimal" }
+        free_margin: { $ref: "#/components/schemas/NullableDecimal" }
+        margin_level:
+          type: string
+          nullable: true
+          description: Equity / margin in percent; `null` without margin in use.
+        open_positions: { type: integer }
+
+    Position:
+      type: object
+      properties:
+        id: { type: string }
+        account: { type: string }
+        symbol: { type: string }
+        side: { type: string, enum: [buy, sell] }
+        qty: { $ref: "#/components/schemas/NullableDecimal" }
+        net_qty:
+          type: string
+          nullable: true
+          description: Signed size, positive = long.
+        avg_price: { $ref: "#/components/schemas/NullableDecimal" }
+        unrealized_pnl: { $ref: "#/components/schemas/NullableDecimal" }
+        sl: { $ref: "#/components/schemas/NullableDecimal" }
+        tp: { $ref: "#/components/schemas/NullableDecimal" }
+        trailing_distance: { $ref: "#/components/schemas/NullableDecimal" }
+        open_time_ns: { type: integer, format: int64 }
+
+    Order:
+      type: object
+      properties:
+        id: { type: string, description: Engine order id }
+        client_order_id: { type: string }
+        account: { type: string }
+        symbol: { type: string }
+        side: { type: string, enum: [buy, sell] }
+        type: { type: string, enum: [market, limit, stop, stop_limit] }
+        status:
+          type: string
+          enum: [pending_new, new, partially_filled, filled, canceled, replaced, rejected, expired]
+        qty: { $ref: "#/components/schemas/NullableDecimal" }
+        filled_qty: { $ref: "#/components/schemas/NullableDecimal" }
+        leaves_qty: { $ref: "#/components/schemas/NullableDecimal" }
+        avg_price: { $ref: "#/components/schemas/NullableDecimal" }
+        limit_price: { $ref: "#/components/schemas/NullableDecimal" }
+        stop_price: { $ref: "#/components/schemas/NullableDecimal" }
+        sl: { $ref: "#/components/schemas/NullableDecimal" }
+        tp: { $ref: "#/components/schemas/NullableDecimal" }
+        trailing_distance: { $ref: "#/components/schemas/NullableDecimal" }
+        oco_group: { type: integer, format: int64, nullable: true }
+        expire_at_ns: { type: integer, format: int64, nullable: true }
+        position_id: { type: string, nullable: true, description: Position opened or increased }
+        close_position_id: { type: string, nullable: true, description: Position this order closes }
+        stop_triggered: { type: boolean }
+        text: { type: string, nullable: true, description: Reject / cancel reason }
+        created_ns: { type: integer, format: int64 }
+        updated_ns: { type: integer, format: int64 }
+
+    OrderAccepted:
+      type: object
+      required: [order_id, client_order_id, account, replayed]
+      properties:
+        order_id: { type: string }
+        client_order_id: { type: string }
+        account: { type: string }
+        replayed: { type: boolean }
+
+    PlaceOrder:
+      type: object
+      required: [symbol, side, qty]
+      additionalProperties: false
+      properties:
+        account: { type: string }
+        symbol: { type: string, example: EURUSD }
+        side: { type: string, enum: [buy, sell] }
+        type: { type: string, enum: [market, limit, stop, stop_limit], default: market }
+        qty:
+          allOf: [{ $ref: "#/components/schemas/DecimalInput" }]
+          description: Base units (1 lot = contract_size).
+        limit_price: { $ref: "#/components/schemas/DecimalInput" }
+        stop_price: { $ref: "#/components/schemas/DecimalInput" }
+        sl: { $ref: "#/components/schemas/DecimalInput" }
+        tp: { $ref: "#/components/schemas/DecimalInput" }
+        trailing_distance:
+          allOf: [{ $ref: "#/components/schemas/DecimalInput" }]
+          description: Trailing stop distance in price units.
+        tif:
+          type: string
+          enum: [gtc, gtd, ioc, fok, day]
+          description: Pending orders GTC (default) or GTD; market orders IOC.
+        expire_at: { $ref: "#/components/schemas/TimeInput" }
+        oco_group: { type: integer, format: int64, description: One-cancels-other group (pending orders) }
+        max_deviation_points: { type: integer, description: Market orders slippage tolerance }
+        client_order_id: { $ref: "#/components/schemas/ClientOrderId" }
+
+    ModifyOrder:
+      type: object
+      additionalProperties: false
+      properties:
+        account: { type: string }
+        qty: { $ref: "#/components/schemas/DecimalInput" }
+        limit_price: { $ref: "#/components/schemas/DecimalInput" }
+        stop_price: { $ref: "#/components/schemas/DecimalInput" }
+        sl: { allOf: [{ $ref: "#/components/schemas/DecimalInput" }], nullable: true }
+        tp: { allOf: [{ $ref: "#/components/schemas/DecimalInput" }], nullable: true }
+        trailing_distance: { allOf: [{ $ref: "#/components/schemas/DecimalInput" }], nullable: true }
+        expire_at: { allOf: [{ $ref: "#/components/schemas/TimeInput" }], nullable: true }
+
+    ModifyPosition:
+      type: object
+      additionalProperties: false
+      properties:
+        account: { type: string }
+        sl: { allOf: [{ $ref: "#/components/schemas/DecimalInput" }], nullable: true }
+        tp: { allOf: [{ $ref: "#/components/schemas/DecimalInput" }], nullable: true }
+        trailing_distance: { allOf: [{ $ref: "#/components/schemas/DecimalInput" }], nullable: true }
+
+    ClosePosition:
+      type: object
+      additionalProperties: false
+      properties:
+        account: { type: string }
+        qty:
+          allOf: [{ $ref: "#/components/schemas/DecimalInput" }]
+          description: Base units to close; the whole position when omitted.
+        client_order_id: { $ref: "#/components/schemas/ClientOrderId" }
+
+    Deal:
+      type: object
+      properties:
+        id: { type: string }
+        account: { type: string }
+        order_id: { type: string }
+        client_order_id: { type: string }
+        position_id: { type: string }
+        symbol: { type: string }
+        side: { type: string, enum: [buy, sell] }
+        entry: { type: string, enum: [in, out], description: "`in` opens / increases, `out` closes / reduces" }
+        qty: { $ref: "#/components/schemas/NullableDecimal" }
+        price: { $ref: "#/components/schemas/NullableDecimal" }
+        realized_pnl: { $ref: "#/components/schemas/NullableDecimal" }
+        commission:
+          type: string
+          nullable: true
+          description: Negative = cost, account currency.
+        reason: { type: string, enum: [client, stop_loss, take_profit, stop_out] }
+        ts_ns: { type: integer, format: int64 }
+
+    Symbol:
+      type: object
+      properties:
+        symbol: { type: string, example: EURUSD }
+        base: { type: string, example: EUR }
+        quote: { type: string, example: USD }
+        digits: { type: integer, example: 5 }
+        tick_size: { $ref: "#/components/schemas/NullableDecimal" }
+        qty_step: { $ref: "#/components/schemas/NullableDecimal" }
+        contract_size:
+          type: string
+          nullable: true
+          description: Base units per 1.00 lot.
+          example: "100000"
+
+    Quote:
+      type: object
+      properties:
+        symbol: { type: string }
+        bid: { $ref: "#/components/schemas/NullableDecimal" }
+        ask: { $ref: "#/components/schemas/NullableDecimal" }
+        ts_ns: { type: integer, format: int64 }
+
+    Candle:
+      type: object
+      properties:
+        open_time_ns: { type: integer, format: int64 }
+        open: { $ref: "#/components/schemas/NullableDecimal" }
+        high: { $ref: "#/components/schemas/NullableDecimal" }
+        low: { $ref: "#/components/schemas/NullableDecimal" }
+        close: { $ref: "#/components/schemas/NullableDecimal" }
+        ticks: { type: integer, format: int64 }

@@ -1,6 +1,7 @@
 //! Client-facing realtime gateway: WebSocket server speaking `client-proto`, with JWT
 //! auth, per-connection subscriptions, quote conflation, backpressure, per-account
-//! order rate limiting, candle history, `/healthz` and `/metrics`.
+//! order rate limiting, candle history, the user REST API (`/api/v1`), `/healthz`
+//! and `/metrics`.
 
 pub mod auth;
 pub mod bridge;
@@ -12,6 +13,7 @@ pub mod demo;
 pub mod hub;
 pub mod limits;
 pub mod metrics;
+pub mod rest;
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -26,8 +28,8 @@ use axum::Router;
 pub use config::ClientGatewayConfig;
 pub use hub::Hub;
 
-/// Public router: `/ws`, `/healthz`, and `/metrics` unless `metrics_listen`
-/// moves it to a separate listener ([`metrics_router`]).
+/// Public router: `/ws`, `/api/v1/*`, `/healthz`, and `/metrics` unless
+/// `metrics_listen` moves it to a separate listener ([`metrics_router`]).
 pub fn router(hub: Arc<Hub>) -> Router {
     router_with_bridge(hub, bridge::Bridge::from_env().map(Arc::new))
 }
@@ -47,6 +49,8 @@ pub fn router_with_bridge(hub: Arc<Hub>, bridge: Option<Arc<bridge::Bridge>>) ->
             .route("/api/client/{*path}", axum::routing::any(client_api_proxy))
             .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024));
     }
+    // User REST API (`/api/v1`): same auth, gates and hub functions as `/ws`.
+    r = r.merge(rest::router());
     if let Some(b) = bridge {
         b.spawn_tasks();
         r = r

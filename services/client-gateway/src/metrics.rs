@@ -16,6 +16,8 @@ pub struct Metrics {
     pub orders_received: IntCounter,
     pub orders_rate_limited: IntCounter,
     pub frames_in: IntCounter,
+    pub rest_requests: IntCounter,
+    pub rest_rate_limited: IntCounter,
 }
 
 fn counter(r: &Registry, name: &str, help: &str) -> IntCounter {
@@ -74,6 +76,16 @@ impl Default for Metrics {
                 "Order commands rejected by the per-account rate limit",
             ),
             frames_in: counter(r, "client_gw_frames_in_total", "Inbound frames"),
+            rest_requests: counter(
+                r,
+                "client_gw_rest_requests_total",
+                "Authenticated REST API (/api/v1) requests",
+            ),
+            rest_rate_limited: counter(
+                r,
+                "client_gw_rest_rate_limited_total",
+                "REST API requests rejected by the per-key rate limit",
+            ),
             registry,
         }
     }
