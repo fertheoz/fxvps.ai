@@ -9,6 +9,7 @@ import { createApiFromLocation, isGatewayApi } from './store/api';
 import { loadGateway } from './store/connection';
 import { identityUrl, useSession } from './store/session';
 import { registerServiceWorker } from './lib/install';
+import { captureReferral } from './lib/referral';
 
 const chartView = parseChartView(window.location.search);
 if (chartView) prepareChartWindow(chartView);
@@ -22,6 +23,7 @@ if (gated) useSession.getState().configure(idUrl);
 // Desktop shell only: tray status + OS notifications (the main window owns these).
 if (!chartView) startNativeBridge(api);
 registerServiceWorker();
+captureReferral();
 
 const body = chartView ? <ChartWindow api={api} view={chartView} /> : <App api={api} />;
 

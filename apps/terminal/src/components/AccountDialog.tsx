@@ -5,8 +5,10 @@ import { useTerminal } from '../store/terminal';
 import { clientApi, clientApiBase, type ClientMe, type FundingKind, type FundingMethod } from '../api/clientApi';
 import { Modal } from './Dialogs';
 import { CopyTab } from './CopyTab';
+import { IbTab } from './IbTab';
+import { sendPendingReferral } from '../lib/referral';
 
-type Tab = 'funding' | 'verification' | 'copy';
+type Tab = 'funding' | 'verification' | 'copy' | 'ib';
 const DOC_KINDS = ['id_front', 'id_back', 'proof_of_address', 'selfie', 'other'] as const;
 
 /** Funding (deposit / withdrawal requests) and verification (KYC documents) for the signed-in client. */
@@ -31,6 +33,7 @@ export function AccountDialog() {
       setMe(m);
       setError(null);
       if (!account && m.accounts[0]) setAccount(m.accounts[0].externalId);
+      if (m.accounts[0]) void sendPendingReferral(m.accounts[0].externalId);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -97,6 +100,7 @@ export function AccountDialog() {
         {tabBtn('funding', t('acct.funding'))}
         {tabBtn('verification', t('acct.verification'))}
         {tabBtn('copy', t('copy.tab'))}
+        {tabBtn('ib', t('ib.tab'))}
         {me && me.accounts.length > 1 && (
           <select className="ml-auto bg-panel-2 border border-line rounded px-2 h-7 text-[12px]" value={account} onChange={(e) => setAccount(e.target.value)} aria-label={t('top.account')}>
             {me.accounts.map((a) => <option key={a.externalId} value={a.externalId}>{a.externalId} · {a.currency}</option>)}
@@ -163,6 +167,7 @@ export function AccountDialog() {
         )}
 
         {tab === 'copy' && me && acc && <CopyTab acc={acc} />}
+        {tab === 'ib' && me && acc && <IbTab acc={acc} />}
 
         {tab === 'verification' && me && acc && (
           <>

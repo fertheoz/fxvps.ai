@@ -66,6 +66,21 @@ pub struct BalanceOp {
     pub new_credit: i64,
 }
 
+/// Introducing-broker terms (the commission share lives in `ib_share`).
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IbPlan {
+    /// Rebate per closed lot (round turn), minor units of the IB's currency.
+    #[serde(default)]
+    pub per_lot_cents: i64,
+    /// Share of a sub-IB's clients' revenue paid to this IB (percent, up to 3 levels).
+    #[serde(default)]
+    pub override_pct: u8,
+    /// Referral code (`?ref=CODE`); empty = none.
+    #[serde(default)]
+    pub code: String,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminUserRec {
@@ -398,6 +413,11 @@ pub enum AdminCmd {
         account: u64,
         pct: u8,
     },
+    /// IB rebate per lot, sub-IB override and referral code.
+    IbPlanSet {
+        account: u64,
+        plan: IbPlan,
+    },
     /// Which IB account a client belongs to (`None` = none).
     IbLinked {
         account: u64,
@@ -507,6 +527,9 @@ pub struct AdminState {
     /// client account -> IB account
     #[serde(default)]
     pub ib_of: BTreeMap<u64, u64>,
+    /// IB terms beyond the share: per-lot rebate, override on sub-IBs, referral code.
+    #[serde(default)]
+    pub ib_plan: BTreeMap<u64, IbPlan>,
     /// Alert thresholds / channels (stage 13).
     #[serde(default)]
     pub alerts: AlertSettings,
@@ -818,6 +841,26 @@ impl AdminState {
                         strategy.name,
                         strategy.perf_fee_bps,
                         if strategy.public { ", public" } else { "" }
+                    ),
+                )
+            }
+            AdminCmd::IbPlanSet { account, plan } => {
+                let old = self
+                    .ib_plan
+                    .insert(*account, plan.clone())
+                    .unwrap_or_default();
+                self.audit(
+                    r,
+                    "ib.plan".into(),
+                    format!("#{account}"),
+                    format!(
+                        "lot {}→{} c, override {}→{}%, code {:?}→{:?}",
+                        old.per_lot_cents,
+                        plan.per_lot_cents,
+                        old.override_pct,
+                        plan.override_pct,
+                        old.code,
+                        plan.code
                     ),
                 )
             }

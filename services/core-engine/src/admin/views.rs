@@ -85,6 +85,7 @@ pub fn client(e: &Engine, id: u64, admin: &AdminState) -> Option<Value> {
         "email": admin.profiles.get(&id).map_or_else(|| format!("account{id}@example.com"), |p| p.email.clone()),
         "lei": admin.profiles.get(&id).and_then(|p| p.lei.clone()),
         "ibSharePct": admin.ib_share.get(&id).copied().unwrap_or(0),
+        "ibPlan": admin.ib_plan.get(&id),
         "ibAccount": admin.ib_of.get(&id).copied(),
         "kycDocs": admin.kyc_docs.iter().filter(|d| d.account == id).count(),
         "country": "ZZ",
@@ -518,6 +519,9 @@ pub fn funding(admin: &AdminState, status: Option<&str>) -> Value {
 
 /// Introducing brokers: linked clients' lots, commission and A-book markup in
 /// `[from, to)` and the IB's payout at its share.
+/// IB accrual for deals in [from, to): share of the clients' commission and
+/// A-book markup, per-lot rebate on closing deals, and overrides that sub-IBs'
+/// revenue pays up the chain (at most three levels).
 pub fn ib_report(e: &Engine, admin: &AdminState, from: u64, to: u64) -> Value {
     #[derive(Default)]
     struct Acc {
@@ -526,42 +530,76 @@ pub fn ib_report(e: &Engine, admin: &AdminState, from: u64, to: u64) -> Value {
         commission: i128,
         markup: i128,
         deals: u32,
+        rebate: i128,
+        overrides: i128,
     }
+    let plan = |ib: u64| admin.ib_plan.get(&ib).cloned().unwrap_or_default();
     let mut by: BTreeMap<u64, Acc> = BTreeMap::new();
     for (client, ib) in &admin.ib_of {
         by.entry(*ib).or_default().clients.insert(*client);
     }
     for d in e.deals().iter().filter(|d| d.ts >= from && d.ts < to) {
-        let Some(ib) = admin.ib_of.get(&d.account) else {
+        let Some(ib) = admin.ib_of.get(&d.account).copied() else {
             continue;
         };
-        let a = by.entry(*ib).or_default();
+        let markup = if d.entry == oms::DealEntry::Out && d.lp_price.is_some() {
+            d.broker_pnl
+        } else {
+            0
+        };
+        let base = -d.commission.minor + markup;
+        let a = by.entry(ib).or_default();
         a.deals += 1;
         a.lots += qty_f(d.volume);
         a.commission += -d.commission.minor;
-        if d.entry == oms::DealEntry::Out && d.lp_price.is_some() {
-            a.markup += d.broker_pnl;
+        a.markup += markup;
+        if d.entry == oms::DealEntry::Out {
+            a.rebate +=
+                plan(ib).per_lot_cents as i128 * d.volume.raw() as i128 / money::SCALE as i128;
+        }
+        let mut cur = ib;
+        for _ in 0..3 {
+            let Some(parent) = admin.ib_of.get(&cur).copied() else {
+                break;
+            };
+            if parent == ib || parent == d.account {
+                break;
+            }
+            let pct = plan(parent).override_pct as i128;
+            if pct > 0 {
+                by.entry(parent).or_default().overrides += base * pct / 100;
+            }
+            cur = parent;
         }
     }
     let rows: Vec<Value> = by
         .into_iter()
         .map(|(ib, a)| {
             let pct = admin.ib_share.get(&ib).copied().unwrap_or(0) as i128;
+            let p = plan(ib);
             let ccy = e
                 .account(ib)
                 .and_then(|acc| e.group(&acc.group))
                 .map(|g| g.currency.to_string());
+            let share = (a.commission + a.markup) * pct / 100;
             json!({
                 "ib": ib,
                 "name": admin.profiles.get(&ib).map(|p| p.name.clone()),
                 "currency": ccy,
                 "sharePct": pct,
+                "perLotCents": p.per_lot_cents,
+                "overridePct": p.override_pct,
+                "code": p.code,
+                "parent": admin.ib_of.get(&ib),
                 "clients": a.clients.len(),
                 "deals": a.deals,
                 "lots": a.lots,
                 "commission": minor(a.commission),
                 "markup": minor(a.markup),
-                "payout": minor((a.commission + a.markup) * pct / 100),
+                "share": minor(share),
+                "rebate": minor(a.rebate),
+                "override": minor(a.overrides),
+                "payout": minor(share + a.rebate + a.overrides),
             })
         })
         .collect();
