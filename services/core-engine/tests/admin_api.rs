@@ -1836,3 +1836,84 @@ async fn economic_calendar_crud_import_and_client_read() {
         .values()
         .all(|e| e.title != "Initial Jobless Claims"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn swap_free_fee_on_a_book_is_reported_as_broker_revenue() {
+    // regression: the A-book swap-free fee was booked against the LP
+    // counterparty and the reports showed it as LP pass-through swap
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), true).await;
+    let a = admin_t();
+    let mut eu = SymbolSpec::fx("EURUSD", Currency::EUR, Currency::USD, 5);
+    eu.triple_swap_day = 9; // never triple, whatever weekday the test runs on
+    let mut g = t.h.read_sync(|e| e.group("a").cloned()).unwrap().unwrap();
+    g.swap_multiplier_pct = 0;
+    g.swap_free_fee_per_lot = 500; // $5 per lot per night
+    g.swap_free_grace_days = 0;
+    for c in [
+        Command::AddSymbol(eu),
+        Command::SetGroup(g),
+        Command::SetSwapConfig(risk::SwapConfig {
+            skip_weekend: false,
+            ..Default::default()
+        }),
+        // A-book account 7: 1 lot, filled by the simulated LP
+        Command::PlaceOrder(NewOrder::market(7, "sf", "EURUSD", Side::Buy, qty("1"))),
+        Command::Rollover,
+    ] {
+        t.h.command(c).await.unwrap();
+    }
+    let pid = t.h.read_sync(|e| e.positions_of(7)[0].id).unwrap();
+    t.h.command(Command::ClosePosition {
+        account: 7,
+        position_id: pid,
+        volume: None,
+        client_order_id: "sf-c".into(),
+    })
+    .await
+    .unwrap();
+    // revenue report: the $5 fee is broker revenue, nothing passes to the LP
+    let (s, r) = t.get("/v1/reports/revenue", &a).await;
+    assert_eq!(s, StatusCode::OK);
+    let swaps: Vec<&Value> = r["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|x| x["kind"] == "swap")
+        .collect();
+    assert_eq!(swaps.len(), 1, "{r}");
+    assert_eq!(swaps[0]["login"], 7);
+    assert_eq!(swaps[0]["book"], "A");
+    assert_eq!(swaps[0]["client"], -500);
+    assert_eq!(swaps[0]["broker"], 500);
+    assert_eq!(swaps[0]["lp"], 0);
+    assert_eq!(r["total"]["swap"], 500);
+    assert_eq!(r["last24h"]["swap"], 500);
+    // dashboard (and the daily report built from it)
+    let (_, d) = t.get("/v1/dashboard/series?range=24h", &a).await;
+    assert_eq!(d["totals"]["swap"], 500, "{}", d["totals"]);
+    // institution activity: markup + commission + the fee
+    let (activity, expected) =
+        t.h.read_sync(|e| {
+            let base: i128 = e
+                .deals()
+                .iter()
+                .filter(|d| d.account == 7)
+                .map(|d| {
+                    let pnl = if d.entry == oms::DealEntry::Out {
+                        d.broker_pnl
+                    } else {
+                        0
+                    };
+                    pnl - d.commission.minor
+                })
+                .sum();
+            (
+                core_engine::admin::views::account_activity(e, 7, 0),
+                base + 500,
+            )
+        })
+        .unwrap();
+    assert_eq!(activity["revenue"], expected as i64);
+    t.stop();
+}

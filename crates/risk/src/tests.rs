@@ -419,3 +419,32 @@ fn markout_weighs_in_once_measured() {
     assert_eq!(f.avg_markout(1), Some(4.0));
     assert_eq!(f.toxicity(), 25);
 }
+
+#[test]
+fn markout_never_lowers_the_score() {
+    // scalper: all short holds, all wins, ≥ 5 points of price improvement
+    let mut f = FlowStats::default();
+    for _ in 0..10 {
+        f.record_close(10, 100, -100);
+        f.record_fill(6);
+    }
+    assert_eq!(f.toxicity(), 100);
+    // flat (or adverse) markout once measured: the score must not drop, or a
+    // `minToxicity: 80` routing rule would silently stop matching this flow
+    for _ in 0..5 {
+        f.record_markout(1, -2);
+    }
+    assert_eq!(f.toxicity(), 100);
+    // short holds and wins without improvement: 45 + 30, still 75 with markout
+    let mut g = FlowStats::default();
+    for _ in 0..5 {
+        g.record_close(10, 100, -100);
+        g.record_markout(1, 0);
+    }
+    assert_eq!(g.toxicity(), 75);
+    // a positive markout raises it: 35 + 22 + 25 = 82
+    for _ in 0..5 {
+        g.record_markout(1, 6);
+    }
+    assert_eq!(g.toxicity(), 82);
+}

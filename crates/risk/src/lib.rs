@@ -1001,9 +1001,11 @@ impl FlowStats {
 
     /// 0..100 toxic-flow score: 45 % short holds (scalping), 30 % win rate
     /// above 50 %, 25 % captured price improvement (≥ 5 points = max).
-    /// Once the 5 s markout has evidence it takes a quarter of the weight
-    /// (≥ 3 points in the client's favour = max): informed flow shows up there
-    /// even when holds are long.
+    /// Once the 5 s markout has evidence it is blended in at a quarter of the
+    /// weight (≥ 3 points in the client's favour = max): informed flow shows
+    /// up there even when holds are long. The markout can only raise the
+    /// score, never lower it, so routing-rule thresholds set on the base
+    /// score keep matching the same flow.
     pub fn toxicity(&self) -> u8 {
         if self.trades < Self::MIN_TRADES {
             return 0;
@@ -1011,15 +1013,16 @@ impl FlowStats {
         let short = self.short_hold_ratio();
         let win = ((self.win_rate() - 0.5) * 2.0).clamp(0.0, 1.0);
         let gain = (self.avg_slip_gain_points() / 5.0).clamp(0.0, 1.0);
+        let base = 45.0 * short + 30.0 * win + 25.0 * gain;
         let score = match self
             .avg_markout(1)
             .filter(|_| self.markout_count[1] >= Self::MIN_TRADES)
         {
             Some(m) => {
                 let mo = (m / 3.0).clamp(0.0, 1.0);
-                35.0 * short + 22.0 * win + 18.0 * gain + 25.0 * mo
+                base.max(35.0 * short + 22.0 * win + 18.0 * gain + 25.0 * mo)
             }
-            None => 45.0 * short + 30.0 * win + 25.0 * gain,
+            None => base,
         };
         score.round().clamp(0.0, 100.0) as u8
     }

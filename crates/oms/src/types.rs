@@ -211,6 +211,10 @@ pub struct Deal {
     /// Swap released with this closing deal (minor units, negative = cost).
     #[serde(default)]
     pub swap: i128,
+    /// Part of `swap` that is the swap-free admin fee (broker revenue on
+    /// either book; the rest of an A-book swap passes through to the LP).
+    #[serde(default)]
+    pub swap_fee: i128,
 }
 
 /// New parameters of a pending order (`Command::ModifyOrder`); every field
@@ -271,6 +275,10 @@ pub struct Position {
     /// Accumulated swap (minor units of the account currency, negative = charged).
     #[serde(default)]
     pub swap_minor: i128,
+    /// Part of `swap_minor` that is the swap-free admin fee: broker revenue on
+    /// either book, never settled with the LP.
+    #[serde(default)]
+    pub swap_fee_minor: i128,
     /// Copy trading: (provider account, provider position) this position mirrors.
     #[serde(default)]
     pub copy_from: Option<(AccountNo, PositionId)>,
