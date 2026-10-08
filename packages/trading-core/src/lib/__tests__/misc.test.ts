@@ -81,3 +81,18 @@ describe('RafBatcher', () => {
     expect(frames).toHaveLength(2);
   });
 });
+
+describe('heikinAshi', () => {
+  it('averages the bar and chains the open from the previous HA bar', async () => {
+    const { heikinAshi } = await import('../bars');
+    const ha = heikinAshi([
+      { time: 0, open: 10, high: 14, low: 8, close: 12, volume: 1 },
+      { time: 60, open: 12, high: 16, low: 11, close: 15, volume: 2 },
+    ]);
+    expect(ha[0]).toEqual({ time: 0, open: 11, high: 14, low: 8, close: 11, volume: 1 });
+    expect(ha[1].open).toBe(11);
+    expect(ha[1].close).toBe(13.5);
+    expect(ha[1].high).toBe(16);
+    expect(ha[1].low).toBe(11);
+  });
+});

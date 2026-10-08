@@ -49,7 +49,7 @@ import { TIMEFRAMES, TIMEFRAME_SECONDS, type Bar, type Position } from '@fxvps/t
 import { getApi, trade } from '../store/api';
 import { selectActiveAccount, selectOrders, selectPositions, useTerminal, type Indicators } from '../store/terminal';
 import { useT } from '../hooks';
-import { applyTick } from '@fxvps/trading-core';
+import { applyTick, heikinAshi, heikinAshiBar } from '@fxvps/trading-core';
 import { bollinger, ema, rsi, sma } from '@fxvps/trading-core';
 import { buildRates, formatMoney, formatPrice, lotsToVolume, profitMinor, roundPrice, volumeToLots } from '@fxvps/trading-core';
 import { isTauri, openChartWindow } from '../native';
@@ -153,6 +153,8 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const volRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const indRef = useRef<IndicatorSeries>({});
   const barsRef = useRef<Bar[]>([]);
+  /** Heikin-Ashi view of `barsRef` (style 'heikin'), kept in step tick by tick. */
+  const haRef = useRef<Bar[]>([]);
   const linesRef = useRef<IPriceLine[]>([]);
   /** Draggable SL/TP lines of open positions. */
   const protRef = useRef<{ line: IPriceLine; positionId: string; kind: 'sl' | 'tp' }[]>([]);
@@ -312,7 +314,9 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       .then((bars) => {
         if (cancelled || !candleRef.current) return;
         barsRef.current = bars;
-        (candleRef.current as ISeriesApi<SeriesType>).setData(bars.map((b) => mainPoint(chartStyle, b)) as never);
+        haRef.current = heikinAshi(bars);
+        const shown = chartStyle === 'heikin' ? haRef.current : bars;
+        (candleRef.current as ISeriesApi<SeriesType>).setData(shown.map((b) => mainPoint(chartStyle, b)) as never);
         refreshIndicators(useTerminal.getState().indicators);
         chartRef.current?.timeScale().scrollToRealTime();
         setLoadedKey(`${symbol}|${timeframe}`);
@@ -334,9 +338,17 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     const last = bars[bars.length - 1];
     const bar = applyTick(last, quote.bid, Math.floor(quote.time / 1000), TIMEFRAME_SECONDS[timeframe]);
     if (last && bar.time < last.time) return;
-    if (last && bar.time === last.time) bars[bars.length - 1] = bar;
+    const same = !!last && bar.time === last.time;
+    if (same) bars[bars.length - 1] = bar;
     else bars.push(bar);
-    (candleRef.current as ISeriesApi<SeriesType>).update(mainPoint(chartStyle, bar) as never);
+    let shown = bar;
+    if (chartStyle === 'heikin') {
+      const ha = haRef.current;
+      if (same) ha.pop();
+      shown = heikinAshiBar(ha[ha.length - 1], bar);
+      ha.push(shown);
+    }
+    (candleRef.current as ISeriesApi<SeriesType>).update(mainPoint(chartStyle, shown) as never);
     volRef.current?.update({ time: ts(bar.time), value: bar.volume, color: (bar.close >= bar.open ? cssVar('--up') : cssVar('--down')) + '55' });
     const r = indRef.current;
     if (r.sma || r.ema || r.rsi || r.bbM) {
@@ -808,6 +820,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     const scheme = (c: ColorScheme, label: string, first = false): MenuItem => ({ label, hint: tick(colorScheme === c), onClick: () => setColorScheme(c), separator: first });
     return [
       style('candles', t('chart.style.candles')),
+      style('heikin', t('chart.style.heikin')),
       style('bars', t('chart.style.bars')),
       style('line', t('chart.style.line')),
       style('area', t('chart.style.area')),

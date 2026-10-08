@@ -172,6 +172,7 @@ export const en = {
   'chart.style.bars': 'Bars (OHLC)',
   'chart.style.line': 'Line',
   'chart.style.area': 'Area',
+  'chart.style.heikin': 'Heikin-Ashi',
   'chart.scheme.classic': 'Colours: green / red',
   'chart.scheme.blueOrange': 'Colours: blue / orange',
   'chart.scheme.mono': 'Colours: monochrome',
