@@ -2217,18 +2217,170 @@ fn copy_fee_never_drives_the_follower_negative() {
 fn markout_measures_mid_move_after_fills() {
     let mut h = b();
     h.market(1, "m1", Side::Buy, "1");
-    // fill at the ask (1.10010); 1 s later the mid is 1.10035 -> +25 points (5 digits)
+    // fill at the ask (1.10010) with the mid at 1.10005; 1 s later the mid is
+    // 1.10035 -> +30 points (5 digits): measured from the mid, not the fill
     h.ts += 1_000_000_000;
     h.quote("EURUSD", "1.10030", "1.10040");
     let f = h.e.flow(1).unwrap().clone();
     assert_eq!(f.markout_count, [1, 0, 0]);
-    assert_eq!(f.markout_points_sum[0], 25);
+    assert_eq!(f.markout_points_sum[0], 30);
     // 60 s later all horizons are measured and the sample is gone
     h.ts += 60_000_000_000;
     h.quote("EURUSD", "1.09990", "1.10000");
     let f = h.e.flow(1).unwrap().clone();
     assert_eq!(f.markout_count, [1, 1, 1]);
-    assert_eq!(f.markout_points_sum[2], -15);
+    assert_eq!(f.markout_points_sum[2], -10);
+    let replayed = Engine::replay(h.config.clone(), &h.journal);
+    assert_eq!(replayed.state_digest(), h.e.state_digest());
+}
+
+#[test]
+fn markout_ignores_spread_and_markup() {
+    // regression: the sample stored the client fill price, so with the mid
+    // unchanged every fill read -(half spread + markup) points and the
+    // markout could never add to the toxicity score
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("m", USD, Routing::BBook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 12;
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "m", "10000");
+    h.market(1, "m1", Side::Buy, "1");
+    let p = h.pos(1)[0].clone();
+    assert!(p.open_price > px("1.10010"), "{p:?}"); // ask + markup
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: p.id,
+        volume: None,
+        client_order_id: "c".into(),
+    });
+    // 5 s later the mid has not moved: the open and the close both read 0
+    h.ts += 5_000_000_000;
+    h.quote("EURUSD", "1.10000", "1.10010");
+    let f = h.e.flow(1).unwrap().clone();
+    assert_eq!(f.markout_count, [2, 2, 0]);
+    assert_eq!(f.markout_points_sum, [0, 0, 0]);
+    let replayed = Engine::replay(h.config.clone(), &h.journal);
+    assert_eq!(replayed.state_digest(), h.e.state_digest());
+}
+
+#[test]
+fn markout_drops_samples_from_snapshots_without_a_mid() {
+    // a snapshot of the previous engine holds samples priced at the client
+    // fill and no mid: they are dropped, never measured against a zero mid
+    let mut h = b();
+    h.market(1, "m1", Side::Buy, "1");
+    let mut v = serde_json::to_value(h.e.snapshot()).unwrap();
+    let s = v["state"]["markouts"][0].as_object_mut().unwrap();
+    s.remove("mid").unwrap();
+    s.insert("price".into(), px("1.10010").raw().into());
+    let snap: EngineSnapshot = serde_json::from_value(v).unwrap();
+    let mut old = Engine::restore(&snap, Box::new(NullRouter)).unwrap();
+    h.ts += 2_000_000_000;
+    let quote = |seq: u64, ts: u64| Envelope {
+        seq,
+        ts,
+        cmd: Command::Quote {
+            symbol: "EURUSD".into(),
+            bid: px("1.10000"),
+            ask: px("1.10010"),
+        },
+    };
+    old.apply(&quote(h.seq + 1, h.ts));
+    old.apply(&quote(h.seq + 2, h.ts + 60_000_000_000));
+    let count = |e: &Engine| e.flow(1).map(|f| f.markout_count).unwrap_or_default();
+    assert_eq!(count(&old), [0, 0, 0]);
+    // the current engine measures the same fill
+    h.quote("EURUSD", "1.10000", "1.10010");
+    assert_eq!(count(&h.e), [1, 0, 0]);
+}
+
+#[test]
+fn markout_snapshots_stay_readable_by_the_previous_image() {
+    // regression: the previous image requires `price` on every pending
+    // sample; without it a rollback cannot read the snapshot and boots from
+    // the journal tail alone
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct PrevSample {
+        account: AccountNo,
+        symbol: String,
+        sign: i64,
+        price: i64,
+        ts: u64,
+        done: u8,
+    }
+    let mut h = b();
+    h.market(1, "m1", Side::Buy, "1");
+    let v = serde_json::to_value(h.e.snapshot()).unwrap();
+    let prev: Vec<PrevSample> = serde_json::from_value(v["state"]["markouts"].clone()).unwrap();
+    assert_eq!(prev.len(), 1);
+    // and it measures from there: the mid, not the client fill at the ask
+    assert_eq!(prev[0].price, px("1.10005").raw());
+}
+
+#[test]
+fn swap_free_fee_on_a_book_is_broker_revenue() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = h.e.group("a").unwrap().clone();
+    g.swap_multiplier_pct = 0;
+    g.swap_free_fee_per_lot = 500; // $5 per lot per night
+    g.swap_free_grace_days = 0;
+    h.cmd(Command::SetGroup(g.clone()));
+    h.account(1, "a", "10000");
+    let fill = |h: &mut H, exec: &str, v: &str| {
+        let sent = h.router.take();
+        assert_eq!(sent.len(), 1);
+        h.cmd(Command::LpFill {
+            lp_order_id: sent[0].lp_order_id,
+            exec_id: exec.into(),
+            volume: qty(v),
+            price: px("1.10010"),
+        });
+    };
+    h.market(1, "x", Side::Buy, "2");
+    fill(&mut h, "e1", "2");
+    let broker = h.e.ledger().balance(BROKER_BOOK, USD).minor;
+    let lp = h.e.ledger().balance(LP_COUNTERPARTY, USD).minor;
+    // 1970-01-01 is a Thursday: one night, 2 lots × $5
+    h.cmd(Command::Rollover);
+    assert_eq!(h.bal(1), usd("9990"));
+    // the fee is ours, not the LP's: the LP counterparty is untouched
+    assert_eq!(h.e.ledger().balance(BROKER_BOOK, USD).minor - broker, 1000);
+    assert_eq!(h.e.ledger().balance(LP_COUNTERPARTY, USD).minor, lp);
+    let p = h.pos(1)[0].clone();
+    assert_eq!((p.swap_minor, p.swap_fee_minor), (-1000, -1000));
+    // closing half takes half the fee into the deal, marked as fee
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: p.id,
+        volume: Some(qty("1")),
+        client_order_id: "c1".into(),
+    });
+    fill(&mut h, "e2", "1");
+    let d = h.e.deals().last().unwrap().clone();
+    assert_eq!((d.swap, d.swap_fee), (-500, -500));
+    // a real swap on the next night still passes through to the LP
+    g.swap_multiplier_pct = 100;
+    h.cmd(Command::SetGroup(g));
+    h.ts += 86_400_000_000_000;
+    let broker = h.e.ledger().balance(BROKER_BOOK, USD).minor;
+    let lp = h.e.ledger().balance(LP_COUNTERPARTY, USD).minor;
+    h.cmd(Command::Rollover);
+    assert_eq!(h.e.ledger().balance(BROKER_BOOK, USD).minor, broker);
+    assert_eq!(h.e.ledger().balance(LP_COUNTERPARTY, USD).minor - lp, 700);
+    let p = h.pos(1)[0].clone();
+    assert_eq!((p.swap_minor, p.swap_fee_minor), (-1200, -500));
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: p.id,
+        volume: None,
+        client_order_id: "c2".into(),
+    });
+    fill(&mut h, "e3", "1");
+    let d = h.e.deals().last().unwrap().clone();
+    assert_eq!((d.swap, d.swap_fee), (-1200, -500));
     let replayed = Engine::replay(h.config.clone(), &h.journal);
     assert_eq!(replayed.state_digest(), h.e.state_digest());
 }

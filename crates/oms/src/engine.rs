@@ -89,6 +89,9 @@ struct State {
     /// Swap share handed from `reduce_position` to the closing deal (transient).
     #[serde(default)]
     pending_deal_swap: i128,
+    /// Swap-free fee part of `pending_deal_swap` (transient).
+    #[serde(default)]
+    pending_deal_swap_fee: i128,
     /// Copy trading subscriptions (follower, provider).
     #[serde(default)]
     copy_subs: BTreeMap<(AccountNo, AccountNo), CopySubscription>,
@@ -108,6 +111,14 @@ struct MarkoutSample {
     account: AccountNo,
     symbol: String,
     sign: i64,
+    /// Raw mid (no spread, no markup) when the fill happened: the reference
+    /// the later mid moves are measured from. 0 = restored from a snapshot
+    /// taken before the mid was stored; dropped unmeasured.
+    #[serde(default)]
+    mid: i64,
+    /// Not read: kept (as the mid) so the previous image, which requires it
+    /// and measures from it, can still restore our snapshots on a rollback.
+    #[serde(default)]
     price: i64,
     ts: u64,
     /// Horizons already measured (bit per `FlowStats::MARKOUT_SECS`).
@@ -1577,7 +1588,15 @@ impl Engine {
             let gain = (req.raw() - price.raw()) * side.sign() / point;
             self.st.flow.entry(account).or_default().record_fill(gain);
         }
-        if self.st.orders[&id].origin == OrderOrigin::Client {
+        // Markout reference: the raw mid now, not the client price, which
+        // carries the half spread and the markup and would bias every sample
+        // against the client.
+        let mid = self
+            .st
+            .quotes
+            .get(&symbol)
+            .map(|q| (q.bid.raw() + q.ask.raw()) / 2);
+        if let Some(mid) = mid.filter(|_| self.st.orders[&id].origin == OrderOrigin::Client) {
             if self.st.markouts.len() >= MARKOUT_MAX_PENDING {
                 self.st.markouts.pop_front();
             }
@@ -1585,7 +1604,8 @@ impl Engine {
                 account,
                 symbol: symbol.clone(),
                 sign: side.sign(),
-                price: price.raw(),
+                mid,
+                price: mid,
                 ts: self.st.now,
                 done: 0,
             });
@@ -1728,6 +1748,7 @@ impl Engine {
                 routing,
                 opened_ts: self.st.now,
                 swap_minor: 0,
+                swap_fee_minor: 0,
                 copy_from: self.st.orders[&id].copy_from,
             };
             self.st.positions.insert(pid, pos);
@@ -1775,6 +1796,7 @@ impl Engine {
             broker_pnl: legs.0,
             lp_pnl: legs.1,
             swap: std::mem::take(&mut self.st.pending_deal_swap),
+            swap_fee: std::mem::take(&mut self.st.pending_deal_swap_fee),
         });
         self.events.push(Event::DealAdded { deal_id: id });
         // Copy result: every deal of a copy position counts, whoever closes it
@@ -1842,12 +1864,15 @@ impl Engine {
         }
         let _ = self.post(TxnKind::RealizedPnl, format!("pnl:{exec}:{pid}"), postings);
         // the closed part takes its share of the accumulated swap with it
-        if p.swap_minor != 0 && p.volume.raw() > 0 {
+        if (p.swap_minor != 0 || p.swap_fee_minor != 0) && p.volume.raw() > 0 {
             let share = p.swap_minor * v.raw() as i128 / p.volume.raw() as i128;
+            let fee = p.swap_fee_minor * v.raw() as i128 / p.volume.raw() as i128;
             if let Some(pm) = self.st.positions.get_mut(&pid) {
                 pm.swap_minor -= share;
+                pm.swap_fee_minor -= fee;
             }
             self.st.pending_deal_swap = share;
+            self.st.pending_deal_swap_fee = fee;
         }
         let hold_secs = self.st.now.saturating_sub(p.opened_ts) / 1_000_000_000;
         self.st
@@ -2132,7 +2157,8 @@ impl Engine {
             } else {
                 1
             };
-            let m = if g.swap_multiplier_pct == 0 {
+            let swap_free = g.swap_multiplier_pct == 0;
+            let m = if swap_free {
                 // swap-free: flat fee per lot after the grace period
                 let age_days = self.st.now.saturating_sub(p.opened_ts) / 86_400_000_000_000;
                 if g.swap_free_fee_per_lot <= 0 || age_days < g.swap_free_grace_days as u64 {
@@ -2159,17 +2185,24 @@ impl Engine {
             if m.is_zero() {
                 continue;
             }
-            let cp = match p.routing {
-                Routing::ABook => LP_COUNTERPARTY,
-                Routing::BBook => BROKER_BOOK,
+            // The swap-free fee is our own charge: the broker book takes it on
+            // either book (the LP never sees it). A real swap is settled by
+            // the book's counterparty.
+            let (cp, key) = match (swap_free, p.routing) {
+                (true, _) => (BROKER_BOOK, format!("swapfree:{day}:{}", p.id)),
+                (false, Routing::ABook) => (LP_COUNTERPARTY, format!("swap:{day}:{}", p.id)),
+                (false, Routing::BBook) => (BROKER_BOOK, format!("swap:{day}:{}", p.id)),
             };
             self.post(
                 TxnKind::Swap,
-                format!("swap:{day}:{}", p.id),
+                key,
                 vec![(acc.ledger_id, m), (cp, Money::new(-m.minor, m.currency))],
             )?;
             if let Some(pm) = self.st.positions.get_mut(&p.id) {
                 pm.swap_minor += m.minor;
+                if swap_free {
+                    pm.swap_fee_minor += m.minor;
+                }
             }
             touched.insert(p.account);
             n += 1;
@@ -2675,7 +2708,7 @@ impl Engine {
 
 impl Engine {
     /// Measures pending fills of `symbol` whose horizons have passed: the raw
-    /// mid move (no markup) in the client's favour, in points.
+    /// mid move (no markup) since the fill in the client's favour, in points.
     fn resolve_markouts(&mut self, symbol: &str) {
         if self.st.markouts.is_empty() {
             return;
@@ -2692,11 +2725,14 @@ impl Engine {
         let mut i = 0;
         while i < self.st.markouts.len() {
             let m = &mut self.st.markouts[i];
-            if m.symbol == symbol {
+            if m.symbol == symbol && m.mid == 0 {
+                // no reference mid (snapshot of an older engine): drop it
+                m.done = all;
+            } else if m.symbol == symbol {
                 for (h, secs) in risk::FlowStats::MARKOUT_SECS.iter().enumerate() {
                     if m.done & (1 << h) == 0 && now >= m.ts + secs * 1_000_000_000 {
                         m.done |= 1 << h;
-                        let pts = (mid - m.price) * m.sign / point;
+                        let pts = (mid - m.mid) * m.sign / point;
                         let acc = m.account;
                         self.st.flow.entry(acc).or_default().record_markout(h, pts);
                     }

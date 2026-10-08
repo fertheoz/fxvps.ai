@@ -1126,7 +1126,8 @@ impl RevenueTotals {
 /// minus client result), the result of closing B-book deals (the broker is the
 /// counterparty) and commission. `lp` is our own result at the LP.
 /// Activity of one account since `since_ns`: deals, lots, our revenue
-/// (A-book: LP spread + commission; B-book: client loss + commission + swap)
+/// (A-book: LP spread + commission + swap-free fee; B-book: client loss +
+/// commission + swap)
 /// and the client's realized P&L, in account-currency minor units.
 pub fn account_activity(e: &Engine, account: u64, since_ns: u64) -> Value {
     let a_book = e
@@ -1147,9 +1148,13 @@ pub fn account_activity(e: &Engine, account: u64, since_ns: u64) -> Value {
         }
         revenue -= d.commission.minor;
         client += d.commission.minor;
-        if !a_book && d.lp_price.is_none() {
-            revenue -= d.swap;
-        }
+        // B-book: the whole swap is ours; A-book: only the swap-free fee (the
+        // real swap passes through to the LP)
+        revenue -= if !a_book && d.lp_price.is_none() {
+            d.swap
+        } else {
+            d.swap_fee
+        };
         client += d.swap;
     }
     json!({
@@ -1205,10 +1210,12 @@ pub fn revenue(e: &Engine, since_ns: u64) -> Value {
                 0,
             );
         }
-        if d.swap != 0 {
-            // B-book: the swap is ours; A-book: it passes through to the LP
+        if d.swap != 0 || d.swap_fee != 0 {
+            // B-book: the swap is ours; A-book: it passes through to the LP,
+            // except the swap-free fee, which is always ours
             if a_book {
-                row(TxnKind::Swap, d.swap, 0, -d.swap);
+                let pass = d.swap - d.swap_fee;
+                row(TxnKind::Swap, d.swap, -d.swap_fee, -pass);
             } else {
                 row(TxnKind::Swap, d.swap, -d.swap, 0);
             }
@@ -1485,11 +1492,12 @@ pub fn dashboard_series(e: &Engine, admin: &AdminState, now_ns: u64, range: &str
             (0, 0)
         };
         let commission = -d.commission.minor;
-        // swap kept by us on B-book closes (A-book swap passes to the LP)
-        let swap = if d.entry == oms::DealEntry::Out && !a_book(d) {
-            -d.swap
-        } else {
-            0
+        // swap kept by us on B-book closes (A-book swap passes to the LP,
+        // except the swap-free fee, which is ours on either book)
+        let swap = match (d.entry, a_book(d)) {
+            (oms::DealEntry::Out, false) => -d.swap,
+            (oms::DealEntry::Out, true) => -d.swap_fee,
+            _ => 0,
         };
         let lots = qty_f(d.volume);
         let target = if d.ts >= since { &mut total } else { &mut prev };
