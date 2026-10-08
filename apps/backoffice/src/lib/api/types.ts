@@ -684,6 +684,8 @@ export const AGG_MODES: readonly AggMode[] = ["best_price", "vwap", "priority", 
 export interface LpPolicy {
   name: string;
   enabled: boolean;
+  /** false = quote-only: prices, never an order. */
+  orders: boolean;
   priority: number;
   minLots: string | null;
   maxLots: string | null;
