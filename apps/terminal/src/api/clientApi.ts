@@ -93,7 +93,40 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
+export interface CopyStrategy {
+  account: number;
+  name: string;
+  description: string;
+  perfFeeBps: number;
+  public: boolean;
+  pnl30d: number;
+  return30dPct: number | null;
+  deals30d: number;
+  winRate: number | null;
+  followers: number;
+}
+export interface CopySubscription {
+  follower: number;
+  provider: number;
+  ratioBps: number;
+  equityStopPct: number;
+  active: boolean;
+  stoppedReason: string | null;
+  /** Minor units of the account currency. */
+  realized: number;
+  feesPaid: number;
+}
+export interface CopyOverview {
+  strategies: CopyStrategy[];
+  subscriptions: CopySubscription[];
+}
+
+const json = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
 export const clientApi = {
+  copy: () => call<CopyOverview>('/copy'),
+  copySubscribe: (r: { account: string; provider: number; ratioBps: number; equityStopPct: number }) => call<{ ok: boolean }>('/copy/subscribe', json(r)),
+  copyUnsubscribe: (r: { account: string; provider: number; close: boolean }) => call<{ ok: boolean }>('/copy/unsubscribe', json(r)),
   me: () => call<ClientMe>('/me'),
   requestFunding: (req: { account: string; kind: FundingKind; method: FundingMethod; amount: number; details: string }) =>
     call<FundingRequest>('/funding', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req) }),

@@ -14,7 +14,7 @@
 
 ---
 
-## 1. Kademeli kaldıraç + swap-free hesap  ⬜
+## 1. Kademeli kaldıraç + swap-free hesap  ✅
 **Neden:** Körfez ve İslami pazarı için zorunlu. MT5'te "leverage tiers" ve swap-free standarttır.
 - `risk::GroupConfig.leverage_tiers: Vec<{notional_usd, leverage}>`. Kaldıraç, sembol başına açık nominale göre kademeli düşer. Etkin kaldıraç = min(grup, hafta sonu, haber penceresi, kademe).
 - `swap_free: bool` (grup ve hesap düzeyinde). Rollover'da swap uygulanmaz. İsteğe bağlı `admin_fee_per_lot_day` ve `swap_free_max_days` (sonrasında swap başlar).
@@ -88,7 +88,10 @@
 - Groups: demo-retail / demo-hedge hafta sonu kaldıracı.
 - İkinci LP sözleşmesi (madde 6'nın gerçek testi).
 - White-label alan adı DNS kayıtları (madde 7).
+- Groups: demo-retail'e kaldıraç kademesi örn. 100k→1:50, 500k→1:10 (MFA'lı kayıt).
+- D: diski %100 dolu (yerel derleme artık C:\cargo-target'ta); D:'de yer açma kararı sizde.
 
 ## Durum günlüğü
 | Tarih | Madde | Durum | PR | Not |
 |---|---|---|---|---|
+| 2026-10-08 | 1 | ✅ | #155 | kademeli kaldıraç + swap-free ücreti canlı; varsayılan boş |

@@ -72,6 +72,7 @@ export const ROUTE_PERMISSIONS: Record<string, Permission> = {
   "/lp": "lp.view",
   "/bridge": "lp.view",
   "/denetim": "lp.view",
+  "/copy": "clients.view",
   "/partner": "partner.view",
   "/reports": "reports.view",
   "/audit": "audit.view",

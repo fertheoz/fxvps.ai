@@ -18,6 +18,7 @@ export class ForbiddenError extends Error {
 
 const inst: import("./types").Institution[] = [];
 let auditSettings: import("./types").AuditSettings = { autoheal: false, maxLots: 5, maxPerMin: 5 };
+let copyStrategies: import("./types").CopyStrategy[] = [];
 const clone = <T,>(v: T): T => structuredClone(v);
 
 /** In-browser fake backend. State lives in memory; seeded deterministically. */
@@ -473,6 +474,14 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
 
     async listFixSessions() { tick(); return delay(s.fix); },
+    async getCopyOverview() { return delay({ strategies: copyStrategies, subscriptions: [], groups: ["demo-retail", "demo-hedge"] }); },
+    async saveCopyStrategy(account, s) {
+      const rec = { account, ...s, pnl30d: 0, return30dPct: null, deals30d: 0, winRate: null, followers: 0 };
+      copyStrategies = [...copyStrategies.filter((x) => x.account !== account), rec];
+      return delay(rec);
+    },
+    async copyUnsubscribe() { return delay({ ok: true }); },
+    async copySettle() { return delay({ ok: true, fees: 0 }); },
     async getPartnerOverview() { return delay({ institutions: inst, accounts: [], positions: [], deals: [], endpoint: "wss://trade.fxvps.ai/bridge", statusAt: Date.now() }); },
     async getAudit() { return delay({ status: null, settings: auditSettings, corrections: [] }); },
     async saveAuditSettings(s) { auditSettings = s; return delay(s); },

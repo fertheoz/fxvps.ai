@@ -529,6 +529,12 @@ export interface AdminApi {
   saveAuditSettings(s: AuditSettings, actor: Actor): Promise<AuditSettings>;
   /** Institution staff: own institutions, accounts, positions, deals. */
   getPartnerOverview(): Promise<PartnerOverview>;
+  /** Copy trading: strategies (30-day stats) and follower subscriptions. */
+  getCopyOverview(): Promise<CopyOverview>;
+  saveCopyStrategy(account: number, s: { name: string; description: string; perfFeeBps: number; public: boolean }, actor: Actor): Promise<CopyStrategy>;
+  copyUnsubscribe(r: { follower: number; provider: number; close: boolean }, actor: Actor): Promise<{ ok: boolean }>;
+  /** Charges performance fees above the high-water mark now (also runs daily at rollover). */
+  copySettle(provider: number, actor: Actor): Promise<{ ok: boolean; fees: number }>;
   /** Zero point: the auditor closes its history now. */
   resetAudit(actor: Actor): Promise<{ resetAt: number }>;
   /** Creates an institution; the key is returned once. */
@@ -723,6 +729,43 @@ export interface AuditStatus {
   incidentsTotal: number; correctionsSent: number; resetMs: number | null; incidents: AuditIncident[];
 }
 export interface AuditView { status: AuditStatus | null; settings: AuditSettings; corrections: Record<string, unknown>[]; ageMs?: number | null }
+
+export interface CopyStrategy {
+  account: number;
+  name: string;
+  description: string;
+  perfFeeBps: number;
+  public: boolean;
+  /** Minor units of the account currency. */
+  pnl30d: number;
+  return30dPct: number | null;
+  deals30d: number;
+  winRate: number | null;
+  followers: number;
+}
+
+export interface CopySubscription {
+  follower: number;
+  provider: number;
+  ratioBps: number;
+  equityStopPct: number;
+  perfFeeBps: number;
+  since: string;
+  active: boolean;
+  stoppedReason: string | null;
+  /** Minor units. */
+  realized: number;
+  hwm: number;
+  feesPaid: number;
+  openCopies: number;
+}
+
+export interface CopyOverview {
+  strategies: CopyStrategy[];
+  subscriptions: CopySubscription[];
+  /** Groups whose accounts may subscribe (server gate). */
+  groups: string[];
+}
 
 export interface PartnerOverview {
   institutions: Institution[];
