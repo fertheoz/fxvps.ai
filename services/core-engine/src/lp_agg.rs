@@ -103,6 +103,19 @@ pub struct AggConfig {
     /// off-market just because nobody saved a policy.
     #[serde(default = "default_deviation")]
     pub max_deviation_points: i64,
+    /// Silent-LP guard: an LP that has sent nothing for this long while
+    /// another LP keeps quoting is left out (quotes and orders) until it
+    /// quotes again; a dropped session can no longer price clients with its
+    /// last book. Measured against the freshest LP, so a quiet market (all
+    /// LPs idle) never trips it. 0 = off.
+    #[serde(default = "default_quote_age")]
+    pub max_quote_age_ms: u64,
+}
+
+pub const DEFAULT_QUOTE_AGE_MS: u64 = 30_000;
+
+fn default_quote_age() -> u64 {
+    DEFAULT_QUOTE_AGE_MS
 }
 
 pub const DEFAULT_DEVIATION_POINTS: i64 = 100;
@@ -117,6 +130,7 @@ impl Default for AggConfig {
             mode: AggMode::BestPrice,
             lps: Vec::new(),
             max_deviation_points: DEFAULT_DEVIATION_POINTS,
+            max_quote_age_ms: DEFAULT_QUOTE_AGE_MS,
         }
     }
 }
@@ -451,11 +465,16 @@ fn eligible(cfg: &AggConfig, b: &Books, symbol: &str, lots: Option<Qty>) -> Vec<
     let Some(lps) = b.by_symbol.get(symbol) else {
         return Vec::new();
     };
+    let newest = b.last.values().copied().max().unwrap_or(0);
+    let age_ns = cfg.max_quote_age_ms.saturating_mul(1_000_000);
     let mut v: Vec<(String, LpBook)> = lps
         .iter()
         .filter(|(lp, bk)| {
             let p = cfg.policy(lp);
+            let fresh = age_ns == 0
+                || newest.saturating_sub(b.last.get(*lp).copied().unwrap_or(0)) <= age_ns;
             p.enabled
+                && fresh
                 && p.allows_symbol(symbol)
                 && lots.is_none_or(|l| p.allows_size(l))
                 && !(bk.bids.is_empty() && bk.asks.is_empty())
@@ -493,6 +512,7 @@ mod tests {
             mode,
             lps: vec![LpPolicy::new("LMAX", 1), LpPolicy::new("SIM", 2)],
             max_deviation_points: 0,
+            ..AggConfig::default()
         });
         a.update("LMAX", "EURUSD", book("1.10000", "1.10020", "5"));
         a.update("SIM", "EURUSD", book("1.10005", "1.10025", "10"));
@@ -572,6 +592,7 @@ mod tests {
             mode: AggMode::BestPrice,
             lps: vec![LpPolicy::new("LMAX", 1), LpPolicy::new("SIM", 2)],
             max_deviation_points: 100,
+            ..AggConfig::default()
         });
         a.set_point("EURUSD", px("0.00001"));
         a.update("LMAX", "EURUSD", book("1.10000", "1.10020", "5"));
@@ -612,5 +633,34 @@ mod tests {
         assert!(c.validate().is_ok());
         let j = serde_json::to_string(&c).unwrap();
         assert!(j.contains("\"mode\":\"best_price\""));
+    }
+
+    #[test]
+    fn silent_lp_drops_out_until_it_quotes_again() {
+        let agg = Aggregator::new(AggConfig {
+            max_quote_age_ms: 30_000,
+            ..AggConfig::default()
+        });
+        agg.set_point("EURUSD", px("0.00001"));
+        let at = |bid: &str, ask: &str, ts: u64| LpBook {
+            bids: vec![(px(bid), qty("10"))],
+            asks: vec![(px(ask), qty("10"))],
+            ts_ns: ts,
+        };
+        let s = 1_000_000_000u64;
+        // LMAX is the better ask; SIM is worse
+        agg.update("LMAX", "EURUSD", at("1.10000", "1.10010", s));
+        agg.update("SIM", "EURUSD", at("1.09995", "1.10015", s));
+        assert_eq!(agg.choose("EURUSD", Side::Buy, qty("1"))[0], "LMAX");
+        // LMAX goes silent; SIM keeps quoting for 31 s
+        let q = agg.update("SIM", "EURUSD", at("1.09995", "1.10015", 32 * s));
+        assert_eq!(q, Some((px("1.09995"), px("1.10015"))));
+        assert_eq!(
+            agg.choose("EURUSD", Side::Buy, qty("1")),
+            vec!["SIM".to_string()]
+        );
+        // LMAX is back
+        agg.update("LMAX", "EURUSD", at("1.10000", "1.10010", 33 * s));
+        assert_eq!(agg.choose("EURUSD", Side::Buy, qty("1"))[0], "LMAX");
     }
 }

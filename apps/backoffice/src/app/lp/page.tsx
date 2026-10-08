@@ -208,7 +208,7 @@ function AggregationCard() {
   const q = useApiQuery("getLpAggregation", [], { live: 5000 });
   if (q.isLoading) return <Card className="mt-4 p-4">{t("common.loading")}</Card>;
   if (q.error || !q.data) return <Card className="mt-4 p-4 text-sm text-muted-foreground" data-testid="lp-agg-none">{t("lp.aggNone")}</Card>;
-  return <AggregationForm key={JSON.stringify([q.data.mode, q.data.maxDeviationPoints, q.data.lps.map((p) => [p.name, p.enabled, p.priority, p.minLots, p.maxLots, p.symbols])])} data={q.data} />;
+  return <AggregationForm key={JSON.stringify([q.data.mode, q.data.maxDeviationPoints, q.data.maxQuoteAgeMs, q.data.lps.map((p) => [p.name, p.enabled, p.priority, p.minLots, p.maxLots, p.symbols])])} data={q.data} />;
 }
 
 function AggregationForm({ data }: { data: LpAggregation }) {
@@ -220,12 +220,13 @@ function AggregationForm({ data }: { data: LpAggregation }) {
   const editable = actor.can("lp.manage") && mfaOk;
   const [mode, setMode] = React.useState<AggMode>(data.mode);
   const [dev, setDev] = React.useState(data.maxDeviationPoints);
+  const [age, setAge] = React.useState((data.maxQuoteAgeMs ?? 30000) / 1000);
   const [lps, setLps] = React.useState<PolicyDraft[]>(toDraft(data));
   const [newLp, setNewLp] = React.useState("");
   const mut = useApiMutation((v: Parameters<ReturnType<typeof api>["saveLpAggregation"]>[0]) => api().saveLpAggregation(v, actor), () => toast(t("lp.aggSaved")));
   const upd = (i: number, patch: Partial<PolicyDraft>) => setLps(lps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
   const save = () => mut.mutate({
-    mode, maxDeviationPoints: Math.max(0, Math.trunc(dev) || 0),
+    mode, maxDeviationPoints: Math.max(0, Math.trunc(dev) || 0), maxQuoteAgeMs: Math.max(0, Math.round(age * 1000) || 0),
     lps: lps.map(({ symbolsText, ...p }) => ({ ...p, minLots: p.minLots?.trim() || null, maxLots: p.maxLots?.trim() || null, symbols: symbolsText.split(/[\s,]+/).map((x) => x.trim().toUpperCase()).filter(Boolean) })),
   });
   const runtime = (name: string) => data.lps.find((p) => p.name === name);
@@ -242,6 +243,7 @@ function AggregationForm({ data }: { data: LpAggregation }) {
             </select>
           </Label>
           <NumField label={t("lp.deviation")} value={dev} onChange={setDev} step={1} disabled={!editable} />
+          <NumField label={t("lp.quoteAge")} value={age} onChange={setAge} step={5} disabled={!editable} />
         </div>
         <p className="-mt-2 text-xs text-muted-foreground">{t("lp.deviationHint")}</p>
         <div className="overflow-x-auto">
