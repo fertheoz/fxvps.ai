@@ -359,7 +359,7 @@ async fn orders_positions_and_idempotency_against_the_core() {
         ("side", json!("sell")),
         ("qty", json!("500000")),
         ("type", json!("market")),
-        ("limit_price", off(bid, "-0.0300")),
+        ("limit_price", json!(off(bid, "-0.0300"))),
     ] {
         let mut other = limit.clone();
         other[k] = v;
