@@ -1309,3 +1309,39 @@ async fn open_account_and_fund() {
     assert!(audit.to_string().contains("account.open"));
     t.stop();
 }
+
+#[tokio::test]
+async fn read_views_see_admin_state() {
+    // regression: view_state() used to copy only credit / KYC / profiles, so
+    // strategies, IB links and balance ops were invisible to read views
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), true).await;
+    let a = admin_t();
+    let (s, _) = t
+        .req(
+            Method::PUT,
+            "/v1/copy/strategies/7",
+            Some(&a),
+            Some(json!({"name": "Alpha", "perfFeeBps": 2000, "public": true})),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, v) = t.get("/v1/copy", &a).await;
+    assert_eq!(v["strategies"].as_array().unwrap().len(), 1);
+    assert_eq!(v["strategies"][0]["name"], "Alpha");
+    let (s, _) = t
+        .req(
+            Method::PATCH,
+            "/v1/accounts/8/ib",
+            Some(&a),
+            Some(json!({"ibAccount": 7})),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, r) = t.get("/v1/reports/ib", &a).await;
+    assert_eq!(r["rows"][0]["ib"], 7);
+    assert_eq!(r["rows"][0]["clients"], 1);
+    t.stop();
+}
