@@ -229,6 +229,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wire ExecIDs survive restarts (else the LP's list re-reports our own
     // older fills as unseen), as does the end of the last trade-list window.
     let seen_file = dir.join("exec_gorulen.txt");
+    // The held-net baseline survives restarts too: re-baselining on the core's
+    // record would turn an open LP mismatch into "0 olay" (seen 8 Oct: LMAX
+    // kept +1 XAU/USD after a deploy restarted the auditor).
+    let held_file = dir.join("tutulan.json");
+    if let Ok(b) = std::fs::read(&held_file) {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Map<String, Value>>(&b) {
+            let mut held = BTreeMap::new();
+            for (k, q) in v {
+                if let (Some((lp, sym)), Some(q)) = (k.split_once('|'), q.as_str().and_then(|s| s.parse::<Fixed>().ok())) {
+                    held.insert((lp.to_string(), sym.to_string()), q);
+                }
+            }
+            tracing::info!(symbols = held.len(), "held net restored");
+            a.restore_held(held);
+        }
+    }
     let cutoff = now_ns() / 1_000_000 - 72 * 3_600_000;
     let mut kept = Vec::new();
     for line in std::fs::read_to_string(&seen_file)
@@ -418,6 +434,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         Ok(r) => tracing::error!(reply = %String::from_utf8_lossy(&r.payload), "correction refused by the gateway"),
                         Err(e) => tracing::error!(%e, "correction request failed"),
+                    }
+                }
+                if let Some(held) = a.held() {
+                    let m: serde_json::Map<String, Value> = held
+                        .iter()
+                        .map(|((lp, s), q)| (format!("{lp}|{s}"), json!(q.to_string())))
+                        .collect();
+                    let tmp = dir.join("tutulan.json.tmp");
+                    if std::fs::write(&tmp, Value::Object(m).to_string()).is_ok() {
+                        let _ = std::fs::rename(&tmp, &held_file);
                     }
                 }
                 let mut st = a.status(now_ms);

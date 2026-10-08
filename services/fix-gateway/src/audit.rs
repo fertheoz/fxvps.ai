@@ -334,6 +334,26 @@ impl Auditor {
         self.seen_exec.insert(key);
     }
 
+    /// What the primary LP holds by our count: baseline + wire fills since.
+    /// `None` before the first comparison (no baseline yet). Persisted by the
+    /// binary so that a restart does not re-baseline on the core's record and
+    /// hide an open mismatch.
+    pub fn held(&self) -> Option<BTreeMap<NetKey, Fixed>> {
+        let base = self.engine0.as_ref()?;
+        let mut out = base.clone();
+        for (k, v) in &self.net {
+            let e = out.entry(k.clone()).or_insert(Fixed::from_int(0));
+            *e = *e + *v;
+        }
+        Some(out)
+    }
+
+    /// Restores [`Self::held`] from a previous run as the baseline.
+    pub fn restore_held(&mut self, held: BTreeMap<NetKey, Fixed>) {
+        self.engine0 = Some(held);
+        self.net.clear();
+    }
+
     /// The core rejected an order before it reached the LP (gateway / session).
     pub fn on_command_rejected(&mut self, cl: &str) {
         if let Some(t) = self.orders.get_mut(cl) {
@@ -648,6 +668,36 @@ mod tests {
         assert_eq!(a.total_incidents, 0);
         assert_eq!(s["lps"]["LMAX"]["ack_ms_p50"], 40.0);
         assert_eq!(s["lps"]["LMAX"]["fill_ms_p50"], 72.0);
+    }
+
+    #[test]
+    fn held_net_survives_a_restart_so_the_mismatch_is_not_hidden() {
+        let mut a = Auditor::new(AuditCfg::default(), 0);
+        let mut core = BTreeMap::new();
+        core.insert(key("LMAX", "EUR/USD"), px("0"));
+        assert!(a.compare(&core, 0).is_empty()); // baseline 0
+        // the LP filled a buy the core never booked at LMAX (booked at SIM)
+        a.on_order("LMAX", &order("LP-9", Side::Buy, "1", None), 0);
+        a.on_exec(
+            "LMAX",
+            &exec(Some("LP-9"), Side::Buy, Some(("1", "4140")), OrderStatus::Filled),
+            MS,
+        );
+        core.insert(key("SIM", "EUR/USD"), px("-1"));
+        core.insert(key("LMAX", "EUR/USD"), px("1"));
+        a.tick(10_000 * MS);
+        assert!(a.compare(&core, 10_000).is_empty(), "first look settles");
+        assert_eq!(a.compare(&core, 20_000).len(), 1, "LMAX holds 1, must hold 0");
+        let held = a.held().expect("baseline");
+        assert_eq!(held[&key("LMAX", "EUR/USD")], px("1"));
+        // restart: a fresh auditor with the persisted held-net keeps seeing it
+        let mut b = Auditor::new(AuditCfg::default(), 30_000);
+        b.restore_held(held);
+        assert!(b.compare(&core, 30_000).is_empty(), "first look settles");
+        b.tick(40_000 * MS);
+        let c = b.compare(&core, 40_000);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].qty, px("-1"));
     }
 
     #[test]
