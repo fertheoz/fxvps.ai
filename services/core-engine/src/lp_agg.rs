@@ -106,13 +106,18 @@ pub struct AggConfig {
     /// Silent-LP guard: an LP that has sent nothing for this long while
     /// another LP keeps quoting is left out (quotes and orders) until it
     /// quotes again; a dropped session can no longer price clients with its
-    /// last book. Measured against the freshest LP, so a quiet market (all
-    /// LPs idle) never trips it. 0 = off.
+    /// last book. Measured against the freshest LP. The deviation guard still
+    /// measures every remaining LP against the highest-priority LP's last
+    /// price, so a backup LP can never move prices further than
+    /// `max_deviation_points` from the last real price. 0 = off (default):
+    /// turn it on only when the backup LPs are real markets with the same
+    /// trading hours; a 24/7 simulator next to a real LP must not price
+    /// clients while the real market is closed.
     #[serde(default = "default_quote_age")]
     pub max_quote_age_ms: u64,
 }
 
-pub const DEFAULT_QUOTE_AGE_MS: u64 = 30_000;
+pub const DEFAULT_QUOTE_AGE_MS: u64 = 0;
 
 fn default_quote_age() -> u64 {
     DEFAULT_QUOTE_AGE_MS
@@ -232,6 +237,9 @@ pub struct LpRuntime {
     pub quoting: usize,
     /// Symbols currently excluded by the deviation guard.
     pub deviating: Vec<String>,
+    /// Left out by the silent-LP guard (no quote for `max_quote_age_ms`).
+    #[serde(default)]
+    pub silent: bool,
     pub last_quote_ns: u64,
 }
 
@@ -307,7 +315,10 @@ impl Aggregator {
     pub fn update(&self, lp: &str, symbol: &str, book: LpBook) -> Option<(Price, Price)> {
         let cfg = self.config();
         let mut b = self.books.write().unwrap_or_else(|e| e.into_inner());
-        b.last.insert(lp.to_string(), book.ts_ns);
+        // monotonic: a republished old quote (NATS re-sends each symbol's last
+        // quote with its original timestamp) must never make a live LP look silent
+        let last = b.last.entry(lp.to_string()).or_insert(0);
+        *last = (*last).max(book.ts_ns);
         b.by_symbol
             .entry(symbol.to_string())
             .or_default()
@@ -442,7 +453,7 @@ impl Aggregator {
                         .iter()
                         .any(|(lp, _)| *lp == name);
                     let p = cfg.policy(&name);
-                    if !ok && p.enabled && p.allows_symbol(sym) {
+                    if !ok && p.enabled && p.allows_symbol(sym) && is_fresh(&cfg, &b, &name) {
                         deviating.push(sym.clone());
                     }
                 }
@@ -450,6 +461,7 @@ impl Aggregator {
                     policy: cfg.policy(&name),
                     quoting,
                     deviating,
+                    silent: !is_fresh(&cfg, &b, &name),
                     last_quote_ns: b.last.get(&name).copied().unwrap_or(0),
                     name,
                 }
@@ -461,29 +473,40 @@ impl Aggregator {
 /// Eligible (lp, book) pairs of a symbol: enabled, symbol allowed, size within
 /// limits (when `lots` is given), within the deviation guard. The reference
 /// LP comes first.
+/// Silent-LP guard: has `lp` quoted (anything) within `max_quote_age_ms` of
+/// the freshest LP?
+fn is_fresh(cfg: &AggConfig, b: &Books, lp: &str) -> bool {
+    let age_ns = cfg.max_quote_age_ms.saturating_mul(1_000_000);
+    if age_ns == 0 {
+        return true;
+    }
+    let newest = b.last.values().copied().max().unwrap_or(0);
+    newest.saturating_sub(b.last.get(lp).copied().unwrap_or(0)) <= age_ns
+}
+
 fn eligible(cfg: &AggConfig, b: &Books, symbol: &str, lots: Option<Qty>) -> Vec<(String, LpBook)> {
     let Some(lps) = b.by_symbol.get(symbol) else {
         return Vec::new();
     };
-    let newest = b.last.values().copied().max().unwrap_or(0);
-    let age_ns = cfg.max_quote_age_ms.saturating_mul(1_000_000);
-    let mut v: Vec<(String, LpBook)> = lps
-        .iter()
-        .filter(|(lp, bk)| {
-            let p = cfg.policy(lp);
-            let fresh = age_ns == 0
-                || newest.saturating_sub(b.last.get(*lp).copied().unwrap_or(0)) <= age_ns;
-            p.enabled
-                && fresh
-                && p.allows_symbol(symbol)
-                && lots.is_none_or(|l| p.allows_size(l))
-                && !(bk.bids.is_empty() && bk.asks.is_empty())
+    let quoting = |lp: &str, bk: &LpBook| {
+        let p = cfg.policy(lp);
+        p.enabled && p.allows_symbol(symbol) && !(bk.bids.is_empty() && bk.asks.is_empty())
+    };
+    // The deviation reference is the highest-priority quoting LP's last mid,
+    // chosen BEFORE the silent-LP filter: a backup LP that keeps ticking while
+    // the primary is quiet stays within the guard of the last real price.
+    let mut all: Vec<(&String, &LpBook)> = lps.iter().filter(|(lp, bk)| quoting(lp, bk)).collect();
+    all.sort_by_key(|(lp, _)| (cfg.policy(lp).priority, (*lp).clone()));
+    let reference = all.first().and_then(|(_, bk)| bk.mid());
+    let mut v: Vec<(String, LpBook)> = all
+        .into_iter()
+        .filter(|(lp, _)| {
+            is_fresh(cfg, b, lp) && lots.is_none_or(|l| cfg.policy(lp).allows_size(l))
         })
         .map(|(lp, bk)| (lp.clone(), bk.clone()))
         .collect();
-    v.sort_by_key(|(lp, _)| (cfg.policy(lp).priority, lp.clone()));
     if cfg.max_deviation_points > 0 {
-        if let Some(reference) = v.first().and_then(|(_, bk)| bk.mid()) {
+        if let Some(reference) = reference {
             let point = b.points.get(symbol).copied().unwrap_or(0) as i128;
             let limit = point * cfg.max_deviation_points as i128;
             if limit > 0 {
@@ -662,5 +685,57 @@ mod tests {
         // LMAX is back
         agg.update("LMAX", "EURUSD", at("1.10000", "1.10010", 33 * s));
         assert_eq!(agg.choose("EURUSD", Side::Buy, qty("1"))[0], "LMAX");
+    }
+
+    #[test]
+    fn republished_old_quote_never_makes_a_live_lp_silent() {
+        let agg = Aggregator::new(AggConfig {
+            max_quote_age_ms: 30_000,
+            ..AggConfig::default()
+        });
+        agg.set_point("EURUSD", px("0.00001"));
+        let at = |bid: &str, ask: &str, ts: u64| LpBook {
+            bids: vec![(px(bid), qty("10"))],
+            asks: vec![(px(ask), qty("10"))],
+            ts_ns: ts,
+        };
+        let s = 1_000_000_000u64;
+        agg.update("LMAX", "EURUSD", at("1.10000", "1.10010", 40 * s));
+        agg.update("SIM", "EURUSD", at("1.09995", "1.10015", 40 * s));
+        // NATS republishes LMAX's quiet XAU book with its 5 s old timestamp
+        agg.update("LMAX", "XAUUSD", at("2000.00", "2000.50", 5 * s));
+        agg.update("SIM", "EURUSD", at("1.09995", "1.10015", 41 * s));
+        assert_eq!(agg.choose("EURUSD", Side::Buy, qty("1"))[0], "LMAX");
+        assert!(!agg.runtime().iter().any(|r| r.silent));
+    }
+
+    #[test]
+    fn backup_lp_stays_within_the_guard_of_the_silent_primary() {
+        let agg = Aggregator::new(AggConfig {
+            mode: AggMode::BestPrice,
+            lps: vec![LpPolicy::new("LMAX", 1), LpPolicy::new("SIM", 2)],
+            max_deviation_points: 100,
+            max_quote_age_ms: 30_000,
+        });
+        agg.set_point("EURUSD", px("0.00001"));
+        let at = |bid: &str, ask: &str, ts: u64| LpBook {
+            bids: vec![(px(bid), qty("10"))],
+            asks: vec![(px(ask), qty("10"))],
+            ts_ns: ts,
+        };
+        let s = 1_000_000_000u64;
+        agg.update("LMAX", "EURUSD", at("1.10000", "1.10010", s));
+        // weekend: LMAX silent, the simulator drifts 300 points away and keeps ticking
+        let q = agg.update("SIM", "EURUSD", at("1.10300", "1.10310", 60 * s));
+        assert_eq!(q, None, "a drifting backup must not price clients");
+        assert!(agg.choose("EURUSD", Side::Buy, qty("1")).is_empty());
+        let rt = agg.runtime();
+        let lmax = rt.iter().find(|r| r.name == "LMAX").unwrap();
+        assert!(lmax.silent && lmax.deviating.is_empty());
+    }
+
+    #[test]
+    fn silent_guard_is_off_by_default() {
+        assert_eq!(AggConfig::default().max_quote_age_ms, 0);
     }
 }

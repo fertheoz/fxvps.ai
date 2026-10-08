@@ -1245,6 +1245,7 @@ pub fn lp_aggregation(
                 "symbols": r.policy.symbols,
                 "quoting": r.quoting,
                 "deviating": r.deviating,
+                "silent": r.silent,
                 "lastQuoteAt": (r.last_quote_ns > 0).then(|| iso(r.last_quote_ns)),
                 "mdUp": up(fix_gateway::SessionKind::MarketData),
                 "tradeUp": up(fix_gateway::SessionKind::Trading),
@@ -1254,6 +1255,7 @@ pub fn lp_aggregation(
     json!({
         "mode": cfg.mode,
         "maxDeviationPoints": cfg.max_deviation_points,
+        "maxQuoteAgeMs": cfg.max_quote_age_ms,
         "lps": lps,
     })
 }
