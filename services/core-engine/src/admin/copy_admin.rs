@@ -3,9 +3,12 @@
 //! this module keeps the strategy catalogue (admin store) and turns console /
 //! client requests into journaled engine commands.
 //!
-//! Gate: a follower can only subscribe from a group listed in
-//! `CORE_COPY_GROUPS` (comma separated, default the demo groups), so the
-//! money path stays off for live groups until it is deliberately enabled.
+//! Gate: both sides of a subscription (follower and strategy provider) must
+//! be in a group listed in `CORE_COPY_GROUPS` (comma separated, default the
+//! demo groups), so the money path stays off for live groups until it is
+//! deliberately enabled and a fee never moves between a demo and a live
+//! account. The engine keeps them there: an account with an active
+//! subscription cannot change group.
 
 use super::auth::Actor;
 use super::store::AdminCmd;
@@ -39,6 +42,22 @@ fn allowed_groups() -> Vec<String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+/// Refuses an account whose group copy trading is not enabled for.
+async fn copy_group(ctx: &AdminCtx, account: u64, who: &str) -> Result<(), ApiError> {
+    let group = ctx
+        .q(move |e| e.account(account).map(|a| a.group.clone()))
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("unknown {who}")))?;
+    if !allowed_groups().contains(&group) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "copy_disabled",
+            format!("copy trading is not enabled for group {group} ({who})"),
+        ));
+    }
+    Ok(())
 }
 
 fn sub_json(s: &CopySubscription) -> Value {
@@ -139,9 +158,7 @@ pub async fn save_strategy(
     if r.perf_fee_bps > 5_000 {
         return Err(ApiError::bad("perfFeeBps must be 0..5000"));
     }
-    if !ctx.q(move |e| e.account(account).is_some()).await? {
-        return Err(ApiError::not_found("unknown account"));
-    }
+    copy_group(&ctx, account, "account").await?;
     let rec = StrategyRec {
         account,
         name: name.into(),
@@ -187,18 +204,9 @@ async fn subscribe_cmd(
         .get(&provider)
         .cloned()
         .ok_or_else(|| ApiError::bad("provider is not a strategy"))?;
-    let groups = allowed_groups();
-    let group = ctx
-        .q(move |e| e.account(follower).map(|a| a.group.clone()))
-        .await?
-        .ok_or_else(|| ApiError::not_found("unknown follower"))?;
-    if !groups.contains(&group) {
-        return Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "copy_disabled",
-            format!("copy trading is not enabled for group {group}"),
-        ));
-    }
+    // both sides: the fee moves from the follower's ledger account to the provider's
+    copy_group(ctx, follower, "follower").await?;
+    copy_group(ctx, provider, "provider").await?;
     ctx.cmd(Command::CopySubscribe {
         follower,
         provider,

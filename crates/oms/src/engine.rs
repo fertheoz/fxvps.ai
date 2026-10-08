@@ -569,6 +569,13 @@ impl Engine {
                 {
                     return Err("account has working orders".into());
                 }
+                // copy subscriptions were admitted for the account's group (hedging
+                // follower, copy-enabled groups): a move would bypass that
+                if self.st.copy_subs.values().any(|s| {
+                    (s.active || s.closing) && (s.follower == *account || s.provider == *account)
+                }) {
+                    return Err("account has an active copy subscription".into());
+                }
                 self.st.accounts.get_mut(account).expect("account").group = group.clone();
                 self.events.push(Event::AccountGroupChanged {
                     account: *account,
@@ -730,21 +737,11 @@ impl Engine {
                 provider,
                 close,
             } => {
-                let s = self
-                    .st
-                    .copy_subs
-                    .get_mut(&(*follower, *provider))
-                    .ok_or("no such subscription")?;
-                s.active = false;
-                s.stopped_reason = Some("unsubscribed".into());
-                if *close {
-                    self.copy_close_all(*follower, *provider);
+                let key = (*follower, *provider);
+                if !self.st.copy_subs.contains_key(&key) {
+                    return Err("no such subscription".into());
                 }
-                self.events.push(Event::CopyChanged {
-                    follower: *follower,
-                    provider: *provider,
-                    active: false,
-                });
+                self.copy_stop(key, "unsubscribed", *close);
             }
             Command::CopySettle { provider } => self.copy_settle(*provider)?,
             Command::Tick => {}
@@ -925,8 +922,10 @@ impl Engine {
         let o = &self.st.orders[&id];
         let r = &o.req;
         let spec = self.st.symbols.get(&r.symbol).ok_or("unknown symbol")?;
-        // market hours: closing orders are always allowed (risk reduction)
-        if o.close_position.is_none() && o.origin == OrderOrigin::Client {
+        // market hours: closing orders are always allowed (risk reduction); a
+        // copy open is a new trade like the client's own
+        if o.close_position.is_none() && matches!(o.origin, OrderOrigin::Client | OrderOrigin::Copy)
+        {
             if !spec.enabled {
                 return Err("symbol disabled".into());
             }
@@ -1009,6 +1008,7 @@ impl Engine {
         o.reject_reason = Some(reason.clone());
         o.working = false;
         self.release_closing(id);
+        self.copy_order_ended(id);
         self.events.push(Event::OrderRejected {
             order_id: id,
             reason,
@@ -1030,6 +1030,7 @@ impl Engine {
         self.release_closing(id);
         self.set_status(id, to);
         self.st.orders.get_mut(&id).expect("order").working = false;
+        self.copy_order_ended(id);
         self.events.push(match to {
             OrderStatus::Expired => Event::OrderExpired { order_id: id },
             _ => Event::OrderCancelled { order_id: id },
@@ -1636,25 +1637,37 @@ impl Engine {
             }
         }
         let routing = self.st.orders[&id].routing;
+        let o = &self.st.orders[&id];
+        if let Some(src) = o.copy_from.filter(|_| o.origin == OrderOrigin::Copy) {
+            // a copy order filled: its provider position stops backing off
+            if let Some(s) = self.st.copy_subs.get_mut(&(account, src.0)) {
+                s.retry.remove(&src.1);
+            }
+        }
         let mut left = v;
         // the fill's commission is attributed to its first deal
         let lp_px = (routing == Routing::ABook).then_some(lp_price);
+        // `copy`: the copy source of the position, read before a close removes it
         let mut deal = |e: &mut Engine,
                         pid: PositionId,
                         entry: DealEntry,
                         vol: Qty,
                         pnl: Money,
-                        legs: (i128, i128)| {
+                        legs: (i128, i128),
+                        copy: Option<(AccountNo, PositionId)>| {
             let c = std::mem::replace(&mut commission, Money::zero(g.currency));
-            e.add_deal(id, pid, entry, vol, price, pnl, c, lp_px, legs);
+            e.add_deal(id, pid, entry, vol, price, pnl, c, lp_px, legs, copy);
         };
+        let copy_of =
+            |e: &Engine, pid: PositionId| e.st.positions.get(&pid).and_then(|p| p.copy_from);
         if let Some(pid) = close {
             if let Some(p) = self.st.positions.get_mut(&pid) {
                 p.closing = Qty::from_raw((p.closing.raw() - v.raw()).max(0));
             }
             if self.st.positions.contains_key(&pid) {
+                let copy = copy_of(self, pid);
                 let (pnl, broker, lp) = self.reduce_position(pid, v, price, lp_price, exec);
-                deal(self, pid, DealEntry::Out, v, pnl, (broker, lp));
+                deal(self, pid, DealEntry::Out, v, pnl, (broker, lp), copy);
             }
             left = Qty::ZERO;
         } else if g.margin_mode == MarginMode::Netting {
@@ -1663,23 +1676,26 @@ impl Engine {
                 .positions
                 .values()
                 .find(|p| p.account == account && p.symbol == symbol)
-                .map(|p| (p.id, p.side, p.volume));
-            if let Some((pid, pside, pvol)) = existing {
+                .map(|p| (p.id, p.side, p.volume, p.copy_from));
+            if let Some((pid, pside, pvol, copy)) = existing {
                 if pside != side {
                     let r = v.min(pvol);
                     let (pnl, broker, lp) = self.reduce_position(pid, r, price, lp_price, exec);
-                    deal(self, pid, DealEntry::Out, r, pnl, (broker, lp));
+                    deal(self, pid, DealEntry::Out, r, pnl, (broker, lp), copy);
                     left = Qty::from_raw(v.raw() - r.raw());
                 } else {
                     self.increase_position(pid, v, price, lp_price);
-                    deal(self, pid, DealEntry::In, v, Money::zero(g.currency), (0, 0));
+                    let z = Money::zero(g.currency);
+                    deal(self, pid, DealEntry::In, v, z, (0, 0), copy);
                     left = Qty::ZERO;
                 }
             }
         } else if let Some(pid) = self.st.orders[&id].position {
             if self.st.positions.contains_key(&pid) {
                 self.increase_position(pid, v, price, lp_price);
-                deal(self, pid, DealEntry::In, v, Money::zero(g.currency), (0, 0));
+                let copy = copy_of(self, pid);
+                let z = Money::zero(g.currency);
+                deal(self, pid, DealEntry::In, v, z, (0, 0), copy);
                 left = Qty::ZERO;
             }
         }
@@ -1707,14 +1723,9 @@ impl Engine {
             self.st.positions.insert(pid, pos);
             self.st.orders.get_mut(&id).expect("order").position = Some(pid);
             self.events.push(Event::PositionOpened { position_id: pid });
-            deal(
-                self,
-                pid,
-                DealEntry::In,
-                left,
-                Money::zero(g.currency),
-                (0, 0),
-            );
+            let copy = copy_of(self, pid);
+            let z = Money::zero(g.currency);
+            deal(self, pid, DealEntry::In, left, z, (0, 0), copy);
         }
         self.balance_event(account);
         self.rebalance_hedge(&symbol);
@@ -1732,6 +1743,7 @@ impl Engine {
         commission: Money,
         lp_price: Option<Price>,
         legs: (i128, i128),
+        copy: Option<(AccountNo, PositionId)>,
     ) {
         let o = &self.st.orders[&order_id];
         let id = self.st.deals.len() as u64 + 1;
@@ -1755,20 +1767,14 @@ impl Engine {
             swap: std::mem::take(&mut self.st.pending_deal_swap),
         });
         self.events.push(Event::DealAdded { deal_id: id });
-        if entry == DealEntry::Out {
-            let o = &self.st.orders[&order_id];
-            let src = o.copy_from.or_else(|| {
-                // a follower's own close of a copy position still counts for the copy result
-                o.close_position
-                    .and_then(|p| self.st.positions.get(&p))
-                    .and_then(|p| p.copy_from)
-            });
-            if let Some((provider, _)) = src {
-                let d = self.st.deals.last().expect("deal");
-                let r = d.pnl.minor + d.commission.minor + d.swap;
-                if let Some(s) = self.st.copy_subs.get_mut(&(d.account, provider)) {
-                    s.realized += r;
-                }
+        // Copy result: every deal of a copy position counts, whoever closes it
+        // (provider-driven, the follower, SL / TP, stop-out), and the opening
+        // commission too.
+        if let Some((provider, _)) = copy {
+            let d = self.st.deals.last().expect("deal");
+            let r = d.pnl.minor + d.commission.minor + d.swap;
+            if let Some(s) = self.st.copy_subs.get_mut(&(d.account, provider)) {
+                s.realized += r;
             }
         }
     }
@@ -2179,7 +2185,23 @@ impl Engine {
 // Runs after each command, so a replay of the journal reproduces it.
 // ----------------------------------------------------------------------
 
+/// Wait after a copy order of a provider position failed; it doubles with
+/// every failure in a row, up to `COPY_RETRY_MAX_NS`.
 const COPY_RETRY_NS: u64 = 5_000_000_000;
+const COPY_RETRY_MAX_NS: u64 = 3_600_000_000_000;
+/// Failures in a row after which a provider position is no longer opened for
+/// the follower (counted as copied; its closes are still followed).
+const COPY_OPEN_MAX_FAILS: u32 = 8;
+
+fn copy_backoff_ns(fails: u32) -> u64 {
+    let doublings = fails.saturating_sub(1).min(20);
+    COPY_RETRY_NS
+        .saturating_mul(1 << doublings)
+        .min(COPY_RETRY_MAX_NS)
+}
+
+type CopyKey = (AccountNo, AccountNo);
+type CopySrc = (AccountNo, PositionId);
 
 impl Engine {
     /// Active and stopped subscriptions.
@@ -2210,33 +2232,68 @@ impl Engine {
         if fg.currency != pg.currency {
             return Err("follower and provider currencies differ".into());
         }
+        // no chains, in either direction
+        let subs = || self.st.copy_subs.values().filter(|s| s.active);
+        if subs().any(|s| s.follower == provider) {
+            return Err("provider is itself copying (no chains)".into());
+        }
+        if subs().any(|s| s.provider == follower) {
+            return Err("follower is itself copied (no chains)".into());
+        }
+        let key = (follower, provider);
+        if self.st.copy_subs.get(&key).is_some_and(|p| p.closing) {
+            return Err("copies of the stopped subscription are still being closed".into());
+        }
+        let eq = self.account_risk(follower)?.equity.minor;
+        // new terms: the result so far is settled at the fee it was earned under
         if self
             .st
             .copy_subs
-            .values()
-            .any(|s| s.active && s.follower == provider)
+            .get(&key)
+            .is_some_and(|p| p.perf_fee_bps != perf_fee_bps)
         {
-            return Err("provider is itself copying (no chains)".into());
+            self.copy_settle_one(key)?;
         }
-        let eq = self.account_risk(follower)?.equity.minor;
-        let prev = self.st.copy_subs.get(&(follower, provider));
+        let prev = self.st.copy_subs.get(&key);
+        let running = prev.is_some_and(|p| p.active);
+        let old_ratio = prev.map_or(ratio_bps, |p| p.ratio_bps);
+        // Copies already made stay managed (never liquidated by a re-subscribe).
+        // After a stop, those of provider positions closed meanwhile were the
+        // follower's to keep and are no longer tracked. A higher ratio applies
+        // to new provider volume only (no top-up in the middle of a trade); a
+        // lower one brings the copies down on the next pass.
+        let mut copied = prev.map(|p| p.copied.clone()).unwrap_or_default();
+        copied.retain(|pid, sent| match self.st.positions.get(pid) {
+            Some(p) => {
+                let (sym, v) = (&p.symbol, p.volume.raw());
+                let more = self.copy_want(sym, v, ratio_bps) - self.copy_want(sym, v, old_ratio);
+                *sent += more.max(0);
+                true
+            }
+            None => running,
+        });
         let sub = CopySubscription {
             follower,
             provider,
             ratio_bps,
             equity_stop_pct,
             perf_fee_bps,
-            since_ts: self.st.now,
+            // a change of a running subscription keeps its start; after a stop
+            // only provider positions opened from now on are new
+            since_ts: prev
+                .filter(|p| p.active)
+                .map_or(self.st.now, |p| p.since_ts),
             start_equity: eq,
             realized: prev.map_or(0, |p| p.realized),
             hwm: prev.map_or(0, |p| p.hwm),
             fees_paid: prev.map_or(0, |p| p.fees_paid),
-            copied: prev.map(|p| p.copied.clone()).unwrap_or_default(),
-            retry_after: 0,
+            copied,
+            retry: prev.map(|p| p.retry.clone()).unwrap_or_default(),
             active: true,
             stopped_reason: None,
+            closing: false,
         };
-        self.st.copy_subs.insert((follower, provider), sub);
+        self.st.copy_subs.insert(key, sub);
         self.events.push(Event::CopyChanged {
             follower,
             provider,
@@ -2245,9 +2302,42 @@ impl Engine {
         Ok(())
     }
 
+    /// Follower lots for `pvol` provider lots of `symbol` (rounded down to the lot step).
+    fn copy_want(&self, symbol: &str, pvol: i64, ratio_bps: u32) -> i64 {
+        let step = self
+            .st
+            .symbols
+            .get(symbol)
+            .map_or(1, |s| s.lot_step.raw().max(1));
+        ((pvol as i128 * ratio_bps as i128 / 10_000) as i64 / step) * step
+    }
+
+    /// Ends a subscription; with `close` its copies are closed (see `closing`).
+    fn copy_stop(&mut self, key: CopyKey, reason: &str, close: bool) {
+        let s = self.st.copy_subs.get_mut(&key).expect("sub");
+        s.active = false;
+        s.stopped_reason = Some(reason.into());
+        s.closing |= close;
+        if s.closing {
+            self.copy_wind_down(key);
+        }
+        self.events.push(Event::CopyChanged {
+            follower: key.0,
+            provider: key.1,
+            active: false,
+        });
+    }
+
+    fn is_copy_open(o: &Order, follower: AccountNo) -> bool {
+        o.req.account == follower
+            && o.copy_from.is_some()
+            && o.close_position.is_none()
+            && !o.status.is_terminal()
+    }
+
     /// Follower lots (signed by nothing: all copies of one provider position
     /// share its side) still open or being opened for `src`.
-    fn copy_held(&self, follower: AccountNo, src: (AccountNo, PositionId)) -> i64 {
+    fn copy_held(&self, follower: AccountNo, src: CopySrc) -> i64 {
         let open: i64 = self
             .st
             .positions
@@ -2259,48 +2349,98 @@ impl Engine {
             .st
             .orders
             .values()
-            .filter(|o| {
-                o.req.account == follower
-                    && o.copy_from == Some(src)
-                    && o.close_position.is_none()
-                    && matches!(
-                        o.status,
-                        OrderStatus::New | OrderStatus::Accepted | OrderStatus::PartiallyFilled
-                    )
-            })
+            .filter(|o| Self::is_copy_open(o, follower) && o.copy_from == Some(src))
             .map(|o| o.remaining().raw())
             .sum();
         open + working
     }
 
-    fn copy_order_id(&mut self, src: (AccountNo, PositionId)) -> String {
+    /// Provider positions the follower still holds a copy of, or is still
+    /// opening one for (an open in flight at the LP).
+    fn copy_sources(&self, follower: AccountNo, provider: AccountNo) -> BTreeSet<CopySrc> {
+        let positions = self
+            .st
+            .positions
+            .values()
+            .filter(|p| p.account == follower)
+            .filter_map(|p| p.copy_from);
+        let opening = self
+            .st
+            .orders
+            .values()
+            .filter(|o| Self::is_copy_open(o, follower))
+            .filter_map(|o| o.copy_from);
+        positions
+            .chain(opening)
+            .filter(|s| s.0 == provider)
+            .collect()
+    }
+
+    /// No back-off pending for the copy orders of provider position `pid`.
+    fn copy_due(&self, key: CopyKey, pid: PositionId) -> bool {
+        self.st.copy_subs[&key]
+            .retry
+            .get(&pid)
+            .is_none_or(|r| self.st.now >= r.next_ts)
+    }
+
+    fn copy_set_sent(&mut self, key: CopyKey, pid: PositionId, lots: i64) {
+        if let Some(s) = self.st.copy_subs.get_mut(&key) {
+            s.copied.insert(pid, lots);
+        }
+    }
+
+    /// A copy order for `src` did not (fully) go through: `unsent` lots of an
+    /// open come off `copied` (they are sent again), and the position backs off.
+    fn copy_failed(&mut self, follower: AccountNo, src: CopySrc, unsent: i64) {
+        let now = self.st.now;
+        let Some(s) = self.st.copy_subs.get_mut(&(follower, src.0)) else {
+            return;
+        };
+        if let Some(c) = s.copied.get_mut(&src.1) {
+            *c = (*c - unsent).max(0);
+        }
+        let r = s.retry.entry(src.1).or_default();
+        r.fails = r.fails.saturating_add(1);
+        r.next_ts = now.saturating_add(copy_backoff_ns(r.fails));
+    }
+
+    /// Terminal hook (rejected / cancelled): a copy order that ended with an
+    /// unfilled remainder, at placement or later at the LP.
+    fn copy_order_ended(&mut self, id: OrderId) {
+        let o = &self.st.orders[&id];
+        let Some(src) = o.copy_from.filter(|_| o.origin == OrderOrigin::Copy) else {
+            return;
+        };
+        let rem = o.remaining().raw();
+        if rem <= 0 {
+            return;
+        }
+        let unsent = if o.close_position.is_none() { rem } else { 0 };
+        let follower = o.req.account;
+        self.copy_failed(follower, src, unsent);
+    }
+
+    fn copy_order_id(&mut self, src: CopySrc) -> String {
         self.st.copy_seq += 1;
         format!("copy:{}:{}:{}", src.0, src.1, self.st.copy_seq)
     }
 
-    fn copy_open(
-        &mut self,
-        follower: AccountNo,
-        src: (AccountNo, PositionId),
-        symbol: &str,
-        side: Side,
-        v: Qty,
-    ) -> bool {
+    /// Opens `v` lots for `src` (already counted in `copied`: a rejection now
+    /// or at the LP takes the unfilled part back off through the hook).
+    fn copy_open(&mut self, follower: AccountNo, src: CopySrc, symbol: &str, side: Side, v: Qty) {
         let clid = self.copy_order_id(src);
         let o = NewOrder::market(follower, &clid, symbol, side, v);
         self.st.pending_copy = Some(src);
         let r = self.place_order(o, None, OrderOrigin::Copy);
         self.st.pending_copy = None;
-        let id = self
-            .st
-            .client_ids
-            .get(&format!("{follower}:{clid}"))
-            .copied();
-        r.is_ok() && id.is_some_and(|id| self.st.orders[&id].status != OrderStatus::Rejected)
+        if r.is_err() {
+            self.copy_failed(follower, src, v.raw());
+        }
     }
 
     /// Closes up to `v` lots of the follower's copies of `src`, oldest first.
-    fn copy_reduce(&mut self, follower: AccountNo, src: (AccountNo, PositionId), mut v: i64) {
+    fn copy_reduce(&mut self, follower: AccountNo, src: CopySrc, mut v: i64) {
         let ps: Vec<(PositionId, String, Side, i64)> = self
             .st
             .positions
@@ -2325,125 +2465,121 @@ impl Engine {
                 Qty::from_raw(take),
             );
             self.st.pending_copy = Some(src);
-            let _ = self.place_order(o, Some(pid), OrderOrigin::Copy);
+            let r = self.place_order(o, Some(pid), OrderOrigin::Copy);
             self.st.pending_copy = None;
+            if r.is_err() {
+                self.copy_failed(follower, src, 0);
+            }
         }
     }
 
-    fn copy_close_all(&mut self, follower: AccountNo, provider: AccountNo) {
-        let srcs: BTreeSet<(AccountNo, PositionId)> = self
-            .st
-            .positions
-            .values()
-            .filter(|p| p.account == follower)
-            .filter_map(|p| p.copy_from)
-            .filter(|s| s.0 == provider)
-            .collect();
-        for src in srcs {
-            self.copy_reduce(follower, src, i64::MAX);
+    /// Closes the copies of a stopped subscription (with back-off after failed
+    /// closes); an open still in flight is closed once it fills.
+    fn copy_wind_down(&mut self, key: CopyKey) {
+        let (follower, provider) = key;
+        for src in self.copy_sources(follower, provider) {
+            if self.copy_due(key, src.1) {
+                self.copy_reduce(follower, src, i64::MAX);
+            }
+        }
+        if self.copy_sources(follower, provider).is_empty() {
+            let s = self.st.copy_subs.get_mut(&key).expect("sub");
+            s.closing = false;
+            s.retry.clear();
         }
     }
 
     fn copy_reconcile(&mut self) {
-        let keys: Vec<(AccountNo, AccountNo)> = self
+        let keys: Vec<CopyKey> = self
             .st
             .copy_subs
             .iter()
-            .filter(|(_, s)| s.active)
+            .filter(|(_, s)| s.active || s.closing)
             .map(|(k, _)| *k)
             .collect();
-        for (follower, provider) in keys {
-            let s = &self.st.copy_subs[&(follower, provider)];
+        for key in keys {
+            let (follower, provider) = key;
+            let s = &self.st.copy_subs[&key];
+            if !s.active {
+                self.copy_wind_down(key);
+                continue;
+            }
             // equity stop
             if s.equity_stop_pct > 0 {
                 if let Ok(r) = self.account_risk(follower) {
                     let floor = s.start_equity * (100 - s.equity_stop_pct as i128) / 100;
                     if r.equity.minor < floor {
-                        let sm = self
-                            .st
-                            .copy_subs
-                            .get_mut(&(follower, provider))
-                            .expect("sub");
-                        sm.active = false;
-                        sm.stopped_reason = Some("equity stop".into());
-                        self.copy_close_all(follower, provider);
-                        self.events.push(Event::CopyChanged {
-                            follower,
-                            provider,
-                            active: false,
-                        });
+                        self.copy_stop(key, "equity stop", true);
                         continue;
                     }
                 }
             }
-            let (since, ratio, retry_after) = (s.since_ts, s.ratio_bps as i128, s.retry_after);
-            let mut copied = s.copied.clone();
-            // provider positions opened since the subscription: desired follower lots
+            let (since, ratio) = (s.since_ts, s.ratio_bps);
+            // provider positions opened since the subscription, and the ones
+            // already copied (a changed subscription keeps managing them)
             let targets: Vec<(PositionId, String, Side, i64)> = self
                 .st
                 .positions
                 .values()
-                .filter(|p| p.account == provider && p.opened_ts >= since)
+                .filter(|p| {
+                    p.account == provider && (p.opened_ts >= since || s.copied.contains_key(&p.id))
+                })
                 .map(|p| (p.id, p.symbol.clone(), p.side, p.volume.raw()))
                 .collect();
-            let mut changed = false;
             for (pid, symbol, side, pvol) in &targets {
-                let step = self
-                    .st
-                    .symbols
-                    .get(symbol)
-                    .map_or(1, |s| s.lot_step.raw().max(1));
-                let want = ((*pvol as i128 * ratio / 10_000) as i64 / step) * step;
-                let sent = copied.get(pid).copied().unwrap_or(0);
+                if !self.copy_due(key, *pid) {
+                    continue;
+                }
+                // desired follower lots
+                let want = self.copy_want(symbol, *pvol, ratio);
+                let min = self.st.symbols.get(symbol).map_or(0, |s| s.min_lot.raw());
+                let s = &self.st.copy_subs[&key];
+                let sent = s.copied.get(pid).copied().unwrap_or(0);
+                let fails = s.retry.get(pid).map_or(0, |r| r.fails);
                 let src = (provider, *pid);
                 if want > sent {
-                    // provider opened / increased: send only the new part (a follower's
-                    // own close is never re-opened)
-                    if self.st.now < retry_after {
-                        continue;
+                    // provider opened / increased: send only the new part (a
+                    // follower's own close is never re-opened)
+                    if fails >= COPY_OPEN_MAX_FAILS {
+                        // keeps failing (margin, volume limits): skip it
+                        self.copy_set_sent(key, *pid, want);
+                    } else if want - sent >= min {
+                        self.copy_set_sent(key, *pid, want);
+                        let v = Qty::from_raw(want - sent);
+                        self.copy_open(follower, src, symbol, *side, v);
                     }
-                    if self.copy_open(follower, src, symbol, *side, Qty::from_raw(want - sent)) {
-                        copied.insert(*pid, want);
-                        changed = true;
-                    } else if let Some(sm) = self.st.copy_subs.get_mut(&(follower, provider)) {
-                        sm.retry_after = self.st.now + COPY_RETRY_NS;
-                    }
-                } else if want < sent {
-                    // provider reduced: bring the copies down proportionally
-                    let held = self.copy_held(follower, src);
-                    let excess = held - want.min(held);
-                    if excess > 0 {
-                        self.copy_reduce(follower, src, excess);
-                    }
-                    copied.insert(*pid, want);
-                    changed = true;
+                    // below the minimum lot: waits for more provider volume
+                    continue;
+                }
+                if want < sent {
+                    self.copy_set_sent(key, *pid, want);
+                }
+                // provider reduced, or an earlier reduce did not fill: bring
+                // the copies down to `want` (closes in flight are not held)
+                let held = self.copy_held(follower, src);
+                if held > want {
+                    self.copy_reduce(follower, src, held - want);
                 }
             }
             // provider positions gone: close what is left of their copies
             let live: BTreeSet<PositionId> = targets.iter().map(|t| t.0).collect();
-            let gone: Vec<PositionId> = copied
+            let gone: Vec<PositionId> = self.st.copy_subs[&key]
+                .copied
                 .keys()
                 .filter(|p| !live.contains(p))
                 .copied()
                 .collect();
             for pid in gone {
                 let src = (provider, pid);
-                if self.copy_held(follower, src) > 0 {
+                if self.copy_due(key, pid) && self.copy_held(follower, src) > 0 {
                     self.copy_reduce(follower, src, i64::MAX);
                 }
-                let still_open = self
-                    .st
-                    .positions
-                    .values()
-                    .any(|p| p.account == follower && p.copy_from == Some(src));
-                if !still_open {
-                    copied.remove(&pid);
-                }
-                changed = true;
-            }
-            if changed {
-                if let Some(sm) = self.st.copy_subs.get_mut(&(follower, provider)) {
-                    sm.copied = copied;
+                // an open still in flight keeps the entry: it is closed once filled
+                if !self.copy_sources(follower, provider).contains(&src) {
+                    if let Some(s) = self.st.copy_subs.get_mut(&key) {
+                        s.copied.remove(&pid);
+                        s.retry.remove(&pid);
+                    }
                 }
             }
         }
@@ -2452,43 +2588,64 @@ impl Engine {
     /// Performance fee: `perf_fee_bps` of the realized copy result above the
     /// high-water mark moves from the follower to the provider.
     fn copy_settle(&mut self, provider: AccountNo) -> R<()> {
-        let keys: Vec<(AccountNo, AccountNo)> = self
+        let keys: Vec<CopyKey> = self
             .st
             .copy_subs
             .keys()
             .filter(|k| k.1 == provider)
             .copied()
             .collect();
-        let day = self.st.now / 86_400_000_000_000;
         for k in keys {
-            let s = self.st.copy_subs[&k].clone();
-            let gain = s.realized - s.hwm;
-            if gain <= 0 || s.perf_fee_bps == 0 {
-                continue;
-            }
-            let fee = gain * s.perf_fee_bps as i128 / 10_000;
+            self.copy_settle_one(k)?;
+        }
+        Ok(())
+    }
+
+    /// Settles one subscription. The fee never takes more than the follower
+    /// could withdraw (no negative balance, no margin call); the part of the
+    /// gain left unpaid stays above the mark for a later settlement. With a
+    /// zero fee the mark still moves, so a later fee is never charged on
+    /// results earned under the old terms.
+    fn copy_settle_one(&mut self, k: CopyKey) -> R<()> {
+        let s = self.st.copy_subs[&k].clone();
+        let gain = s.realized - s.hwm;
+        if gain <= 0 {
+            return Ok(());
+        }
+        let bps = s.perf_fee_bps as i128;
+        let due = gain * bps / 10_000;
+        let free = self
+            .account_risk(s.follower)
+            .map_or(0, |r| r.free_margin.minor.min(r.balance.minor))
+            .max(0);
+        let fee = due.min(free);
+        // the mark moves over the part of the gain the fee was taken on
+        let charged = if fee == due { gain } else { fee * 10_000 / bps };
+        if fee > 0 {
             let fa = self.st.accounts[&s.follower].clone();
             let pa = self.st.accounts[&s.provider].clone();
             let ccy = self.st.groups[&fa.group].currency;
             let m = Money::new(fee, ccy);
-            if fee > 0 {
-                self.post(
-                    TxnKind::Adjustment,
-                    format!("copyfee:{day}:{}:{}:{}", s.follower, s.provider, s.realized),
-                    vec![(fa.ledger_id, Money::new(-fee, ccy)), (pa.ledger_id, m)],
-                )?;
-                self.balance_event(s.follower);
-                self.balance_event(s.provider);
-                self.events.push(Event::CopyFee {
-                    follower: s.follower,
-                    provider: s.provider,
-                    amount: m,
-                });
-            }
-            let sm = self.st.copy_subs.get_mut(&k).expect("sub");
-            sm.hwm = s.realized;
-            sm.fees_paid += fee;
+            let day = self.st.now / 86_400_000_000_000;
+            self.post(
+                TxnKind::Adjustment,
+                format!(
+                    "copyfee:{day}:{}:{}:{}:{}",
+                    s.follower, s.provider, s.hwm, s.realized
+                ),
+                vec![(fa.ledger_id, Money::new(-fee, ccy)), (pa.ledger_id, m)],
+            )?;
+            self.balance_event(s.follower);
+            self.balance_event(s.provider);
+            self.events.push(Event::CopyFee {
+                follower: s.follower,
+                provider: s.provider,
+                amount: m,
+            });
         }
+        let sm = self.st.copy_subs.get_mut(&k).expect("sub");
+        sm.hwm += charged;
+        sm.fees_paid += fee;
         Ok(())
     }
 }

@@ -297,13 +297,28 @@ pub struct CopySubscription {
     pub hwm: i128,
     /// Fees paid to the provider so far (minor units).
     pub fees_paid: i128,
-    /// Provider position -> follower lots already sent (raw).
+    /// Provider position -> follower lots already sent (raw). The unfilled part
+    /// of a copy open that ends rejected or cancelled is taken back off.
     pub copied: BTreeMap<PositionId, i64>,
-    /// No copy attempt before this time (after a rejection).
-    pub retry_after: u64,
+    /// Provider position -> back-off after copy orders that did not fill.
+    #[serde(default)]
+    pub retry: BTreeMap<PositionId, CopyRetry>,
     pub active: bool,
     #[serde(default)]
     pub stopped_reason: Option<String>,
+    /// Stopped with close: the copies are closed (also opens still in flight
+    /// at the stop, once they fill) until none is left.
+    #[serde(default)]
+    pub closing: bool,
+}
+
+/// Back-off of the copy orders of one provider position.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+pub struct CopyRetry {
+    /// Copy orders (opens or closes) in a row that ended without filling.
+    pub fails: u32,
+    /// No copy order for the position before this time (ns).
+    pub next_ts: u64,
 }
 
 impl Position {
