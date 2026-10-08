@@ -9,3 +9,4 @@ export * from './lib/random';
 export * from './lib/depth';
 export * from './lib/indicators';
 export * from './lib/rafBatcher';
+export * from './lib/backtest';

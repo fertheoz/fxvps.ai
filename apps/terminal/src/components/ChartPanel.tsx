@@ -20,6 +20,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { ContextMenu, type MenuItem } from './ContextMenu';
+import { StrategyTester } from './StrategyTester';
 import type { ChartStyle, ColorScheme } from '../store/terminal';
 
 /** Up / down colours of a scheme (classic follows the theme). */
@@ -227,6 +228,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   const toggleAskLine = useTerminal((s) => s.toggleAskLine);
   // Items are built in the click handler (the menu reads refs), never during render.
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
+  const [testerOpen, setTesterOpen] = useState(false);
   // Bumped when the chart is rebuilt (style change): data effects run again.
   const [chartGen, setChartGen] = useState(0);
 
@@ -925,6 +927,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       scheme('mono', t('chart.scheme.mono')),
       { label: t('chart.grid'), hint: tick(showGrid), onClick: toggleGrid, separator: true },
       { label: replay ? t('replay.stop') : t('replay.start'), onClick: () => (replay ? stopReplay() : startReplay()) },
+      { label: t('bt.title'), onClick: () => setTesterOpen(true) },
       { label: t('chart.volume'), hint: tick(indicatorsOn.volume), onClick: () => toggleIndicator('volume') },
       { label: t('chart.askLine'), hint: tick(showAskLine), onClick: toggleAskLine },
       { label: chartStyle === 'renko' ? t('chart.eventPinsRenko') : t('chart.eventPins'), hint: tick(showEventPins), onClick: toggleEventPins, disabled: chartStyle === 'renko' },
@@ -1130,6 +1133,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
           data-testid={`chart-canvas-${index}`}
         />
         {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} testId="chart-menu" />}
+        {testerOpen && <StrategyTester symbol={slot.symbol} timeframe={slot.timeframe} onClose={() => setTesterOpen(false)} />}
         {loading && <div className="absolute inset-0 grid place-items-center text-muted">{t('chart.loading')}</div>}
         {pinHover && (
           <div
