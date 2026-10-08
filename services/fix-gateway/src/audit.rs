@@ -218,7 +218,10 @@ impl Auditor {
     /// Cancel/replace of a resting order: the new ClOrdID carries on (fills
     /// report under it), the old one is finished here.
     pub fn on_replace(&mut self, lp: &str, orig: &str, o: &Order, now_ns: u64) {
-        let filled = self.orders.get(orig).map_or(Fixed::from_int(0), |t| t.filled);
+        let filled = self
+            .orders
+            .get(orig)
+            .map_or(Fixed::from_int(0), |t| t.filled);
         if let Some(t) = self.orders.get_mut(orig) {
             t.done = true;
         }
@@ -916,7 +919,12 @@ mod tests {
         let mut r = order("LP-5-r1", Side::Sell, "1", Some("1.10205"));
         r.tif = TimeInForce::GoodTillCancel;
         a.on_replace("LMAX", "LP-5", &r, 40 * MS);
-        let mut x = exec(Some("LP-5-r1"), Side::Sell, Some(("1", "1.10205")), OrderStatus::Filled);
+        let mut x = exec(
+            Some("LP-5-r1"),
+            Side::Sell,
+            Some(("1", "1.10205")),
+            OrderStatus::Filled,
+        );
         x.exec_id = "fill-r1".into();
         a.on_exec("LMAX", &x, 50 * MS);
         assert_eq!(a.total_incidents, 1, "no ForeignFill incident");

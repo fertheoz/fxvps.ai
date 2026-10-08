@@ -859,7 +859,10 @@ impl Engine {
         self.events.push(Event::OrderModified { order_id: id });
         if let Some(lp) = self.st.orders[&id].lp_resting {
             let o = &self.st.orders[&id];
-            match o.limit_leg().filter(|_| o.req.order_type == OrderType::Limit) {
+            match o
+                .limit_leg()
+                .filter(|_| o.req.order_type == OrderType::Limit)
+            {
                 Some(l) => {
                     let m = self.order_markup(o, &g, o.req.side).raw() * o.req.side.sign();
                     let (limit, rem) = (Price::from_raw(l.raw() - m), o.remaining());
@@ -1445,7 +1448,14 @@ impl Engine {
 
     /// Books an LP fill on the broker hedge book (omnibus, pending, average,
     /// realised P&L of the reduced part).
-    fn apply_hedge_fill(&mut self, symbol: &str, side: Side, volume: Qty, price: Price, exec_id: &str) {
+    fn apply_hedge_fill(
+        &mut self,
+        symbol: &str,
+        side: Side,
+        volume: Qty,
+        price: Price,
+        exec_id: &str,
+    ) {
         let symbol = symbol.to_string();
         let signed = side.sign() * volume.raw();
         *self.st.hedge_pending.entry(symbol.clone()).or_default() -= signed;
@@ -1510,17 +1520,17 @@ impl Engine {
         let g = self.st.groups[&self.st.accounts[&p.account].group].clone();
         let side = p.side.opposite();
         let vol = p.free_volume();
-        let target = p
-            .tp
-            .filter(|_| p.routing == Routing::ABook && g.lp_resting && vol.is_positive())
-            .map(|tp| {
-                let m = self.markup(&g, &p.symbol, side).raw() * side.sign();
-                Price::from_raw(tp.raw() - m)
-            });
+        let target =
+            p.tp.filter(|_| p.routing == Routing::ABook && g.lp_resting && vol.is_positive())
+                .map(|tp| {
+                    let m = self.markup(&g, &p.symbol, side).raw() * side.sign();
+                    Price::from_raw(tp.raw() - m)
+                });
         match (p.lp_tp, target) {
             (None, None) => {}
             (None, Some(limit)) => {
-                let id = self.send_resting(p.symbol.clone(), side, vol, limit, Some(pid), Vec::new());
+                let id =
+                    self.send_resting(p.symbol.clone(), side, vol, limit, Some(pid), Vec::new());
                 self.st.positions.get_mut(&pid).expect("position").lp_tp = Some(id);
             }
             (Some(id), None) => self.cancel_resting(id),
@@ -1547,7 +1557,14 @@ impl Engine {
         };
         let m = self.order_markup(o, g, o.req.side).raw() * o.req.side.sign();
         let (symbol, side, vol) = (o.req.symbol.clone(), o.req.side, o.remaining());
-        let lp = self.send_resting(symbol, side, vol, Price::from_raw(l.raw() - m), None, vec![id]);
+        let lp = self.send_resting(
+            symbol,
+            side,
+            vol,
+            Price::from_raw(l.raw() - m),
+            None,
+            vec![id],
+        );
         self.st.orders.get_mut(&id).expect("order").lp_resting = Some(lp);
         true
     }
@@ -1717,7 +1734,12 @@ impl Engine {
                 .order_by_client_id(p.account, &clid)
                 .map(|o| o.id)
                 .ok_or("tp child not created")?;
-            self.st.lp_orders.get_mut(&lp_id).expect("lp").children.push(oid);
+            self.st
+                .lp_orders
+                .get_mut(&lp_id)
+                .expect("lp")
+                .children
+                .push(oid);
             *self.st.omnibus_net.entry(symbol.clone()).or_default() += side.sign() * closable;
             let g = self.st.groups[&self.st.accounts[&p.account].group].clone();
             let m = self.order_markup(&self.st.orders[&oid], &g, side).raw() * side.sign();

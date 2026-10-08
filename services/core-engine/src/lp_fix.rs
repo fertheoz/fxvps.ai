@@ -106,7 +106,11 @@ impl LpRouter for FixLpRouter {
             return;
         };
         let order = lp_order(req, lp_symbol, cs, &self.prefix);
-        let orig = cl_ord_id(&self.prefix, req.lp_order_id, req.revision.saturating_sub(1));
+        let orig = cl_ord_id(
+            &self.prefix,
+            req.lp_order_id,
+            req.revision.saturating_sub(1),
+        );
         if let Err(e) = self.orders.try_send(OrderCommand::Replace {
             orig_cl_ord_id: orig,
             order,
@@ -119,7 +123,13 @@ impl LpRouter for FixLpRouter {
         let Some((lp_symbol, _)) = self.symbols.to_lp(&req.symbol) else {
             return;
         };
-        let cmd = lp_cancel(&self.prefix, req.lp_order_id, req.revision, lp_symbol, req.side);
+        let cmd = lp_cancel(
+            &self.prefix,
+            req.lp_order_id,
+            req.revision,
+            lp_symbol,
+            req.side,
+        );
         if let Err(e) = self.orders.try_send(cmd) {
             tracing::warn!(lp_order_id = req.lp_order_id, error = %e, "LP cancel not sent");
         }
@@ -294,7 +304,11 @@ impl LpRouter for AggLpRouter {
             return;
         };
         let order = lp_order(req, lp_symbol, cs, &self.prefix);
-        let orig = cl_ord_id(&self.prefix, req.lp_order_id, req.revision.saturating_sub(1));
+        let orig = cl_ord_id(
+            &self.prefix,
+            req.lp_order_id,
+            req.revision.saturating_sub(1),
+        );
         if let Err(e) = link.orders.try_send(OrderCommand::Replace {
             orig_cl_ord_id: orig,
             order,
@@ -310,7 +324,13 @@ impl LpRouter for AggLpRouter {
         let Some((lp_symbol, _)) = link.symbols.to_lp(&req.symbol) else {
             return;
         };
-        let cmd = lp_cancel(&self.prefix, req.lp_order_id, req.revision, lp_symbol, req.side);
+        let cmd = lp_cancel(
+            &self.prefix,
+            req.lp_order_id,
+            req.revision,
+            lp_symbol,
+            req.side,
+        );
         if let Err(e) = link.orders.try_send(cmd) {
             tracing::warn!(lp_order_id = req.lp_order_id, error = %e, "LP cancel not sent");
         }
@@ -560,7 +580,10 @@ mod tests {
         rep.limit = Some(px("1.10205"));
         r.replace(&rep);
         match rx.try_recv().unwrap() {
-            OrderCommand::Replace { orig_cl_ord_id, order } => {
+            OrderCommand::Replace {
+                orig_cl_ord_id,
+                order,
+            } => {
                 assert_eq!(orig_cl_ord_id, "LP-11");
                 assert_eq!(order.cl_ord_id, "LP-11-r1");
                 assert_eq!(order.tif, TimeInForce::GoodTillCancel);
@@ -571,7 +594,11 @@ mod tests {
         can.revision = 1;
         r.cancel(&can);
         match rx.try_recv().unwrap() {
-            OrderCommand::Cancel { orig_cl_ord_id, cl_ord_id, .. } => {
+            OrderCommand::Cancel {
+                orig_cl_ord_id,
+                cl_ord_id,
+                ..
+            } => {
                 assert_eq!(orig_cl_ord_id, "LP-11-r1");
                 assert_eq!(cl_ord_id, "LP-11-c2");
             }
