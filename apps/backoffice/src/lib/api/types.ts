@@ -349,6 +349,21 @@ export interface EconEvent { id: string; time: number; at: string; currency: str
 export interface EconEventInput { time: number; currency: string; title: string; impact: EconImpact; actual?: string | null; forecast?: string | null; previous?: string | null }
 export interface EconEventList { from: number; to: number; events: EconEvent[] }
 export interface EconImportResult { total: number; added: number; updated: number; unchanged: number; skipped: number }
+export interface StatementMailStatus {
+  /** `CORE_STATEMENT_EMAIL=1` on the core-engine. */
+  enabled: boolean;
+  /** An SMTP channel is configured (CORE_SMTP_URL or IDENTITY_SMTP_URL). */
+  configured: boolean;
+  from: string | null;
+  /** Statements go out on days 1..runDays of the month (UTC). */
+  runDays: number;
+  /** Last month (YYYY-MM): the period the next run covers. */
+  month: string;
+  /** Client accounts with a deliverable e-mail address. */
+  recipients: number;
+  run: { sent: number; passes: number; failed: number; done: boolean } | null;
+}
+export interface StatementTestResult { ok: boolean; to: string; account: number; month: string }
 export interface RuleVersionMeta { id: string; at: string; actor: string; count: number }
 export interface SimState { scenario: { rejectPct: number; latencyMs: number }; instruments: { securityId: string; mid: string | null }[] }
 
@@ -507,6 +522,10 @@ export interface AdminApi {
   /** Stage 13: operations settings & automation. */
   getAlertSettings(): Promise<AlertSettings>;
   saveAlertSettings(s: AlertSettings, actor: Actor): Promise<AlertSettings>;
+  /** Monthly statement e-mail: env flag, SMTP channel and last month's run. */
+  getStatementMail(): Promise<StatementMailStatus>;
+  /** Mails last month's statement of `account` (null: the first client) to the caller. */
+  sendTestStatement(account: number | null, actor: Actor): Promise<StatementTestResult>;
   getCalendar(): Promise<TradingCalendar>;
   saveCalendar(c: TradingCalendar, actor: Actor): Promise<TradingCalendar>;
   /** Economic calendar: `from` / `to` are epoch ms or YYYY-MM-DD (default: last 7 days to 14 days ahead). */
@@ -768,6 +787,14 @@ export interface CopyStrategy {
   deals30d: number;
   winRate: number | null;
   followers: number;
+  /** Largest peak-to-trough fall over 30 days (closed deals), minor units. */
+  maxDrawdown: number;
+  /** The same fall as % of its peak; null without a positive balance. */
+  maxDrawdownPct: number | null;
+  /** Closed-deal equity at the end of each of the last 30 days, minor units. */
+  equityCurve: number[];
+  /** Cumulative return % per day (same 30 points). */
+  returnCurvePct: number[];
 }
 
 export interface CopySubscription {

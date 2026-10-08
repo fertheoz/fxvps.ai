@@ -374,6 +374,8 @@ export const en = {
   'copy.followers': 'Followers',
   'copy.result': 'Your copy result',
   'copy.risk': 'Past results do not guarantee future results. The performance fee is charged only on new profit above your previous peak.',
+  'copy.maxDrawdown': 'Max drawdown',
+  'copy.curve': '30-day equity curve (closed deals)',
   'acct.verification': 'Verification',
   'acct.balance': 'Balance',
   'acct.kyc': 'KYC',

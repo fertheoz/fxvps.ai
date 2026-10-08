@@ -151,6 +151,11 @@ services:
       CORE_LOADTEST_RESULT_FILE: /var/lib/fxvps-yedek/yuk-sinavi/latest.json
       CORE_LP_SIM_URL: http://127.0.0.1:9882
       CORE_JOURNAL_COMPACT_MB: "256"
+      # Monthly statement e-mail (docs/12 item 8): OFF unless CORE_STATEMENT_EMAIL=1 in
+      # .env; sent on days 1-3 of the month over identity's SMTP relay (Resend works).
+      CORE_STATEMENT_EMAIL: ${CORE_STATEMENT_EMAIL:-0}
+      CORE_SMTP_URL: ${IDENTITY_SMTP_URL:-}
+      CORE_MAIL_FROM: ${IDENTITY_MAIL_FROM:-}
       # Back office admin API: identity tokens, admin role + 2FA for changes.
       CORE_ADMIN_ADDR: 127.0.0.1:8090
       CORE_JWT_JWKS_URL: http://127.0.0.1:8081/.well-known/jwks.json

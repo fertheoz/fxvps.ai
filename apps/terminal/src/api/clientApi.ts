@@ -105,6 +105,10 @@ export interface CopyStrategy {
   deals30d: number;
   winRate: number | null;
   followers: number;
+  /** Largest fall from a peak over 30 days (closed deals), % of that peak. */
+  maxDrawdownPct?: number | null;
+  /** Cumulative return % at the end of each of the last 30 days (closed deals). */
+  returnCurvePct?: number[];
 }
 export interface CopySubscription {
   follower: number;

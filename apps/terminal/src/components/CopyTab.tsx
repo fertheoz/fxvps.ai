@@ -3,6 +3,7 @@ import { formatMoney } from '@fxvps/trading-core';
 import { useT } from '../hooks';
 import { useTerminal } from '../store/terminal';
 import { clientApi, type ClientAccount, type CopyOverview } from '../api/clientApi';
+import { Sparkline } from './Sparkline';
 
 /** Strategy showcase: follow a provider at a chosen ratio with an equity stop. */
 export function CopyTab({ acc }: { acc: ClientAccount }) {
@@ -51,6 +52,7 @@ export function CopyTab({ acc }: { acc: ClientAccount }) {
       {data && data.strategies.length === 0 && <div className="text-muted">{t('copy.none')}</div>}
       {data?.strategies.map((s) => {
         const sub = mine.find((m) => m.provider === s.account);
+        const curve = s.returnCurvePct ?? [];
         return (
           <div key={s.account} className="border border-line rounded p-2 grid gap-1" data-testid={`copy-strategy-${s.account}`}>
             <div className="flex items-center gap-2">
@@ -85,8 +87,15 @@ export function CopyTab({ acc }: { acc: ClientAccount }) {
               </span>
             </div>
             {s.description && <div className="text-muted text-[11px]">{s.description}</div>}
+            {curve.length > 1 && (
+              <div className="flex items-center gap-2 text-[11px] text-muted" data-testid={`copy-curve-${s.account}`}>
+                <Sparkline points={curve} width={160} height={30} label={t('copy.curve')} />
+                <span>{t('copy.curve')}</span>
+              </div>
+            )}
             <div className="flex flex-wrap gap-x-4 text-[11px] text-muted num">
               <span>30d: <span className={s.pnl30d < 0 ? 'text-down' : 'text-up'}>{s.return30dPct == null ? '—' : `${s.return30dPct.toFixed(1)}%`}</span></span>
+              <span data-testid={`copy-maxdd-${s.account}`}>{t('copy.maxDrawdown')}: {s.maxDrawdownPct == null ? '—' : <span className={s.maxDrawdownPct > 0 ? 'text-down' : ''}>{`${s.maxDrawdownPct.toFixed(1)}%`}</span>}</span>
               <span>{t('copy.deals')}: {s.deals30d}</span>
               <span>{t('copy.winRate')}: {s.winRate == null ? '—' : `${Math.round(s.winRate * 100)}%`}</span>
               <span>{t('copy.followers')}: {s.followers}</span>

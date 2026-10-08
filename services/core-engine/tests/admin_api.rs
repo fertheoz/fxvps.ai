@@ -1983,3 +1983,111 @@ async fn tenant_hostnames_are_validated_and_drive_the_public_brand() {
     assert_eq!(b["brandColor"], "");
     t.stop();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn statement_email_status_and_test_send() {
+    let dir = tempfile::tempdir().unwrap();
+    let (h, join) = spawn(Settings::new(dir.path())).unwrap();
+    for c in setup_cmds() {
+        h.command(c).await.unwrap();
+    }
+    let (mailer, stub) = admin::statement::Mailer::stub("fxvps <statements@fxvps.test>").unwrap();
+    let mut cfg = AdminConfig::new(dir.path());
+    cfg.mailer = Some(std::sync::Arc::new(mailer));
+    let t = T {
+        app: admin::app(h.clone(), Authenticator::hs256(SECRET), cfg).unwrap(),
+        h,
+        join: Some(join),
+    };
+    // an identity-style staff token: the e-mail is the only name
+    let ops = sign_hs256(
+        SECRET,
+        &Claims {
+            sub: "ops@fxvps.ai".into(),
+            name: None,
+            role: Role::Admin,
+            exp: unix_now() + 600,
+            iat: None,
+            amr: vec![],
+            iss: None,
+        },
+    );
+    let (s, v) = t
+        .req(
+            Method::POST,
+            "/v1/accounts",
+            Some(&ops),
+            Some(json!({"name": "Ayşe <b>Yılmaz</b>", "email": "ayse@mail.com", "group": "a"})),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let login = v["login"].as_u64().unwrap();
+    let (s, st) = t.get("/v1/settings/statement-email", &ops).await;
+    assert_eq!(s, StatusCode::OK, "{st}");
+    // the monthly run is off unless CORE_STATEMENT_EMAIL=1; the channel is there
+    assert_eq!(st["enabled"], false);
+    assert_eq!(st["configured"], true);
+    assert_eq!(st["from"], "statements@fxvps.test");
+    assert_eq!(st["recipients"], 1);
+    assert!(st["run"].is_null());
+    // support may not send
+    let (s, _) = t
+        .req(
+            Method::POST,
+            "/v1/settings/statement-email/test",
+            Some(&token("sam", Role::Support)),
+            Some(json!({})),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, r) = t
+        .req(
+            Method::POST,
+            "/v1/settings/statement-email/test",
+            Some(&ops),
+            Some(json!({})),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["to"], "ops@fxvps.ai");
+    assert_eq!(r["account"], login);
+    let sent = stub.messages().await;
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0.to()[0].to_string(), "ops@fxvps.ai");
+    let raw = &sent[0].1;
+    assert!(raw.contains("[TEST]"), "{raw}");
+    assert!(raw.contains("multipart/alternative"));
+    // a staff token without an address is refused
+    let (s, _) = t
+        .req(
+            Method::POST,
+            "/v1/settings/statement-email/test",
+            Some(&admin_t()),
+            Some(json!({ "account": login })),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (_, audit) = t.get("/v1/audit", &ops).await;
+    assert!(audit.to_string().contains("statement.test"));
+    t.stop();
+
+    // without an SMTP channel the test send says so
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), true).await;
+    let (s, v) = t
+        .req(
+            Method::POST,
+            "/v1/settings/statement-email/test",
+            Some(&ops),
+            Some(json!({ "account": 7 })),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["error"]["code"], "mail_not_configured");
+    t.stop();
+}

@@ -66,6 +66,7 @@
 ## 8. Müşteri hesap ekstresi (PDF)  ⬜
 - Günlük ve aylık ekstre: bakiye hareketi, işlemler, swap, komisyon, açık pozisyonlar. Terminalden indirilir ve e-postayla gönderilir (Resend).
 - **Kabul:** PDF Türkçe/Arapça karakterle doğru; tutarlar ledger ile birebir.
+- Aylık e-posta (`admin/statement.rs`): `CORE_STATEMENT_EMAIL=1` olmadıkça **kapalı**. Ayın 1-3. günleri (UTC) profilinde geçerli e-postası olan her hesaba geçen ayın ekstresi (HTML + düz metin, `/v1/client/statement` ile aynı veri) gider. Kanal: `CORE_SMTP_URL` / `CORE_MAIL_FROM`, yoksa identity'nin `IDENTITY_SMTP_URL` / `IDENTITY_MAIL_FROM` (Resend SMTP). Gönderilen her hesap yönetim defterine yazılır (`statement.email`), yeniden başlatmada aynı ay tekrar gitmez; hatalı tur en çok 3 kez denenir. Konsol → Ayarlar: bayrak durumu + "bana deneme ekstresi gönder".
 
 ## 9. Self-servis yatırma/çekme  ⬜
 - Terminal: Yatır (USDT TRC-20 tek adres + sent-altı tutar eşleme; mt5forexvps'teki kanıtlanmış yöntem), Çek (talep → 4 göz → ödeme).
@@ -90,6 +91,7 @@
 - White-label alan adı DNS kayıtları (madde 7).
 - Groups: demo-retail'e kaldıraç kademesi örn. 100k→1:50, 500k→1:10 (MFA'lı kayıt).
 - D: diski %100 dolu (yerel derleme artık C:\cargo-target'ta); D:'de yer açma kararı sizde.
+- Aylık ekstre e-postasını açmak: `.env`'e `IDENTITY_SMTP_URL` (Resend) + `IDENTITY_MAIL_FROM` + `CORE_STATEMENT_EMAIL=1`; önce Ayarlar'dan deneme ekstresi.
 
 ## Durum günlüğü
 | Tarih | Madde | Durum | PR | Not |

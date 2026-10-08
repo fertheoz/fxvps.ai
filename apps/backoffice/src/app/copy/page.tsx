@@ -5,6 +5,7 @@ import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { CopyStrategy } from "@/lib/api/types";
+import { Sparkline } from "@/components/charts";
 
 /** Copy trading: strategy catalogue, follower subscriptions, performance fees. */
 export default function CopyPage() {
@@ -27,16 +28,21 @@ export default function CopyPage() {
         <CardHeader><CardTitle>{t("copy.strategies")}</CardTitle></CardHeader>
         <table className="w-full text-sm tabular-nums">
           <thead className="bg-muted/50 text-xs text-muted-foreground">
-            <tr>{["#", t("copy.name"), t("copy.fee"), t("copy.pnl30"), t("copy.deals30"), t("copy.winRate"), t("copy.followers"), ""].map((h, i) => <th key={i} className="px-3 py-2 text-left font-medium">{h}</th>)}</tr>
+            <tr>{["#", t("copy.name"), t("copy.fee"), t("copy.pnl30"), t("copy.maxDd"), t("copy.curve"), t("copy.deals30"), t("copy.winRate"), t("copy.followers"), ""].map((h, i) => <th key={i} className="px-3 py-2 text-left font-medium">{h}</th>)}</tr>
           </thead>
           <tbody>
-            {data?.strategies.length === 0 && <tr><td colSpan={8} className="px-3 py-4 text-center text-muted-foreground">{t("copy.none")}</td></tr>}
+            {data?.strategies.length === 0 && <tr><td colSpan={10} className="px-3 py-4 text-center text-muted-foreground">{t("copy.none")}</td></tr>}
             {data?.strategies.map((s) => (
               <tr key={s.account} className="border-t border-border" data-testid={`strategy-${s.account}`}>
                 <td className="px-3 py-1">{s.account}</td>
                 <td className="px-3">{s.name} {s.public ? <Badge tone="success">{t("copy.public")}</Badge> : <Badge tone="muted">{t("copy.hidden")}</Badge>}</td>
                 <td className="px-3">{(s.perfFeeBps / 100).toFixed(1)}%</td>
                 <td className={`px-3 ${s.pnl30d < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>{f.money(s.pnl30d, "USD")}</td>
+                <td className="px-3" data-testid={`strategy-maxdd-${s.account}`}>
+                  {s.maxDrawdown ? <span className="text-red-600 dark:text-red-400">{f.money(-s.maxDrawdown, "USD")}</span> : f.money(0, "USD")}
+                  {s.maxDrawdownPct != null && <span className="ml-1 text-xs text-muted-foreground">({s.maxDrawdownPct.toFixed(1)}%)</span>}
+                </td>
+                <td className="px-3"><Sparkline points={s.equityCurve ?? []} width={110} height={24} label={t("copy.curve")} /></td>
                 <td className="px-3">{s.deals30d}</td>
                 <td className="px-3">{s.winRate == null ? "—" : `${Math.round(s.winRate * 100)}%`}</td>
                 <td className="px-3">{s.followers}</td>
