@@ -1,3 +1,4 @@
+import { useBrand } from '../lib/brand';
 import { useMetrics, useT } from '../hooks';
 import { useTerminal } from '../store/terminal';
 import { formatMoney } from '@fxvps/trading-core';
@@ -47,13 +48,18 @@ export function TopBar() {
   // The build-time default gateway is never written to sessionStorage.
   const gateway = isGatewayApi() ? (loadGateway() ?? defaultGateway()) : null;
   const active = accounts.find((a) => a.id === activeId);
+  const brand = useBrand();
   const cur = active?.currency ?? 'USD';
 
   return (
     <header className="flex items-center gap-3 h-12 px-3 bg-panel border-b border-line shrink-0">
       <div className="flex items-center gap-2 font-semibold text-[14px] tracking-tight">
-        <span className="inline-block w-5 h-5 rounded bg-accent text-white text-[11px] grid place-items-center">fx</span>
-        <span>fxvps.ai</span>
+        {brand.logoUrl ? (
+          <img src={brand.logoUrl} alt="" className="h-5 max-w-[80px] object-contain" />
+        ) : (
+          <span className="inline-block w-5 h-5 rounded bg-accent text-white text-[11px] grid place-items-center">fx</span>
+        )}
+        <span data-testid="brand-name">{brand.name}</span>
       </div>
 
       <label className="flex items-center gap-2 ml-2">

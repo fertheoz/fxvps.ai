@@ -10,6 +10,7 @@ import { loadGateway } from './store/connection';
 import { identityUrl, useSession } from './store/session';
 import { registerServiceWorker } from './lib/install';
 import { captureReferral } from './lib/referral';
+import { loadBrand } from './lib/brand';
 
 const chartView = parseChartView(window.location.search);
 if (chartView) prepareChartWindow(chartView);
@@ -24,6 +25,7 @@ if (gated) useSession.getState().configure(idUrl);
 if (!chartView) startNativeBridge(api);
 registerServiceWorker();
 captureReferral();
+void loadBrand();
 
 const body = chartView ? <ChartWindow api={api} view={chartView} /> : <App api={api} />;
 

@@ -53,6 +53,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/copy/unsubscribe", post(super::copy_admin::unsubscribe))
         .route("/v1/copy/settle", post(super::copy_admin::settle))
         .route("/v1/client/me", get(client_me))
+        .route("/v1/client/brand", get(client_brand))
         .route("/v1/client/copy", get(super::copy_admin::client_list))
         .route(
             "/v1/client/copy/subscribe",
@@ -2753,6 +2754,21 @@ async fn save_tenants(
         if t.name.trim().is_empty() || t.name.len() > 64 {
             return Err(ApiError::bad("tenant name 1-64 chars"));
         }
+        let hex = |s: &str| {
+            s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit())
+        };
+        if !t.brand_color.is_empty() && !hex(&t.brand_color) {
+            return Err(ApiError::bad("brandColor must be #rrggbb"));
+        }
+        if !t.logo_url.is_empty() && (!t.logo_url.starts_with("https://") || t.logo_url.len() > 300)
+        {
+            return Err(ApiError::bad("logoUrl must be an https URL"));
+        }
+        if !t.support_email.is_empty()
+            && (!t.support_email.contains('@') || t.support_email.len() > 120)
+        {
+            return Err(ApiError::bad("supportEmail is not an e-mail address"));
+        }
     }
     let mut store = ctx.store.lock().await;
     store.append(&actor, AdminCmd::TenantsSaved { tenants: ts })?;
@@ -3307,6 +3323,31 @@ async fn client_ib_link(
     drop(store);
     ctx.notify(&["listClients", "ibReport", "listAudit"]);
     Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct BrandQuery {
+    host: String,
+}
+
+/// Public white-label lookup for the terminal (no token: the login page is
+/// branded too). Unknown hosts get the platform defaults.
+async fn client_brand(State(ctx): State<AdminCtx>, Query(q): Query<BrandQuery>) -> ApiResult {
+    let host = q.host.trim().to_ascii_lowercase();
+    let st = ctx.view_state().await;
+    let t = st
+        .tenants
+        .values()
+        .find(|t| t.hostnames.iter().any(|h| h.eq_ignore_ascii_case(&host)));
+    Ok(Json(match t {
+        Some(t) => json!({
+            "tenant": t.id, "name": t.name, "brandColor": t.brand_color,
+            "logoUrl": t.logo_url, "supportEmail": t.support_email,
+        }),
+        None => {
+            json!({ "tenant": null, "name": st.settings.broker_name, "brandColor": "", "logoUrl": "", "supportEmail": "" })
+        }
+    }))
 }
 
 #[cfg(test)]

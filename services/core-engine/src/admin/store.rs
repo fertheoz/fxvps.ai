@@ -108,6 +108,13 @@ pub struct TenantRec {
     /// Public hostnames (terminal / console) for routing and branding.
     #[serde(default)]
     pub hostnames: Vec<String>,
+    /// White label: accent colour (`#rrggbb`), logo (https URL), support e-mail.
+    #[serde(default)]
+    pub brand_color: String,
+    #[serde(default)]
+    pub logo_url: String,
+    #[serde(default)]
+    pub support_email: String,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]

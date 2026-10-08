@@ -183,11 +183,11 @@ function TenantsCard() {
   const [text, setText] = React.useState<string | null>(null);
   const save = useApiMutation((ts: Tenant[]) => api().saveTenants(ts, actor), () => { toast(t("tenants.saved")); setText(null); });
   if (!q.data) return <Card className="p-4">{t("common.loading")}</Card>;
-  const value = text ?? q.data.map((x) => `${x.id} | ${x.name} | ${x.groups.join(", ")} | ${x.hostnames.join(", ")}`).join("\n");
+  const value = text ?? q.data.map((x) => [x.id, x.name, x.groups.join(", "), x.hostnames.join(", "), x.brandColor ?? "", x.logoUrl ?? "", x.supportEmail ?? ""].join(" | ").replace(/( \| )+$/, "")).join("\n");
   const parse = (v: string): Tenant[] => v.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
-    const [id = "", name = "", groups = "", hosts = ""] = l.split("|").map((p) => p.trim());
+    const [id = "", name = "", groups = "", hosts = "", brandColor = "", logoUrl = "", supportEmail = ""] = l.split("|").map((p) => p.trim());
     const list = (x: string) => x.split(",").map((p) => p.trim()).filter(Boolean);
-    return { id, name, groups: list(groups), hostnames: list(hosts) };
+    return { id, name, groups: list(groups), hostnames: list(hosts), brandColor, logoUrl, supportEmail };
   });
   return (
     <Card data-testid="tenants-settings">
