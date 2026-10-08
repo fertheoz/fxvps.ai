@@ -8,7 +8,9 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const day = (iso: string) => iso.slice(0, 10);
 
 /** Printable statement page; the browser's print dialog saves it as PDF. */
-function printStatement(s: Statement, labels: Record<string, string>) {
+type LabelKey = 'title' | 'generated' | 'summary' | 'balance' | 'equity' | 'closed' | 'pnl' | 'commission' | 'swap' | 'cash' | 'date' | 'amount' | 'deposit' | 'withdraw' | 'price' | 'open';
+
+function printStatement(s: Statement, labels: Record<LabelKey, string>) {
   const m = (v: number) => `${formatMoney(v)} ${s.currency}`;
   const row = (cells: (string | number)[]) => `<tr>${cells.map((c) => `<td>${esc(String(c))}</td>`).join('')}</tr>`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(labels.title)} ${s.account}</title>
@@ -54,7 +56,7 @@ export function StatementTab({ acc }: { acc: ClientAccount }) {
       setBusy(false);
     }
   };
-  const labels = {
+  const labels: Record<LabelKey, string> = {
     title: t('stmt.title'), generated: t('stmt.generated'), summary: t('stmt.summary'), balance: t('acct.balance'), equity: t('stmt.equity'),
     closed: t('stmt.closed'), pnl: t('stmt.pnl'), commission: t('stmt.commission'), swap: t('stmt.swap'), cash: t('stmt.cash'),
     date: t('stmt.date'), amount: t('acct.amount'), deposit: t('acct.deposit'), withdraw: t('acct.withdraw'), price: t('stmt.price'), open: t('stmt.open'),
