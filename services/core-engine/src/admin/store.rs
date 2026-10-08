@@ -7,7 +7,7 @@
 
 use super::auth::{Actor, Role};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -503,6 +503,23 @@ pub enum AdminCmd {
         updated: usize,
         source: String,
     },
+    /// Monthly statement e-mailed to the account's profile address
+    /// (`month` = statement period `YYYY-MM`); the run's idempotency record.
+    StatementMailed {
+        month: String,
+        account: u64,
+    },
+    /// One pass of a month's statement run finished.
+    StatementPass {
+        month: String,
+        sent: u32,
+        failed: u32,
+    },
+    /// A staff member mailed a statement to their own address (console test).
+    StatementTestSent {
+        month: String,
+        account: u64,
+    },
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -511,6 +528,22 @@ pub struct AdminRecord {
     pub ts: u64,
     pub actor: Actor,
     pub cmd: AdminCmd,
+}
+
+/// Monthly statement e-mail run of one period (`AdminState::statement_mail`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatementMonth {
+    /// Accounts already mailed for this month.
+    #[serde(default)]
+    pub sent: BTreeSet<u64>,
+    #[serde(default)]
+    pub passes: u32,
+    /// Failures of the last pass.
+    #[serde(default)]
+    pub failed: u32,
+    /// No more passes: everything went out, or the retries are used up.
+    #[serde(default)]
+    pub done: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -566,6 +599,9 @@ pub struct AdminState {
     /// Economic calendar events by id.
     #[serde(default)]
     pub econ_events: BTreeMap<String, super::econ_calendar::EconEvent>,
+    /// Monthly statement e-mail runs by period (`YYYY-MM`).
+    #[serde(default)]
+    pub statement_mail: BTreeMap<String, StatementMonth>,
     /// Oldest first.
     pub audit: Vec<AuditRec>,
 }
@@ -975,6 +1011,42 @@ impl AdminState {
                     format!("{added} added, {updated} updated"),
                 )
             }
+            AdminCmd::StatementMailed { month, account } => {
+                self.statement_mail
+                    .entry(month.clone())
+                    .or_default()
+                    .sent
+                    .insert(*account);
+                self.audit(
+                    r,
+                    "statement.email".into(),
+                    format!("#{account}"),
+                    format!("monthly statement {month}"),
+                )
+            }
+            AdminCmd::StatementPass {
+                month,
+                sent,
+                failed,
+            } => {
+                let m = self.statement_mail.entry(month.clone()).or_default();
+                m.passes += 1;
+                m.failed = *failed;
+                m.done = *failed == 0 || m.passes >= super::statement::MAX_PASSES;
+                let pass = m.passes;
+                self.audit(
+                    r,
+                    "statement.run".into(),
+                    month.clone(),
+                    format!("pass {pass}: {sent} sent, {failed} failed"),
+                )
+            }
+            AdminCmd::StatementTestSent { month, account } => self.audit(
+                r,
+                "statement.test".into(),
+                format!("#{account}"),
+                format!("statement {month} sent to the requester"),
+            ),
             AdminCmd::GroupSaved { group, details } => {
                 self.audit(r, "group.update".into(), group.clone(), details.clone())
             }

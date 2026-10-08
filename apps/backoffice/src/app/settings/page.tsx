@@ -1,6 +1,6 @@
 "use client";
 import * as React from "react";
-import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader } from "@/components/ui/primitives";
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader } from "@/components/ui/primitives";
 import { NumField, SelectField, TextField, useZodForm } from "@/components/form";
 import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
@@ -22,6 +22,7 @@ export default function SettingsPage() {
         {data ? <SettingsForm initial={data} /> : <Card className="p-4">{t("common.loading")}</Card>}
         <SwapCard />
         <AlertsCard />
+        <StatementMailCard />
         <CalendarCard />
         <TenantsCard />
         <Card>
@@ -143,6 +144,45 @@ function AlertsCard() {
         <NumField label={t("settings.quietTo")} value={cfg.quietHoursUtc ? cfg.quietHoursUtc[1] : 6} onChange={(v) => set("quietHoursUtc", cfg.quietHoursUtc ? [cfg.quietHoursUtc[0], Math.min(24, Math.max(0, Math.round(v)))] : null)} step={1} disabled={!editable || !cfg.quietHoursUtc} />
         <NumField label={t("settings.dailyReport")} value={cfg.dailyReportHourUtc ?? -1} onChange={(v) => set("dailyReportHourUtc", v < 0 ? null : Math.min(23, Math.round(v)))} step={1} disabled={!editable} />
         {editable && <div className="sm:col-span-2"><Button onClick={() => save.mutate(cfg)} disabled={save.isPending || !draft} data-testid="alerts-save">{t("common.save")}</Button></div>}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Plan item 8: monthly statement e-mail (env switch) + a test send to oneself. */
+function StatementMailCard() {
+  const t = useT();
+  const actor = useActor();
+  const toast = useToast();
+  const mfaOk = useMfaOk();
+  const q = useApiQuery("getStatementMail", [], { live: 60000 });
+  const [account, setAccount] = React.useState("");
+  const send = useApiMutation(
+    () => api().sendTestStatement(account.trim() ? Number(account) : null, actor),
+    (r) => toast(t("settings.statementTestSent", { month: r.month, account: r.account, to: r.to })),
+  );
+  const s = q.data;
+  if (!s) return <Card className="p-4">{t("common.loading")}</Card>;
+  const canSend = actor.can("settings.edit") && actor.can("clients.view") && mfaOk;
+  return (
+    <Card data-testid="statement-mail">
+      <CardHeader><CardTitle>{t("settings.statementMail")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
+        <p className="text-xs text-muted-foreground sm:col-span-2">{t("settings.statementMailHint", { days: s.runDays })}</p>
+        <div><div className="text-xs text-muted-foreground">{t("settings.statementMailState")}</div>
+          <Badge tone={s.enabled ? "success" : "muted"} data-testid="statement-mail-flag">{s.enabled ? t("settings.statementMailOn") : t("settings.statementMailOff")}</Badge>
+        </div>
+        <div><div className="text-xs text-muted-foreground">{t("settings.statementMailChannel")}</div>{s.configured ? s.from : <span className="text-muted-foreground">{t("settings.statementMailNoChannel")}</span>}</div>
+        <div><div className="text-xs text-muted-foreground">{t("settings.statementMailRecipients")}</div>{s.recipients}</div>
+        <div><div className="text-xs text-muted-foreground">{t("settings.statementMailRun", { month: s.month })}</div>
+          {s.run ? t("settings.statementMailRunState", { sent: s.run.sent, failed: s.run.failed, passes: s.run.passes, done: s.run.done ? t("settings.statementMailDone") : "" }) : t("settings.statementMailNoRun")}
+        </div>
+        {canSend && (
+          <div className="flex flex-wrap items-end gap-2 sm:col-span-2">
+            <div className="space-y-1"><Label>{t("settings.statementTestAccount")}</Label><Input value={account} onChange={(e) => setAccount(e.target.value.replace(/\D/g, ""))} inputMode="numeric" className="w-40" /></div>
+            <Button variant="outline" onClick={() => send.mutate(undefined)} disabled={send.isPending || !s.configured} data-testid="statement-test">{t("settings.statementTestSend")}</Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

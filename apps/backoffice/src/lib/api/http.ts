@@ -122,6 +122,8 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     auditChain: () => call("GET", "/v1/audit/chain"),
     getAlertSettings: () => call("GET", "/v1/settings/alerts"),
     saveAlertSettings: (s, actor) => call("PUT", "/v1/settings/alerts", s, actor),
+    getStatementMail: () => call("GET", "/v1/settings/statement-email"),
+    sendTestStatement: (account, actor) => call("POST", "/v1/settings/statement-email/test", account == null ? {} : { account }, actor),
     getCalendar: () => call("GET", "/v1/settings/calendar"),
     saveCalendar: (c, actor) => call("PUT", "/v1/settings/calendar", c, actor),
     listEconEvents: (from, to) => call("GET", `/v1/econ-calendar${from || to ? `?from=${enc(from ?? "")}&to=${enc(to ?? "")}` : ""}`),

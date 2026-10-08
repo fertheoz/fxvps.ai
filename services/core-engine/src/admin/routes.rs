@@ -98,6 +98,14 @@ pub fn router() -> Router<AdminCtx> {
             "/v1/econ-calendar/{id}",
             put(super::econ_admin::update).delete(super::econ_admin::remove),
         )
+        .route(
+            "/v1/settings/statement-email",
+            get(super::statement::mail_status),
+        )
+        .route(
+            "/v1/settings/statement-email/test",
+            post(super::statement::mail_test),
+        )
         .route("/v1/lp/sim/state", get(sim_state))
         .route("/v1/lp/sim/shock", post(sim_shock))
         .route("/v1/lp/sim/scenario", post(sim_scenario))
@@ -188,7 +196,7 @@ impl AdminCtx {
 
     /// Heavy, read-only report query: runs on the read replica after a
     /// refresh (never blocks trading); falls back to the writer thread.
-    async fn qr<T: Send + 'static>(
+    pub(super) async fn qr<T: Send + 'static>(
         &self,
         f: impl FnOnce(&Engine) -> T + Send + 'static,
     ) -> Result<T, ApiError> {
@@ -3566,7 +3574,7 @@ mod sentiment_tests {
 
 // ------------------------------------------------------------- IB (client side)
 
-fn month_start(ns: u64) -> (u64, u64) {
+pub(super) fn month_start(ns: u64) -> (u64, u64) {
     // (start of this month, start of last month), UTC
     let days = (ns / DAY_NS) as i64;
     let (y, m, _) = civil_from_days(days);
@@ -3576,7 +3584,7 @@ fn month_start(ns: u64) -> (u64, u64) {
     (this, last)
 }
 
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(super) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -3588,7 +3596,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
-fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+pub(super) fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
     let yoe = y.rem_euclid(400);

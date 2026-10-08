@@ -407,6 +407,8 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       return delay({ from: new Date(Date.now() - 30 * 864e5).toISOString(), to: null, rows });
     },
     async getAlertSettings() { return delay(alertSettings); },
+    async getStatementMail() { return delay({ enabled: false, configured: false, from: null, runDays: 3, month: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - 1, 1)).toISOString().slice(0, 7), recipients: 0, run: null }); },
+    async sendTestStatement(_account, actor) { guard(actor, "settings.edit"); throw new Error("No SMTP channel in the demo API"); },
     async saveAlertSettings(s2, actor) { guard(actor, "settings.edit"); alertSettings = { ...s2, telegramToken: "", telegramTokenSet: !!s2.telegramToken || alertSettings.telegramTokenSet }; audit(actor, "settings.alerts", "alerts", "updated"); return delay(alertSettings); },
     async getCalendar() { return delay(calendar); },
     async listEconEvents(from, to) {
@@ -549,7 +551,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     async listFixSessions() { tick(); return delay(s.fix); },
     async getCopyOverview() { return delay({ strategies: copyStrategies, subscriptions: [], groups: ["demo-retail", "demo-hedge"] }); },
     async saveCopyStrategy(account, s) {
-      const rec = { account, ...s, pnl30d: 0, return30dPct: null, deals30d: 0, winRate: null, followers: 0 };
+      const rec = { account, ...s, pnl30d: 0, return30dPct: null, deals30d: 0, winRate: null, followers: 0, maxDrawdown: 0, maxDrawdownPct: null, equityCurve: [], returnCurvePct: [] };
       copyStrategies = [...copyStrategies.filter((x) => x.account !== account), rec];
       return delay(rec);
     },

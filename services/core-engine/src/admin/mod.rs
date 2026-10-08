@@ -16,6 +16,7 @@ pub mod econ_calendar;
 pub mod lp_poll;
 mod routes;
 pub mod seed;
+pub mod statement;
 pub mod store;
 mod stream;
 pub mod views;
@@ -54,6 +55,8 @@ pub struct AdminConfig {
     pub agg: Option<Arc<crate::lp_agg::Aggregator>>,
     /// Account name map of the in-process stack (client self-service routes).
     pub names: Option<crate::api::AccountNames>,
+    /// Statement mailer; `None`: from the environment ([`statement::Mailer::from_env`]).
+    pub mailer: Option<Arc<statement::Mailer>>,
 }
 
 /// fix-gateway admin endpoint (`FIX_ADMIN_TOKEN` on the gateway side).
@@ -77,6 +80,7 @@ impl AdminConfig {
             lp_admin: None,
             agg: None,
             names: None,
+            mailer: None,
         }
     }
 
@@ -124,6 +128,8 @@ pub struct AdminCtx {
     /// Read replica for heavy reports (stage 14); `None` = reports run on the writer thread.
     pub replica: Option<Arc<tokio::sync::Mutex<crate::replica::Replica>>>,
     pub http: reqwest::Client,
+    /// SMTP channel of the monthly statement e-mail; `None`: not configured.
+    pub mailer: Option<Arc<statement::Mailer>>,
 }
 
 impl AdminCtx {
@@ -372,9 +378,14 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .unwrap_or_default(),
+        mailer: cfg
+            .mailer
+            .clone()
+            .or_else(|| statement::Mailer::from_env().map(Arc::new)),
     };
     stream::spawn_ticker(ctx.clone(), cfg.live_interval_ms);
     alerts::spawn(ctx.clone());
+    statement::spawn(ctx.clone());
     let legacy =
         crate::router(engine).layer(middleware::from_fn_with_state(ctx.clone(), legacy_guard));
     let mut app = routes::router()

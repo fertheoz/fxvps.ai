@@ -375,6 +375,8 @@ export const tr: Record<MessageKey, string> = {
   'copy.followers': 'Takipçi',
   'copy.result': 'Kopya sonucunuz',
   'copy.risk': 'Geçmiş sonuçlar gelecekteki sonuçları garanti etmez. Performans ücreti yalnızca önceki zirvenizin üstündeki yeni kârdan alınır.',
+  'copy.maxDrawdown': 'Maks. düşüş',
+  'copy.curve': '30 günlük varlık eğrisi (kapanan işlemler)',
   'acct.verification': 'Doğrulama',
   'acct.balance': 'Bakiye',
   'acct.kyc': 'KYC',

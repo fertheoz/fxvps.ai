@@ -106,3 +106,26 @@ export function ExecutionChart({ data, labels }: { data: { label: string; avgSli
     </ResponsiveContainer>
   );
 }
+
+/** SVG path of a sparkline through `points` (oldest first) in a `w` x `h` box. */
+export function sparkPath(points: number[], w: number, h: number, pad = 2): string {
+  if (points.length < 2) return "";
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const step = w / (points.length - 1);
+  // a flat series sits in the middle instead of on an edge
+  const y = (v: number) => (max === min ? h / 2 : pad + (h - 2 * pad) * (1 - (v - min) / (max - min)));
+  return points.map((v, i) => `${i ? "L" : "M"}${(i * step).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+}
+
+/** Compact trend line for table cells: green when it ends at or above its start. */
+export function Sparkline({ points, width = 120, height = 28, label }: { points: number[]; width?: number; height?: number; label?: string }) {
+  const d = sparkPath(points, width, height);
+  if (!d) return <span className="text-muted-foreground">—</span>;
+  const up = (points[points.length - 1] ?? 0) >= (points[0] ?? 0);
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={label} data-testid="sparkline">
+      <path d={d} fill="none" stroke={up ? CHART.up : CHART.down} strokeWidth={1.5} strokeLinejoin="round" />
+    </svg>
+  );
+}
