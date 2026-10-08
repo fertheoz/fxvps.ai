@@ -15,7 +15,7 @@ export default function CopyPage() {
   const toast = useToast();
   const { data } = useApiQuery("getCopyOverview", [], { live: 5000 });
   const unsub = useApiMutation((r: { follower: number; provider: number; close: boolean }) => api().copyUnsubscribe(r, actor), () => toast(t("common.saved")));
-  const settle = useApiMutation((provider: number) => api().copySettle(provider, actor), (r) => toast(`${t("copy.feesCharged")}: ${f.money(r.fees / 100, "USD")}`));
+  const settle = useApiMutation((provider: number) => api().copySettle(provider, actor), (r) => toast(`${t("copy.feesCharged")}: ${f.money(r.fees, "USD")}`));
   const edit = actor.can("clients.edit");
   return (
     <div data-testid="page-copy" className="space-y-4">
@@ -36,7 +36,7 @@ export default function CopyPage() {
                 <td className="px-3 py-1">{s.account}</td>
                 <td className="px-3">{s.name} {s.public ? <Badge tone="success">{t("copy.public")}</Badge> : <Badge tone="muted">{t("copy.hidden")}</Badge>}</td>
                 <td className="px-3">{(s.perfFeeBps / 100).toFixed(1)}%</td>
-                <td className={`px-3 ${s.pnl30d < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>{f.money(s.pnl30d / 100, "USD")}</td>
+                <td className={`px-3 ${s.pnl30d < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>{f.money(s.pnl30d, "USD")}</td>
                 <td className="px-3">{s.deals30d}</td>
                 <td className="px-3">{s.winRate == null ? "—" : `${Math.round(s.winRate * 100)}%`}</td>
                 <td className="px-3">{s.followers}</td>
@@ -65,8 +65,8 @@ export default function CopyPage() {
                 <td className="px-3">{s.provider}</td>
                 <td className="px-3">{(s.ratioBps / 100).toFixed(0)}%</td>
                 <td className="px-3">{s.equityStopPct ? `${s.equityStopPct}%` : "—"}</td>
-                <td className="px-3">{f.money(s.realized / 100, "USD")}</td>
-                <td className="px-3">{f.money(s.feesPaid / 100, "USD")}</td>
+                <td className="px-3">{f.money(s.realized, "USD")}</td>
+                <td className="px-3">{f.money(s.feesPaid, "USD")}</td>
                 <td className="px-3">{s.active ? <Badge tone="success">{t("copy.active")}</Badge> : <Badge tone="muted">{s.stoppedReason ?? t("copy.stopped")}</Badge>}</td>
                 <td className="px-3 text-right">
                   {edit && s.active && (
