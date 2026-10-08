@@ -62,6 +62,8 @@ pub fn router() -> Router<AdminCtx> {
             "/v1/client/copy/unsubscribe",
             post(super::copy_admin::client_unsubscribe),
         )
+        .route("/v1/client/ib", get(client_ib))
+        .route("/v1/client/ib/link", post(client_ib_link))
         .route("/v1/client/funding", post(client_funding_request))
         .route("/v1/client/kyc/documents", post(client_kyc_upload))
         .route("/v1/reports/transactions", get(transactions))
@@ -1332,6 +1334,19 @@ struct IbReq {
     /// IB this (client) account belongs to; null clears.
     #[serde(default)]
     ib_account: Option<Option<u64>>,
+    /// Rebate per closed lot (minor units).
+    #[serde(default)]
+    per_lot_cents: Option<i64>,
+    /// Override on sub-IBs' clients (percent).
+    #[serde(default)]
+    override_pct: Option<u8>,
+    /// Referral code; empty clears.
+    #[serde(default)]
+    code: Option<String>,
+}
+
+fn valid_ib_code(c: &str) -> bool {
+    (3..=20).contains(&c.len()) && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
 }
 
 async fn set_ib(
@@ -1355,9 +1370,52 @@ async fn set_ib(
             return Err(ApiError::bad("unknown IB account"));
         }
     }
+    if req
+        .per_lot_cents
+        .is_some_and(|v| !(0..=10_000).contains(&v))
+        || req.override_pct.is_some_and(|v| v > 50)
+    {
+        return Err(ApiError::bad("perLotCents 0..10000, overridePct 0..50"));
+    }
     let mut store = ctx.store.lock().await;
     if let Some(p) = req.share_pct {
         store.append(&actor, AdminCmd::IbShareSet { account, pct: p })?;
+    }
+    if req.per_lot_cents.is_some() || req.override_pct.is_some() || req.code.is_some() {
+        let mut plan = store
+            .state
+            .ib_plan
+            .get(&account)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(v) = req.per_lot_cents {
+            plan.per_lot_cents = v;
+        }
+        if let Some(v) = req.override_pct {
+            plan.override_pct = v;
+        }
+        if let Some(code) = req.code.as_deref().map(str::trim) {
+            let code = code.to_uppercase();
+            if !code.is_empty() {
+                if !valid_ib_code(&code) {
+                    return Err(ApiError::bad("code: 3-20 letters, digits or '-'"));
+                }
+                if store
+                    .state
+                    .ib_plan
+                    .iter()
+                    .any(|(a, p)| *a != account && p.code == code)
+                {
+                    return Err(ApiError::new(
+                        StatusCode::CONFLICT,
+                        "conflict",
+                        "code already used",
+                    ));
+                }
+            }
+            plan.code = code;
+        }
+        store.append(&actor, AdminCmd::IbPlanSet { account, plan })?;
     }
     if let Some(ib) = req.ib_account {
         store.append(&actor, AdminCmd::IbLinked { account, ib })?;
@@ -3096,3 +3154,160 @@ async fn save_settings(
 }
 
 pub(super) const LIVE_ENGINE_TOPICS: [&str; 8] = ENGINE_TOPICS;
+
+// ------------------------------------------------------------- IB (client side)
+
+fn month_start(ns: u64) -> (u64, u64) {
+    // (start of this month, start of last month), UTC
+    let days = (ns / DAY_NS) as i64;
+    let (y, m, _) = civil_from_days(days);
+    let this = days_from_civil(y, m, 1) as u64 * DAY_NS;
+    let (py, pm) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
+    let last = days_from_civil(py, pm, 1) as u64 * DAY_NS;
+    (this, last)
+}
+
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = (m as i64 + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// The signed-in client's IB dashboard: referral link, clients, this and last
+/// month's accrual, and payouts (balance ops keyed `ibpay:<login>:...`).
+async fn client_ib(State(ctx): State<AdminCtx>, client: ClientActor) -> ApiResult {
+    let st = ctx.view_state().await;
+    let mine: Vec<u64> = client
+        .logins
+        .iter()
+        .map(|(_, l)| *l)
+        .filter(|l| {
+            st.ib_share.contains_key(l)
+                || st.ib_plan.contains_key(l)
+                || st.ib_of.values().any(|i| i == l)
+        })
+        .collect();
+    let now = now_ns();
+    let (this_m, last_m) = month_start(now);
+    let st2 = st.clone();
+    let (cur, prev) = ctx
+        .q(move |e| {
+            (
+                views::ib_report(e, &st2, this_m, u64::MAX),
+                views::ib_report(e, &st, last_m, this_m),
+            )
+        })
+        .await?;
+    let st = ctx.view_state().await;
+    let row = |rep: &Value, ib: u64| {
+        rep["rows"]
+            .as_array()
+            .and_then(|r| r.iter().find(|x| x["ib"] == json!(ib)).cloned())
+            .unwrap_or(Value::Null)
+    };
+    let out: Vec<Value> = mine
+        .iter()
+        .map(|ib| {
+            let plan = st.ib_plan.get(ib).cloned().unwrap_or_default();
+            let payouts: Vec<Value> = st
+                .ops
+                .values()
+                .filter(|o| o.account == *ib && o.idempotency_key.starts_with(&format!("ibpay:{ib}:")))
+                .map(|o| json!({ "amount": o.amount, "currency": o.currency, "reason": o.reason, "status": o.status, "requestedAt": views::iso(o.requested_at) }))
+                .collect();
+            json!({
+                "ib": ib,
+                "code": plan.code,
+                "sharePct": st.ib_share.get(ib).copied().unwrap_or(0),
+                "perLotCents": plan.per_lot_cents,
+                "overridePct": plan.override_pct,
+                "clients": st.ib_of.values().filter(|i| *i == ib).count(),
+                "thisMonth": row(&cur, *ib),
+                "lastMonth": row(&prev, *ib),
+                "payouts": payouts,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "ibs": out })))
+}
+
+#[derive(Deserialize)]
+struct IbLinkReq {
+    account: String,
+    code: String,
+}
+
+/// A client joins an IB with its referral code (once; changes go through support).
+async fn client_ib_link(
+    State(ctx): State<AdminCtx>,
+    client: ClientActor,
+    Json(req): Json<IbLinkReq>,
+) -> ApiResult {
+    if client.read_only {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "read-only API key",
+        ));
+    }
+    let login = client
+        .login_of(&req.account)
+        .ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "forbidden", "not your account"))?;
+    let code = req.code.trim().to_uppercase();
+    let mut store = ctx.store.lock().await;
+    if store.state.ib_of.contains_key(&login) {
+        return Ok(Json(json!({ "ok": true, "already": true })));
+    }
+    let ib = store
+        .state
+        .ib_plan
+        .iter()
+        .find(|(_, p)| !p.code.is_empty() && p.code == code)
+        .map(|(a, _)| *a)
+        .ok_or_else(|| ApiError::not_found("unknown referral code"))?;
+    if ib == login || client.owns(ib) {
+        return Err(ApiError::bad("cannot refer yourself"));
+    }
+    store.append(
+        &client_as_actor(&client),
+        AdminCmd::IbLinked {
+            account: login,
+            ib: Some(ib),
+        },
+    )?;
+    drop(store);
+    ctx.notify(&["listClients", "ibReport", "listAudit"]);
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod ib_month_tests {
+    use super::*;
+
+    #[test]
+    fn month_starts() {
+        // 2026-10-08 12:00 UTC
+        let ns = (days_from_civil(2026, 10, 8) as u64) * DAY_NS + 12 * 3_600_000_000_000;
+        let (this, last) = month_start(ns);
+        assert_eq!(views::iso(this), "2026-10-01T00:00:00.000Z");
+        assert_eq!(views::iso(last), "2026-09-01T00:00:00.000Z");
+        let jan = (days_from_civil(2027, 1, 15) as u64) * DAY_NS;
+        assert_eq!(views::iso(month_start(jan).1), "2026-12-01T00:00:00.000Z");
+    }
+}

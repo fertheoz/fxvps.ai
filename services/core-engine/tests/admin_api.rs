@@ -1309,3 +1309,86 @@ async fn open_account_and_fund() {
     assert!(audit.to_string().contains("account.open"));
     t.stop();
 }
+
+#[tokio::test]
+async fn ib_multi_level_rebate_and_referral_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), true).await;
+    let a = admin_t();
+    for acc in [9u64, 10] {
+        t.h.command(Command::OpenAccount {
+            account: acc,
+            group: "b".into(),
+        })
+        .await
+        .unwrap();
+    }
+    let patch = |id: u64, body: Value| {
+        let a = a.clone();
+        let t = &t;
+        async move {
+            t.req(
+                Method::PATCH,
+                &format!("/v1/accounts/{id}/ib"),
+                Some(&a),
+                Some(body),
+                &[],
+            )
+            .await
+        }
+    };
+    // 8 -> sub-IB 10 -> master IB 9
+    assert_eq!(patch(8, json!({"ibAccount": 10})).await.0, StatusCode::OK);
+    assert_eq!(
+        patch(
+            10,
+            json!({"ibAccount": 9, "perLotCents": 500, "code": "sub-1"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        patch(9, json!({"overridePct": 50, "code": "MASTER"}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    // the same code twice is refused, a malformed one too
+    assert_eq!(
+        patch(9, json!({"code": "SUB-1"})).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        patch(9, json!({"code": "a b"})).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    // client 8 closes its 1 lot: the sub-IB earns the per-lot rebate
+    let pid = t.h.read_sync(|e| e.positions_of(8)[0].id).unwrap();
+    t.h.command(Command::ClosePosition {
+        account: 8,
+        position_id: pid,
+        volume: None,
+        client_order_id: "c".into(),
+    })
+    .await
+    .unwrap();
+    let (s, r) = t.get("/v1/reports/ib", &a).await;
+    assert_eq!(s, StatusCode::OK);
+    let row = |ib: u64| {
+        r["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["ib"] == ib)
+            .unwrap()
+            .clone()
+    };
+    let sub = row(10);
+    assert_eq!(sub["rebate"], 500);
+    assert_eq!(sub["payout"], 500);
+    assert_eq!(sub["code"], "SUB-1");
+    assert_eq!(sub["parent"], 9);
+    assert_eq!(row(9)["overridePct"], 50);
+    t.stop();
+}

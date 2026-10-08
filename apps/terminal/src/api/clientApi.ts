@@ -123,7 +123,32 @@ export interface CopyOverview {
 
 const json = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
+export interface IbPeriod {
+  clients: number;
+  deals: number;
+  lots: number;
+  payout: number;
+  share?: number;
+  rebate?: number;
+  override?: number;
+  currency: string | null;
+}
+export interface IbDashboard {
+  ib: number;
+  code: string;
+  sharePct: number;
+  perLotCents: number;
+  overridePct: number;
+  clients: number;
+  thisMonth: IbPeriod | null;
+  lastMonth: IbPeriod | null;
+  payouts: { amount: number; currency: string; reason: string; status: string; requestedAt: string }[];
+}
+
 export const clientApi = {
+  ib: () => call<{ ibs: IbDashboard[] }>('/ib'),
+  ibLink: (account: string, code: string) =>
+    call<{ ok: boolean }>('/ib/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account, code }) }),
   copy: () => call<CopyOverview>('/copy'),
   copySubscribe: (r: { account: string; provider: number; ratioBps: number; equityStopPct: number }) => call<{ ok: boolean }>('/copy/subscribe', json(r)),
   copyUnsubscribe: (r: { account: string; provider: number; close: boolean }) => call<{ ok: boolean }>('/copy/unsubscribe', json(r)),

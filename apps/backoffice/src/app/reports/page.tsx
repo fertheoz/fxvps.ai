@@ -5,7 +5,8 @@ import { Download } from "lucide-react";
 import { DataTable } from "@/components/ui/data-table";
 import { Badge, Button, PageHeader, Pnl, Stat, Tabs } from "@/components/ui/primitives";
 import { BookBadge, SideBadge, ToxicityBadge } from "@/components/badges";
-import { useApiQuery } from "@/lib/queries";
+import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
+import { useToast } from "@/components/shell/providers";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { Trade } from "@/lib/schemas";
 import type { BestExecutionRow, ClientFlowRow, IbRow, ExecutionRow, ExecutionSummary, LpExecution, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
@@ -169,7 +170,10 @@ export default function ReportsPage() {
     ibc.accessor("lots", { header: t("positions.lots"), cell: (c) => c.getValue().toFixed(2) }),
     ibc.accessor("commission", { header: t("reports.commission"), cell: (c) => f.money(c.getValue(), c.row.original.currency ?? "USD") }),
     ibc.accessor("markup", { header: t("reports.markup"), cell: (c) => f.money(c.getValue(), c.row.original.currency ?? "USD") }),
+    ibc.accessor("rebate", { header: t("ib.rebate"), cell: (c) => f.money(c.getValue() ?? 0, c.row.original.currency ?? "USD") }),
+    ibc.accessor("override", { header: t("ib.override"), cell: (c) => f.money(c.getValue() ?? 0, c.row.original.currency ?? "USD") }),
     ibc.accessor("payout", { header: t("ib.payout"), cell: (c) => <Pnl value={c.getValue()}>{f.money(c.getValue(), c.row.original.currency ?? "USD")}</Pnl> }),
+    ibc.display({ id: "pay", header: "", cell: (c) => <IbPayButton row={c.row.original} from={range.from} to={range.to} /> }),
   ];
   const tradeCols = [
     tc.accessor("closedAt", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
@@ -279,5 +283,37 @@ export default function ReportsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Books the IB payout for the selected period as a deposit through the
+ * four-eyes balance-op flow; the key makes paying one period twice a no-op. */
+function IbPayButton({ row, from, to }: { row: IbRow; from: string; to: string }) {
+  const t = useT();
+  const actor = useActor();
+  const mfa = useMfaOk();
+  const toast = useToast();
+  const pay = useApiMutation(
+    () =>
+      api().balanceOp(
+        {
+          clientId: String(row.ib),
+          type: "deposit",
+          amount: row.payout,
+          currency: (row.currency ?? "USD") as never,
+          reason: `IB payout ${from}..${to}`,
+          idempotencyKey: `ibpay:${row.ib}:${from}:${to}`,
+        },
+        actor,
+      ),
+    () => toast(t("ib.payRequested")),
+  );
+  if (!actor.can("balance.deposit") || row.payout <= 0) return null;
+  return (
+    <Button size="sm" variant="outline" disabled={!mfa || !from || !to || pay.isPending} title={!from || !to ? t("ib.payPeriod") : undefined}
+      onClick={() => { if (window.confirm(`${t("ib.payConfirm")} #${row.ib}: ${row.payout / 100} ${row.currency ?? "USD"} (${from}..${to})`)) pay.mutate(undefined); }}
+      data-testid={`ib-pay-${row.ib}`}>
+      {t("ib.pay")}
+    </Button>
   );
 }
