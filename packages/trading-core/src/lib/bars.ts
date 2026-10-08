@@ -21,3 +21,17 @@ export function applyTick(last: Bar | undefined, price: number, timeSec: number,
     volume: last.volume + volume,
   };
 }
+
+/** One Heikin-Ashi bar from the raw bar and the previous HA bar. */
+export function heikinAshiBar(prev: Bar | undefined, b: Bar): Bar {
+  const close = (b.open + b.high + b.low + b.close) / 4;
+  const open = prev ? (prev.open + prev.close) / 2 : (b.open + b.close) / 2;
+  return { time: b.time, open, high: Math.max(b.high, open, close), low: Math.min(b.low, open, close), close, volume: b.volume };
+}
+
+/** Heikin-Ashi series (same times and volumes as the input). */
+export function heikinAshi(bars: Bar[]): Bar[] {
+  const out: Bar[] = [];
+  for (const b of bars) out.push(heikinAshiBar(out[out.length - 1], b));
+  return out;
+}

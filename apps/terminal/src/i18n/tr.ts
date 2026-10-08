@@ -174,6 +174,7 @@ export const tr: Record<MessageKey, string> = {
   'chart.style.bars': 'Çubuk (OHLC)',
   'chart.style.line': 'Çizgi',
   'chart.style.area': 'Alan',
+  'chart.style.heikin': 'Heikin-Ashi',
   'chart.scheme.classic': 'Renkler: yeşil / kırmızı',
   'chart.scheme.blueOrange': 'Renkler: mavi / turuncu',
   'chart.scheme.mono': 'Renkler: tek ton',
