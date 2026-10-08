@@ -35,6 +35,8 @@ pub const REPLAY: Duration = Duration::from_secs(120);
 pub const ORDER_TIMEOUT: Duration = Duration::from_secs(3);
 /// A session table older than this is reported as "gateway unreachable".
 pub const STATUS_STALE: Duration = Duration::from_secs(5);
+/// Row reason while the gateway process publishes no status.
+pub const UNREACHABLE: &str = "gateway process unreachable";
 /// Interval of the last-quote re-publication (see `serve_gateway`).
 pub const REPUBLISH: Duration = Duration::from_secs(5);
 
@@ -263,6 +265,9 @@ impl RemoteGateway {
             .await
             .map_err(|e| e.to_string())?;
         let table = status.clone();
+        // "never seen" counts from the link's start: a fresh process is not
+        // unreachable until the gateway has stayed silent for STATUS_STALE
+        let started = std::time::Instant::now();
         let last_seen = Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
         let seen = last_seen.clone();
         tasks.push(tokio::spawn(async move {
@@ -285,13 +290,22 @@ impl RemoteGateway {
                 tick.tick().await;
                 let stale = last_seen
                     .lock()
-                    .map(|s| s.is_none_or(|t| t.elapsed() > STATUS_STALE))
+                    .map(|s| s.unwrap_or(started).elapsed() > STATUS_STALE)
                     .unwrap_or(true);
                 if stale {
                     if let Ok(mut t) = table.write() {
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
                         for r in t.iter_mut() {
+                            // the down time starts when the gateway went silent, not
+                            // at the session's old log-on: the alert grace then applies
+                            if r.logged_on || r.last_down_reason.as_deref() != Some(UNREACHABLE) {
+                                r.since_ms = now_ms;
+                            }
                             r.logged_on = false;
-                            r.last_down_reason = Some("gateway process unreachable".into());
+                            r.last_down_reason = Some(UNREACHABLE.into());
                         }
                     }
                 }
