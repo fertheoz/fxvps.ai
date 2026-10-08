@@ -643,12 +643,16 @@ export interface LpPolicyRuntime extends Omit<LpPolicy, "minLots" | "maxLots"> {
 export interface LpAggregation {
   mode: AggMode;
   maxDeviationPoints: number;
+  /** Silent-LP guard (ms, 0 = off). */
+  maxQuoteAgeMs?: number;
   lps: LpPolicyRuntime[];
 }
 
 export interface LpAggregationInput {
   mode: AggMode;
   maxDeviationPoints: number;
+  /** Silent-LP guard (ms, 0 = off). */
+  maxQuoteAgeMs?: number;
   lps: LpPolicy[];
 }
 
