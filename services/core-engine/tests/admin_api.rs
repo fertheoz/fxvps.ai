@@ -1338,10 +1338,11 @@ async fn read_views_see_admin_state() {
     let dir = tempfile::tempdir().unwrap();
     let t = T::start(dir.path(), true).await;
     let a = admin_t();
+    copy_accounts(&t, &[20]).await;
     let (s, _) = t
         .req(
             Method::PUT,
-            "/v1/copy/strategies/7",
+            "/v1/copy/strategies/20",
             Some(&a),
             Some(json!({"name": "Alpha", "perfFeeBps": 2000, "public": true})),
             &[],
@@ -1364,6 +1365,96 @@ async fn read_views_see_admin_state() {
     let (_, r) = t.get("/v1/reports/ib", &a).await;
     assert_eq!(r["rows"][0]["ib"], 7);
     assert_eq!(r["rows"][0]["clients"], 1);
+    t.stop();
+}
+
+/// Funded accounts in `demo-hedge`, a group copy trading is enabled for by
+/// default (`CORE_COPY_GROUPS`).
+async fn copy_accounts(t: &T, accounts: &[u64]) {
+    t.h.command(Command::SetGroup(GroupConfig::retail(
+        "demo-hedge",
+        Currency::USD,
+        Routing::BBook,
+    )))
+    .await
+    .unwrap();
+    for &account in accounts {
+        t.h.command(Command::OpenAccount {
+            account,
+            group: "demo-hedge".into(),
+        })
+        .await
+        .unwrap();
+        t.h.command(Command::Deposit {
+            account,
+            amount: Money::parse("10000", Currency::USD).unwrap(),
+            key: format!("d{account}"),
+        })
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn copy_gate_needs_both_sides_in_a_copy_group() {
+    // regression: only the follower's group was checked, so a demo follower
+    // could pay its performance fee into a live provider account
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), true).await;
+    let a = admin_t();
+    copy_accounts(&t, &[20, 21]).await;
+    let strategy = |account: u64| {
+        let a = a.clone();
+        let t = &t;
+        async move {
+            t.req(
+                Method::PUT,
+                &format!("/v1/copy/strategies/{account}"),
+                Some(&a),
+                Some(json!({"name": "Alpha", "perfFeeBps": 2000, "public": true})),
+                &[],
+            )
+            .await
+            .0
+        }
+    };
+    // account 7 is in a group without copy trading
+    assert_eq!(strategy(7).await, StatusCode::FORBIDDEN);
+    assert_eq!(strategy(20).await, StatusCode::OK);
+    let subscribe = || {
+        let a = a.clone();
+        let t = &t;
+        async move {
+            t.req(
+                Method::POST,
+                "/v1/copy/subscribe",
+                Some(&a),
+                Some(json!({"follower": 21, "provider": 20})),
+                &[],
+            )
+            .await
+        }
+    };
+    // the strategy account was moved out of the copy groups afterwards
+    let group = |account: u64, to: &str| Command::SetAccountGroup {
+        account,
+        group: to.into(),
+    };
+    t.h.command(group(20, "b")).await.unwrap();
+    let (s, v) = subscribe().await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    t.h.command(group(20, "demo-hedge")).await.unwrap();
+    let (s, v) = subscribe().await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    // while subscribed, neither side can leave its group
+    for account in [20, 21] {
+        let ev = t.h.command(group(account, "b")).await.unwrap();
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, oms::Event::CommandRejected { .. })),
+            "{ev:?}"
+        );
+    }
     t.stop();
 }
 

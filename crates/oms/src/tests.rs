@@ -1722,6 +1722,497 @@ fn copy_trading_never_reopens_a_followers_manual_close() {
     assert!(h.e.positions_of(2).is_empty());
 }
 
+fn subscribe(h: &mut H, follower: u64, provider: u64, ratio_bps: u32, fee_bps: u32) -> Vec<Event> {
+    h.cmd(Command::CopySubscribe {
+        follower,
+        provider,
+        ratio_bps,
+        equity_stop_pct: 0,
+        perf_fee_bps: fee_bps,
+    })
+}
+
+fn copy_sub(h: &H, follower: u64, provider: u64) -> CopySubscription {
+    h.e.copy_subscriptions()
+        .into_iter()
+        .find(|s| s.follower == follower && s.provider == provider)
+        .cloned()
+        .unwrap()
+}
+
+fn rejected(ev: &[Event]) -> bool {
+    ev.iter()
+        .any(|e| matches!(e, Event::CommandRejected { .. }))
+}
+
+fn close_all(h: &mut H, acc: u64, clid: &str) {
+    for p in h.pos(acc) {
+        h.cmd(Command::ClosePosition {
+            account: acc,
+            position_id: p.id,
+            volume: None,
+            client_order_id: format!("{clid}-{}", p.id),
+        });
+    }
+}
+
+fn lp_fill(h: &mut H, lp_order_id: LpOrderId, exec: &str, v: &str, price: &str) {
+    h.cmd(Command::LpFill {
+        lp_order_id,
+        exec_id: exec.into(),
+        volume: qty(v),
+        price: px(price),
+    });
+}
+
+#[test]
+fn copy_result_counts_every_close_and_the_opening_commission() {
+    let mut h = b();
+    let mut g = h.e.group("b").unwrap().clone();
+    g.commission = Some(risk::GroupCommission::PerLot { minor: 350 }); // $3.50 per lot and side
+    h.cmd(Command::SetGroup(g));
+    h.account(2, "b", "10000");
+    assert!(!rejected(&subscribe(&mut h, 2, 1, 10_000, 2_000)));
+    // copy 1 hits the follower's own stop loss: -120
+    h.market(1, "p1", Side::Buy, "1");
+    let c1 = h.pos(2)[0].id;
+    h.cmd(Command::ModifyPosition {
+        account: 2,
+        position_id: c1,
+        sl: Some(px("1.09900")),
+        tp: None,
+        trailing_points: None,
+    });
+    h.quote("EURUSD", "1.09890", "1.09900");
+    assert!(h.pos(2).is_empty(), "stop loss closed the copy");
+    // copy 2 is closed by the provider: +200
+    h.market(1, "p2", Side::Buy, "1");
+    h.quote("EURUSD", "1.10100", "1.10110");
+    let p2 = h.pos(1).iter().map(|p| p.id).max().unwrap();
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: p2,
+        volume: None,
+        client_order_id: "c2".into(),
+    });
+    assert!(h.pos(2).is_empty());
+    // copy 3 is closed in full by the follower: +40
+    h.market(1, "p3", Side::Buy, "1");
+    let c3 = h.pos(2)[0].id;
+    h.quote("EURUSD", "1.10150", "1.10160");
+    h.cmd(Command::ClosePosition {
+        account: 2,
+        position_id: c3,
+        volume: None,
+        client_order_id: "mine".into(),
+    });
+    assert!(h.pos(2).is_empty());
+    // -120 + 200 + 40, less 6 fills x $3.50 commission (opens included) = $99:
+    // exactly what the follower's balance made
+    assert_eq!(copy_sub(&h, 2, 1).realized, usd("99").minor);
+    assert_eq!(h.bal(2), usd("10099"));
+    h.cmd(Command::CopySettle { provider: 1 });
+    assert_eq!(h.bal(2), usd("10079.20"));
+    let replayed = Engine::replay(h.config.clone(), &h.journal);
+    assert_eq!(replayed.state_digest(), h.e.state_digest());
+}
+
+#[test]
+fn copy_resubscribe_keeps_the_copies() {
+    let mut h = b();
+    h.account(2, "b", "10000");
+    subscribe(&mut h, 2, 1, 10_000, 0);
+    h.market(1, "p1", Side::Buy, "1");
+    let held = |h: &H| h.pos(2).iter().map(|p| p.volume.raw()).sum::<i64>();
+    assert_eq!(held(&h), qty("1").raw());
+    // a higher ratio is no top-up in the middle of a trade ...
+    assert!(!rejected(&subscribe(&mut h, 2, 1, 20_000, 0)));
+    h.cmd(Command::Tick);
+    assert_eq!(held(&h), qty("1").raw());
+    // ... a lower one brings the copy down to it
+    subscribe(&mut h, 2, 1, 5_000, 0);
+    assert_eq!(held(&h), qty("0.5").raw());
+    // unsubscribed keeping the copies, subscribed again: still there, a
+    // provider position opened in between is not copied
+    h.cmd(Command::CopyUnsubscribe {
+        follower: 2,
+        provider: 1,
+        close: false,
+    });
+    h.market(1, "p2", Side::Buy, "1");
+    subscribe(&mut h, 2, 1, 5_000, 0);
+    h.cmd(Command::Tick);
+    assert_eq!(h.pos(2).len(), 1);
+    assert_eq!(held(&h), qty("0.5").raw());
+    // and still managed: the provider's close closes it
+    close_all(&mut h, 1, "pc");
+    assert!(h.pos(2).is_empty());
+    let replayed = Engine::replay(h.config.clone(), &h.journal);
+    assert_eq!(replayed.state_digest(), h.e.state_digest());
+}
+
+#[test]
+fn copy_open_in_flight_when_the_provider_closes_is_closed_once_filled() {
+    let mut h = b(); // provider 1: B-book, closes at once
+    h.account(2, "a", "10000"); // follower 2: A-book
+    subscribe(&mut h, 2, 1, 10_000, 0);
+    h.market(1, "p1", Side::Buy, "1");
+    let open = h.router.take();
+    assert_eq!(open.len(), 1, "copy open at the LP");
+    close_all(&mut h, 1, "pc");
+    assert!(h.router.take().is_empty());
+    // the LP fills after the provider is flat: the copy is closed right away
+    lp_fill(&mut h, open[0].lp_order_id, "f1", "1", "1.10010");
+    let close = h.router.take();
+    assert_eq!(close.len(), 1);
+    assert_eq!(close[0].side, Side::Sell);
+    lp_fill(&mut h, close[0].lp_order_id, "f2", "1", "1.10000");
+    assert!(h.pos(2).is_empty());
+    assert!(copy_sub(&h, 2, 1).copied.is_empty());
+
+    // the same at an unsubscribe with close: the open in flight is closed once filled
+    h.market(1, "p2", Side::Buy, "1");
+    let open = h.router.take();
+    h.cmd(Command::CopyUnsubscribe {
+        follower: 2,
+        provider: 1,
+        close: true,
+    });
+    assert!(copy_sub(&h, 2, 1).closing);
+    assert!(
+        rejected(&subscribe(&mut h, 2, 1, 10_000, 0)),
+        "not while the copies are being closed"
+    );
+    lp_fill(&mut h, open[0].lp_order_id, "f3", "1", "1.10010");
+    let close = h.router.take();
+    assert_eq!(close.len(), 1);
+    lp_fill(&mut h, close[0].lp_order_id, "f4", "1", "1.10000");
+    assert!(h.pos(2).is_empty());
+    assert!(!copy_sub(&h, 2, 1).closing);
+    let replayed = Engine::replay(h.config.clone(), &h.journal);
+    assert_eq!(replayed.state_digest(), h.e.state_digest());
+}
+
+#[test]
+fn copy_open_rejected_or_cut_at_the_lp_is_sent_again() {
+    let mut h = b();
+    h.account(2, "a", "10000");
+    subscribe(&mut h, 2, 1, 10_000, 0);
+    h.market(1, "p1", Side::Buy, "1");
+    let p1 = h.pos(1)[0].id;
+    let lp = h.router.take()[0].lp_order_id;
+    h.cmd(Command::LpReject {
+        lp_order_id: lp,
+        reason: "no liquidity".into(),
+    });
+    assert!(h.router.take().is_empty(), "backs off");
+    assert_eq!(copy_sub(&h, 2, 1).copied[&p1], 0);
+    h.ts += 5_000_000_000;
+    h.cmd(Command::Tick);
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].volume, qty("1"));
+    // IOC: 0.4 filled, the rest cancelled -> the 0.6 goes out again
+    lp_fill(&mut h, sent[0].lp_order_id, "f1", "0.4", "1.10010");
+    h.cmd(Command::LpReject {
+        lp_order_id: sent[0].lp_order_id,
+        reason: "ioc remainder".into(),
+    });
+    assert!(h.router.take().is_empty());
+    assert_eq!(copy_sub(&h, 2, 1).copied[&p1], qty("0.4").raw());
+    h.ts += 5_000_000_000;
+    h.cmd(Command::Tick);
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].volume, qty("0.6"));
+    lp_fill(&mut h, sent[0].lp_order_id, "f2", "0.6", "1.10010");
+    let held: i64 = h.pos(2).iter().map(|p| p.volume.raw()).sum();
+    assert_eq!(held, qty("1").raw());
+    // the provider closes: both copies follow
+    close_all(&mut h, 1, "pc");
+    assert_eq!(h.router.take().len(), 2);
+}
+
+#[test]
+fn copy_open_back_off_never_holds_back_the_providers_close() {
+    let mut h = b();
+    h.account(2, "a", "10000");
+    subscribe(&mut h, 2, 1, 10_000, 0);
+    h.market(1, "p1", Side::Buy, "1");
+    let sent = h.router.take();
+    // IOC: 0.4 filled, the rest cancelled -> the open backs off
+    lp_fill(&mut h, sent[0].lp_order_id, "f1", "0.4", "1.10010");
+    h.cmd(Command::LpReject {
+        lp_order_id: sent[0].lp_order_id,
+        reason: "ioc remainder".into(),
+    });
+    assert!(h.router.take().is_empty());
+    // the provider closes during the open's back-off: the 0.4 follows at once
+    close_all(&mut h, 1, "pc");
+    let close = h.router.take();
+    assert_eq!(close.len(), 1);
+    assert_eq!((close[0].side, close[0].volume), (Side::Sell, qty("0.4")));
+    lp_fill(&mut h, close[0].lp_order_id, "f2", "0.4", "1.10000");
+    assert!(h.pos(2).is_empty());
+    assert!(copy_sub(&h, 2, 1).copied.is_empty());
+    let replayed = Engine::replay(h.config.clone(), &h.journal);
+    assert_eq!(replayed.state_digest(), h.e.state_digest());
+}
+
+#[test]
+fn copy_fee_change_sets_the_equity_stop_from_after_the_fee() {
+    let mut h = b();
+    h.account(2, "b", "10000");
+    let sub = |h: &mut H, fee| {
+        h.cmd(Command::CopySubscribe {
+            follower: 2,
+            provider: 1,
+            ratio_bps: 10_000,
+            equity_stop_pct: 3,
+            perf_fee_bps: fee,
+        })
+    };
+    assert!(!rejected(&sub(&mut h, 5_000)));
+    h.market(1, "p1", Side::Buy, "1"); // 1.10010
+    h.quote("EURUSD", "1.11010", "1.11020");
+    close_all(&mut h, 1, "c1"); // copy +1000
+    h.market(1, "p2", Side::Buy, "1");
+    assert_eq!(h.pos(2).len(), 1);
+    // the fee change settles $500 (5 % of equity, over the 3 % stop): the
+    // stop counts from the equity after it, the copy stays
+    assert!(!rejected(&sub(&mut h, 0)));
+    assert_eq!(h.bal(2), usd("10500"));
+    h.cmd(Command::Tick);
+    let s = copy_sub(&h, 2, 1);
+    assert!(s.active, "{:?}", s.stopped_reason);
+    assert_eq!(h.pos(2).len(), 1);
+    let replayed = Engine::replay(h.config.clone(), &h.journal);
+    assert_eq!(replayed.state_digest(), h.e.state_digest());
+}
+
+#[test]
+fn copy_fee_change_waives_what_the_follower_cannot_pay() {
+    let mut h = b();
+    h.account(2, "b", "10000");
+    subscribe(&mut h, 2, 1, 10_000, 5_000); // 50 %
+    h.market(1, "p1", Side::Buy, "1");
+    h.quote("EURUSD", "1.10110", "1.10120");
+    close_all(&mut h, 1, "c1"); // copy +100, fee due $50
+    h.cmd(Command::Withdraw {
+        account: 2,
+        amount: usd("10080"),
+        key: "w".into(),
+    });
+    // $20 paid of the old $50; the rest is never charged at the new fee
+    subscribe(&mut h, 2, 1, 10_000, 2_000);
+    let s = copy_sub(&h, 2, 1);
+    assert_eq!((s.hwm, s.fees_paid), (usd("100").minor, usd("20").minor));
+    h.cmd(Command::CopySettle { provider: 1 });
+    assert_eq!(h.bal(2), usd("0"));
+}
+
+#[test]
+fn copy_close_rejected_at_the_lp_backs_off() {
+    let mut h = b();
+    h.account(2, "a", "10000");
+    subscribe(&mut h, 2, 1, 10_000, 0);
+    h.market(1, "p1", Side::Buy, "1");
+    let open = h.router.take();
+    lp_fill(&mut h, open[0].lp_order_id, "f1", "1", "1.10010");
+    close_all(&mut h, 1, "pc");
+    let close = h.router.take();
+    assert_eq!(close.len(), 1);
+    // the LP refuses every close: no new close in the same command (no
+    // reject / resend loop), one per back-off step (5 s, 10 s, 20 s)
+    let mut lp = close[0].lp_order_id;
+    for wait in [5u64, 10, 20] {
+        h.cmd(Command::LpReject {
+            lp_order_id: lp,
+            reason: "instrument halted".into(),
+        });
+        assert!(h.router.take().is_empty());
+        h.ts += (wait - 1) * 1_000_000_000;
+        h.cmd(Command::Tick);
+        assert!(h.router.take().is_empty(), "still backing off");
+        h.ts += 1_000_000_000;
+        h.cmd(Command::Tick);
+        let again = h.router.take();
+        assert_eq!(again.len(), 1);
+        lp = again[0].lp_order_id;
+    }
+    lp_fill(&mut h, lp, "f2", "1", "1.10000");
+    assert!(h.pos(2).is_empty());
+    assert!(copy_sub(&h, 2, 1).copied.is_empty());
+}
+
+#[test]
+fn copy_open_that_keeps_failing_gives_up() {
+    let mut h = b();
+    h.account(2, "b", "100"); // never enough margin for 1 lot
+    subscribe(&mut h, 2, 1, 10_000, 0);
+    h.market(1, "p1", Side::Buy, "1");
+    let p1 = h.pos(1)[0].id;
+    for _ in 0..400 {
+        h.ts += 10_000_000_000;
+        h.cmd(Command::Tick);
+    }
+    // over 4000 s: attempts after doubling waits, then the position is skipped
+    let tries = h.e.orders().filter(|o| o.req.account == 2).count();
+    assert_eq!(tries, 8);
+    assert_eq!(copy_sub(&h, 2, 1).copied[&p1], qty("1").raw());
+    // the provider's close still clears it
+    close_all(&mut h, 1, "pc");
+    assert!(copy_sub(&h, 2, 1).copied.is_empty());
+}
+
+#[test]
+fn copy_below_the_minimum_lot_sends_nothing() {
+    let mut h = b();
+    let mut eu = h.e.symbol_spec("EURUSD").unwrap().clone();
+    eu.min_lot = qty("0.1");
+    h.cmd(Command::AddSymbol(eu));
+    h.account(2, "b", "10000");
+    subscribe(&mut h, 2, 1, 500, 0); // 5 %
+    h.market(1, "p1", Side::Buy, "1"); // 0.05 lot
+    h.cmd(Command::Tick);
+    assert_eq!(h.e.orders().filter(|o| o.req.account == 2).count(), 0);
+    h.market(1, "p2", Side::Buy, "2"); // 0.1 lot
+    assert_eq!(h.pos(2).len(), 1);
+}
+
+#[test]
+fn copy_opens_respect_disabled_symbols() {
+    let mut h = b();
+    h.account(2, "b", "100"); // too small for 1 lot
+    subscribe(&mut h, 2, 1, 10_000, 0);
+    h.market(1, "p1", Side::Buy, "1");
+    assert!(h.pos(2).is_empty());
+    // the symbol is switched off, then the follower funds the account
+    let mut eu = h.e.symbol_spec("EURUSD").unwrap().clone();
+    eu.enabled = false;
+    h.cmd(Command::AddSymbol(eu.clone()));
+    h.cmd(Command::Deposit {
+        account: 2,
+        amount: usd("10000"),
+        key: "d2b".into(),
+    });
+    h.ts += 5_000_000_000;
+    h.cmd(Command::Tick);
+    assert!(h.pos(2).is_empty());
+    let last = h.e.orders().filter(|o| o.req.account == 2).last().unwrap();
+    assert_eq!(last.reject_reason.as_deref(), Some("symbol disabled"));
+    // switched on again: copied after the back-off
+    eu.enabled = true;
+    h.cmd(Command::AddSymbol(eu));
+    h.ts += 10_000_000_000;
+    h.cmd(Command::Tick);
+    assert_eq!(h.pos(2).len(), 1);
+}
+
+#[test]
+fn copy_accounts_keep_their_group_while_subscribed() {
+    let mut h = b();
+    h.account(2, "b", "10000");
+    subscribe(&mut h, 2, 1, 10_000, 0);
+    for acc in [1, 2] {
+        let ev = h.cmd(Command::SetAccountGroup {
+            account: acc,
+            group: "a".into(),
+        });
+        assert!(rejected(&ev), "{ev:?}");
+    }
+    h.cmd(Command::CopyUnsubscribe {
+        follower: 2,
+        provider: 1,
+        close: true,
+    });
+    let ev = h.cmd(Command::SetAccountGroup {
+        account: 2,
+        group: "a".into(),
+    });
+    assert!(!rejected(&ev), "{ev:?}");
+}
+
+#[test]
+fn copy_no_chains_in_either_direction() {
+    let mut h = b();
+    h.account(2, "b", "10000");
+    h.account(3, "b", "10000");
+    assert!(!rejected(&subscribe(&mut h, 2, 1, 10_000, 0)));
+    // 1 has a follower: it cannot start copying 3
+    assert!(rejected(&subscribe(&mut h, 1, 3, 10_000, 0)));
+    // 2 copies 1: nobody can copy 2
+    assert!(rejected(&subscribe(&mut h, 3, 2, 10_000, 0)));
+}
+
+#[test]
+fn copy_fee_mark_moves_at_zero_fee_and_on_a_fee_change() {
+    let mut h = b();
+    h.account(2, "b", "10000");
+    subscribe(&mut h, 2, 1, 10_000, 0);
+    h.market(1, "p1", Side::Buy, "1"); // 1.10010
+    h.quote("EURUSD", "1.10110", "1.10120");
+    close_all(&mut h, 1, "c1"); // copy +100
+    assert_eq!(copy_sub(&h, 2, 1).realized, usd("100").minor);
+    // settled at a zero fee: nothing charged, the mark still moves
+    h.cmd(Command::CopySettle { provider: 1 });
+    assert_eq!(copy_sub(&h, 2, 1).hwm, usd("100").minor);
+    // +50 more under 0 %, then the fee is raised: the old result is settled
+    // at the old fee first, the new fee only applies from here on
+    h.market(1, "p2", Side::Buy, "1"); // 1.10120
+    h.quote("EURUSD", "1.10170", "1.10180");
+    close_all(&mut h, 1, "c2");
+    subscribe(&mut h, 2, 1, 10_000, 2_000);
+    let s = copy_sub(&h, 2, 1);
+    assert_eq!((s.hwm, s.perf_fee_bps), (usd("150").minor, 2_000));
+    h.cmd(Command::CopySettle { provider: 1 });
+    assert_eq!(h.bal(2), usd("10150"));
+}
+
+#[test]
+fn copy_fee_never_drives_the_follower_negative() {
+    let mut h = b();
+    h.account(2, "b", "10000");
+    subscribe(&mut h, 2, 1, 10_000, 5_000); // 50 %
+    h.market(1, "p1", Side::Buy, "1");
+    h.quote("EURUSD", "1.10110", "1.10120");
+    close_all(&mut h, 1, "c1"); // copy +100, fee due $50
+                                // the follower takes everything out before the settlement
+    h.cmd(Command::Withdraw {
+        account: 2,
+        amount: usd("10100"),
+        key: "w".into(),
+    });
+    assert_eq!(h.bal(2), usd("0"));
+    let provider = h.bal(1);
+    h.cmd(Command::CopySettle { provider: 1 });
+    assert_eq!(h.bal(2), usd("0"));
+    let s = copy_sub(&h, 2, 1);
+    assert_eq!((s.hwm, s.fees_paid), (0, 0));
+    // partly funded: what it can pay now ($20 for $40 of the gain), the rest later
+    h.cmd(Command::Deposit {
+        account: 2,
+        amount: usd("20"),
+        key: "d3".into(),
+    });
+    h.cmd(Command::CopySettle { provider: 1 });
+    assert_eq!(h.bal(2), usd("0"));
+    let s = copy_sub(&h, 2, 1);
+    assert_eq!((s.hwm, s.fees_paid), (usd("40").minor, usd("20").minor));
+    h.cmd(Command::Deposit {
+        account: 2,
+        amount: usd("100"),
+        key: "d4".into(),
+    });
+    h.cmd(Command::CopySettle { provider: 1 });
+    assert_eq!(h.bal(2), usd("70"));
+    let s = copy_sub(&h, 2, 1);
+    assert_eq!((s.hwm, s.fees_paid), (usd("100").minor, usd("50").minor));
+    assert_eq!(h.bal(1).minor - provider.minor, usd("50").minor);
+    let replayed = Engine::replay(h.config.clone(), &h.journal);
+    assert_eq!(replayed.state_digest(), h.e.state_digest());
+}
+
 #[test]
 fn markout_measures_mid_move_after_fills() {
     let mut h = b();
