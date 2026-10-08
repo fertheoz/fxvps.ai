@@ -12,5 +12,5 @@ Kurulum, doğrulama, ilk admin, LP ayarı ve müşteri hesabı:
 |---|---|
 | `docker-compose.yml` | postgres, identity, trading, console, terminal, cloudflared (profile `tunnel`) |
 | `console-nginx.conf` | konsol + `/v1`, `/auth` → admin API (127.0.0.1:8090) |
-| `terminal-nginx.conf` | terminal + `/ws` → client-gateway (127.0.0.1:8088) |
+| `terminal-nginx.conf` | terminal + `/ws`, `/api/v1` (kullanıcı REST API'si), `/api/client` → client-gateway (127.0.0.1:8088) |
 | `.env.example` | `FIX_ADMIN_TOKEN`, `PG_PASSWORD`, `CLOUDFLARE_TUNNEL_TOKEN` |

@@ -17,6 +17,10 @@ pub struct ClientGatewayConfig {
     pub orders_per_second: u32,
     /// Burst size for order commands per account.
     pub order_burst: u32,
+    /// Sustained REST API (`/api/v1`) requests per second per API key / session.
+    pub rest_requests_per_second: u32,
+    /// Burst size for REST API requests per API key / session.
+    pub rest_burst: u32,
     /// Time allowed for Hello + Auth after connect.
     pub auth_timeout_ms: u64,
     /// Server heartbeat interval.
@@ -54,6 +58,8 @@ impl Default for ClientGatewayConfig {
             queue_capacity: 256,
             orders_per_second: 10,
             order_burst: 20,
+            rest_requests_per_second: 10,
+            rest_burst: 30,
             auth_timeout_ms: 5_000,
             heartbeat_secs: 15,
             max_frame_bytes: 64 * 1024,
@@ -90,7 +96,7 @@ impl ClientGatewayConfig {
     /// Environment overrides (container deployments without a config file):
     /// `FXVPS_METRICS_LISTEN`, `FXVPS_ALLOWED_ORIGINS` (comma separated),
     /// `FXVPS_MAX_CONNECTIONS`, `FXVPS_MAX_CONNECTIONS_PER_IP`,
-    /// `FXVPS_MAX_CONNECTIONS_PER_SUBJECT`.
+    /// `FXVPS_MAX_CONNECTIONS_PER_SUBJECT`, `FXVPS_REST_PER_SECOND`, `FXVPS_REST_BURST`.
     pub fn apply_env(&mut self) -> Result<(), ConfigError> {
         self.apply_vars(|k| std::env::var(k).ok())
     }
@@ -132,6 +138,11 @@ impl ClientGatewayConfig {
         self.orders_per_second =
             num("FXVPS_ORDERS_PER_SECOND", self.orders_per_second as usize)? as u32;
         self.order_burst = num("FXVPS_ORDER_BURST", self.order_burst as usize)? as u32;
+        self.rest_requests_per_second = num(
+            "FXVPS_REST_PER_SECOND",
+            self.rest_requests_per_second as usize,
+        )? as u32;
+        self.rest_burst = num("FXVPS_REST_BURST", self.rest_burst as usize)? as u32;
         // Seeded demo deposit (load tests: margin must not be what runs out).
         if let Some(v) = var("FXVPS_DEMO_BALANCE") {
             self.demo_balance = v.trim().to_string();
@@ -143,9 +154,15 @@ impl ClientGatewayConfig {
         if self.max_quote_hz == 0 || self.max_quote_hz > 1000 {
             return Err(ConfigError::Invalid("max_quote_hz must be 1..=1000".into()));
         }
-        if self.queue_capacity == 0 || self.orders_per_second == 0 || self.order_burst == 0 {
+        if self.queue_capacity == 0
+            || self.orders_per_second == 0
+            || self.order_burst == 0
+            || self.rest_requests_per_second == 0
+            || self.rest_burst == 0
+        {
             return Err(ConfigError::Invalid(
-                "queue_capacity, orders_per_second, order_burst must be > 0".into(),
+                "queue_capacity, orders_per_second, order_burst, rest_requests_per_second,                  rest_burst must be > 0"
+                    .into(),
             ));
         }
         if self.demo_balance.parse::<domain::Fixed>().is_err() {

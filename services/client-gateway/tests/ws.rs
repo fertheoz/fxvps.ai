@@ -386,6 +386,7 @@ async fn read_only_key_cannot_write_preferences() {
             roles: vec!["client".into()],
             amr: vec!["apikey".into()],
             scope: Some("read".into()),
+            sid: Some("apikey:read".into()),
         },
         &jsonwebtoken::EncodingKey::from_secret(KEY),
     )

@@ -452,22 +452,7 @@ fn reply(out: &mut Outbox, request_id: &str, r: Result<(), CmdError>) -> Result<
 }
 
 fn check_account(hub: &Hub, st: &ConnState, account_id: &str) -> Result<(), CmdError> {
-    if !st.claims.may_trade() {
-        return Err(CmdError(ErrorCode::Forbidden, "read-only API key".into()));
-    }
-    if !st.claims.may_access(account_id) {
-        return Err(CmdError(
-            ErrorCode::Forbidden,
-            "account not authorized".into(),
-        ));
-    }
-    if !hub.allow_order(account_id) {
-        return Err(CmdError(
-            ErrorCode::RateLimited,
-            "order rate limit exceeded".into(),
-        ));
-    }
-    Ok(())
+    hub.authorize_trade(&st.claims, account_id)
 }
 
 async fn handle(
@@ -577,7 +562,7 @@ async fn handle(
                 })
             });
             let r = match r {
-                Ok(o) => hub.place_order(o).await,
+                Ok(o) => hub.place_order(o).await.map(|_| ()),
                 Err(e) => Err(e),
             };
             reply(out, &p.request_id, r)
@@ -628,10 +613,10 @@ async fn handle(
         }
         Body::ClosePosition(c) => {
             let r = match check_account(hub, st, &c.account_id).and_then(|()| fixed(c.qty, "qty")) {
-                Ok(q) => {
-                    hub.close_position(&c.account_id, &c.position_id, q, &c.request_id)
-                        .await
-                }
+                Ok(q) => hub
+                    .close_position(&c.account_id, &c.position_id, q, &c.request_id)
+                    .await
+                    .map(|_| ()),
                 Err(e) => Err(e),
             };
             reply(out, &c.request_id, r)

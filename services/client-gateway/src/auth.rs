@@ -42,6 +42,10 @@ pub struct Claims {
     /// API-key tokens: `read` (no trading) or `trade`; `None` = interactive login.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    /// Identity session id; API-key tokens carry `apikey:<key id>` (REST rate
+    /// limit key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
 }
 
 impl Claims {
@@ -378,6 +382,7 @@ pub fn issue_hs256(secret: &[u8], sub: &str, accounts: &[&str], ttl_secs: u64) -
         roles: Vec::new(),
         amr: Vec::new(),
         scope: None,
+        sid: None,
     };
     encode(
         &Header::new(Algorithm::HS256),
@@ -412,6 +417,7 @@ mod tests {
                 roles: vec![],
                 amr: vec![],
                 scope: None,
+                sid: None,
             },
             &EncodingKey::from_secret(b"k1"),
         )
@@ -427,6 +433,7 @@ mod tests {
                 roles: vec![],
                 amr: vec![],
                 scope: None,
+                sid: None,
             },
             &EncodingKey::from_secret(b"k1"),
         )
@@ -446,6 +453,7 @@ mod tests {
                 roles: vec!["client".into()],
                 amr: vec!["apikey".into()],
                 scope: Some("read".into()),
+                sid: Some("apikey:k1".into()),
             },
             &EncodingKey::from_secret(b"k1"),
         )

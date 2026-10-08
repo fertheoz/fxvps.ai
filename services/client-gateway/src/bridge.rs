@@ -648,7 +648,7 @@ impl Session {
             },
         );
         match self.hub.place_order(o).await {
-            Ok(()) => Vec::new(),
+            Ok(_) => Vec::new(),
             Err(e) if e.1.contains("duplicate") => {
                 // Placed in an earlier session: answer from the engine's record.
                 if let Some(t) = self.tracks.get_mut(&id) {
