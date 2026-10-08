@@ -1478,7 +1478,7 @@ async fn api_key_tokens_cannot_move_money_or_change_links() {
         ] {
             let (s, v) = t.req(Method::POST, path, Some(&k), Some(body), &[]).await;
             assert_eq!(s, StatusCode::FORBIDDEN, "{scope} {path}: {v}");
-            assert_eq!(v["error"], "api_key_forbidden", "{scope} {path}");
+            assert_eq!(v["error"]["code"], "api_key_forbidden", "{scope} {path}");
         }
         let (s, _) = t
             .req(
