@@ -1343,7 +1343,10 @@ async fn read_views_see_admin_state() {
     let (_, r) = t.get("/v1/reports/ib", &a).await;
     assert_eq!(r["rows"][0]["ib"], 7);
     assert_eq!(r["rows"][0]["clients"], 1);
+    t.stop();
+}
 
+#[tokio::test]
 async fn ib_multi_level_rebate_and_referral_code() {
     let dir = tempfile::tempdir().unwrap();
     let t = T::start(dir.path(), true).await;
