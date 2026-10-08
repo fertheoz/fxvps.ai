@@ -1721,6 +1721,8 @@ fn copy_trading_never_reopens_a_followers_manual_close() {
     h.market(1, "p2", Side::Buy, "1");
     assert!(h.e.positions_of(2).is_empty());
 }
+
+#[test]
 fn markout_measures_mid_move_after_fills() {
     let mut h = b();
     h.market(1, "m1", Side::Buy, "1");

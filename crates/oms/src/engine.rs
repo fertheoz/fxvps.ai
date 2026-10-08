@@ -2491,6 +2491,8 @@ impl Engine {
         }
         Ok(())
     }
+}
+
 impl Engine {
     /// Measures pending fills of `symbol` whose horizons have passed: the raw
     /// mid move (no markup) in the client's favour, in points.
