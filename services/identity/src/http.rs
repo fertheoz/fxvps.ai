@@ -1802,7 +1802,7 @@ async fn api_key_token(
         .user_by_id(&k.user_id)
         .await?
         .ok_or_else(ApiError::unauthorized)?;
-    if user.locked_until.is_some_and(|t| t > now()) {
+    if user.locked_until > now() {
         return Err(ApiError::unauthorized());
     }
     let accounts = app.store.accounts(&user.id).await?;
