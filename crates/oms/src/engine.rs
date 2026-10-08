@@ -1639,9 +1639,19 @@ impl Engine {
         let routing = self.st.orders[&id].routing;
         let o = &self.st.orders[&id];
         if let Some(src) = o.copy_from.filter(|_| o.origin == OrderOrigin::Copy) {
-            // a copy order filled: its provider position stops backing off
+            // a copy order filled: its kind (open / close) stops backing off
+            let close = o.close_position.is_some();
             if let Some(s) = self.st.copy_subs.get_mut(&(account, src.0)) {
-                s.retry.remove(&src.1);
+                if let Some(r) = s.retry.get_mut(&src.1) {
+                    if close {
+                        (r.close_fails, r.close_next_ts) = (0, 0);
+                    } else {
+                        (r.fails, r.next_ts) = (0, 0);
+                    }
+                    if r.is_clear() {
+                        s.retry.remove(&src.1);
+                    }
+                }
             }
         }
         let mut left = v;
@@ -2244,8 +2254,9 @@ impl Engine {
         if self.st.copy_subs.get(&key).is_some_and(|p| p.closing) {
             return Err("copies of the stopped subscription are still being closed".into());
         }
-        let eq = self.account_risk(follower)?.equity.minor;
-        // new terms: the result so far is settled at the fee it was earned under
+        // new terms: the result so far is settled at the fee it was earned
+        // under; a part the follower cannot pay now is waived, never charged
+        // later at the new fee
         if self
             .st
             .copy_subs
@@ -2253,7 +2264,11 @@ impl Engine {
             .is_some_and(|p| p.perf_fee_bps != perf_fee_bps)
         {
             self.copy_settle_one(key)?;
+            let s = self.st.copy_subs.get_mut(&key).expect("sub");
+            s.hwm = s.hwm.max(s.realized);
         }
+        // after the settlement: the equity stop counts from what is left
+        let eq = self.account_risk(follower)?.equity.minor;
         let prev = self.st.copy_subs.get(&key);
         let running = prev.is_some_and(|p| p.active);
         let old_ratio = prev.map_or(ratio_bps, |p| p.ratio_bps);
@@ -2376,12 +2391,13 @@ impl Engine {
             .collect()
     }
 
-    /// No back-off pending for the copy orders of provider position `pid`.
-    fn copy_due(&self, key: CopyKey, pid: PositionId) -> bool {
+    /// No back-off pending for the copy opens (or, with `close`, the copy
+    /// closes) of provider position `pid`.
+    fn copy_due(&self, key: CopyKey, pid: PositionId, close: bool) -> bool {
         self.st.copy_subs[&key]
             .retry
             .get(&pid)
-            .is_none_or(|r| self.st.now >= r.next_ts)
+            .is_none_or(|r| self.st.now >= if close { r.close_next_ts } else { r.next_ts })
     }
 
     fn copy_set_sent(&mut self, key: CopyKey, pid: PositionId, lots: i64) {
@@ -2391,8 +2407,9 @@ impl Engine {
     }
 
     /// A copy order for `src` did not (fully) go through: `unsent` lots of an
-    /// open come off `copied` (they are sent again), and the position backs off.
-    fn copy_failed(&mut self, follower: AccountNo, src: CopySrc, unsent: i64) {
+    /// open come off `copied` (they are sent again), and the position's opens
+    /// (or, with `close`, its closes) back off.
+    fn copy_failed(&mut self, follower: AccountNo, src: CopySrc, unsent: i64, close: bool) {
         let now = self.st.now;
         let Some(s) = self.st.copy_subs.get_mut(&(follower, src.0)) else {
             return;
@@ -2401,8 +2418,13 @@ impl Engine {
             *c = (*c - unsent).max(0);
         }
         let r = s.retry.entry(src.1).or_default();
-        r.fails = r.fails.saturating_add(1);
-        r.next_ts = now.saturating_add(copy_backoff_ns(r.fails));
+        if close {
+            r.close_fails = r.close_fails.saturating_add(1);
+            r.close_next_ts = now.saturating_add(copy_backoff_ns(r.close_fails));
+        } else {
+            r.fails = r.fails.saturating_add(1);
+            r.next_ts = now.saturating_add(copy_backoff_ns(r.fails));
+        }
     }
 
     /// Terminal hook (rejected / cancelled): a copy order that ended with an
@@ -2416,9 +2438,10 @@ impl Engine {
         if rem <= 0 {
             return;
         }
-        let unsent = if o.close_position.is_none() { rem } else { 0 };
+        let close = o.close_position.is_some();
+        let unsent = if close { 0 } else { rem };
         let follower = o.req.account;
-        self.copy_failed(follower, src, unsent);
+        self.copy_failed(follower, src, unsent, close);
     }
 
     fn copy_order_id(&mut self, src: CopySrc) -> String {
@@ -2435,7 +2458,7 @@ impl Engine {
         let r = self.place_order(o, None, OrderOrigin::Copy);
         self.st.pending_copy = None;
         if r.is_err() {
-            self.copy_failed(follower, src, v.raw());
+            self.copy_failed(follower, src, v.raw(), false);
         }
     }
 
@@ -2468,7 +2491,7 @@ impl Engine {
             let r = self.place_order(o, Some(pid), OrderOrigin::Copy);
             self.st.pending_copy = None;
             if r.is_err() {
-                self.copy_failed(follower, src, 0);
+                self.copy_failed(follower, src, 0, true);
             }
         }
     }
@@ -2478,7 +2501,7 @@ impl Engine {
     fn copy_wind_down(&mut self, key: CopyKey) {
         let (follower, provider) = key;
         for src in self.copy_sources(follower, provider) {
-            if self.copy_due(key, src.1) {
+            if self.copy_due(key, src.1, true) {
                 self.copy_reduce(follower, src, i64::MAX);
             }
         }
@@ -2527,9 +2550,6 @@ impl Engine {
                 .map(|p| (p.id, p.symbol.clone(), p.side, p.volume.raw()))
                 .collect();
             for (pid, symbol, side, pvol) in &targets {
-                if !self.copy_due(key, *pid) {
-                    continue;
-                }
                 // desired follower lots
                 let want = self.copy_want(symbol, *pvol, ratio);
                 let min = self.st.symbols.get(symbol).map_or(0, |s| s.min_lot.raw());
@@ -2540,7 +2560,9 @@ impl Engine {
                 if want > sent {
                     // provider opened / increased: send only the new part (a
                     // follower's own close is never re-opened)
-                    if fails >= COPY_OPEN_MAX_FAILS {
+                    if !self.copy_due(key, *pid, false) {
+                        // the open backs off
+                    } else if fails >= COPY_OPEN_MAX_FAILS {
                         // keeps failing (margin, volume limits): skip it
                         self.copy_set_sent(key, *pid, want);
                     } else if want - sent >= min {
@@ -2557,7 +2579,7 @@ impl Engine {
                 // provider reduced, or an earlier reduce did not fill: bring
                 // the copies down to `want` (closes in flight are not held)
                 let held = self.copy_held(follower, src);
-                if held > want {
+                if held > want && self.copy_due(key, *pid, true) {
                     self.copy_reduce(follower, src, held - want);
                 }
             }
@@ -2571,7 +2593,7 @@ impl Engine {
                 .collect();
             for pid in gone {
                 let src = (provider, pid);
-                if self.copy_due(key, pid) && self.copy_held(follower, src) > 0 {
+                if self.copy_due(key, pid, true) && self.copy_held(follower, src) > 0 {
                     self.copy_reduce(follower, src, i64::MAX);
                 }
                 // an open still in flight keeps the entry: it is closed once filled
@@ -2602,7 +2624,8 @@ impl Engine {
     }
 
     /// Settles one subscription. The fee never takes more than the follower
-    /// could withdraw (no negative balance, no margin call); the part of the
+    /// could withdraw (no negative balance, no stop-out; with open positions
+    /// it may take all free margin, which can flag a margin call); the part of the
     /// gain left unpaid stays above the mark for a later settlement. With a
     /// zero fee the mark still moves, so a later fee is never charged on
     /// results earned under the old terms.

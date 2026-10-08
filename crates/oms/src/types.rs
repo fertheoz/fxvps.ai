@@ -312,13 +312,27 @@ pub struct CopySubscription {
     pub closing: bool,
 }
 
-/// Back-off of the copy orders of one provider position.
+/// Back-off of the copy orders of one provider position. Opens and closes
+/// back off separately: a failing open never holds back mirroring the
+/// provider's reduce or close.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
 pub struct CopyRetry {
-    /// Copy orders (opens or closes) in a row that ended without filling.
+    /// Copy opens in a row that ended without filling.
     pub fails: u32,
-    /// No copy order for the position before this time (ns).
+    /// No copy open for the position before this time (ns).
     pub next_ts: u64,
+    /// Copy closes in a row that ended without filling.
+    #[serde(default)]
+    pub close_fails: u32,
+    /// No copy close for the position before this time (ns).
+    #[serde(default)]
+    pub close_next_ts: u64,
+}
+
+impl CopyRetry {
+    pub fn is_clear(&self) -> bool {
+        self.fails == 0 && self.close_fails == 0
+    }
 }
 
 impl Position {
