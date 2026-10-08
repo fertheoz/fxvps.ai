@@ -922,6 +922,12 @@ pub struct FlowStats {
     /// Σ (requested − fill) × side / point: positive = the client got a
     /// better price than requested (latency arbitrage captures improvements).
     pub slip_gain_points_sum: i64,
+    /// Markout: Σ of the mid move in the client's favour (points) 1 s / 5 s /
+    /// 60 s after each fill, and how many fills were measured at each horizon.
+    #[serde(default)]
+    pub markout_points_sum: [i64; 3],
+    #[serde(default)]
+    pub markout_count: [u64; 3],
 }
 
 impl FlowStats {
@@ -979,8 +985,25 @@ impl FlowStats {
         }
     }
 
+    /// Markout horizons in seconds (index of `markout_*`).
+    pub const MARKOUT_SECS: [u64; 3] = [1, 5, 60];
+
+    pub fn record_markout(&mut self, horizon: usize, points: i64) {
+        self.markout_points_sum[horizon] = self.markout_points_sum[horizon].saturating_add(points);
+        self.markout_count[horizon] += 1;
+    }
+
+    /// Average markout (points in the client's favour) at a horizon, if measured.
+    pub fn avg_markout(&self, horizon: usize) -> Option<f64> {
+        (self.markout_count[horizon] > 0)
+            .then(|| self.markout_points_sum[horizon] as f64 / self.markout_count[horizon] as f64)
+    }
+
     /// 0..100 toxic-flow score: 45 % short holds (scalping), 30 % win rate
     /// above 50 %, 25 % captured price improvement (≥ 5 points = max).
+    /// Once the 5 s markout has evidence it takes a quarter of the weight
+    /// (≥ 3 points in the client's favour = max): informed flow shows up there
+    /// even when holds are long.
     pub fn toxicity(&self) -> u8 {
         if self.trades < Self::MIN_TRADES {
             return 0;
@@ -988,9 +1011,17 @@ impl FlowStats {
         let short = self.short_hold_ratio();
         let win = ((self.win_rate() - 0.5) * 2.0).clamp(0.0, 1.0);
         let gain = (self.avg_slip_gain_points() / 5.0).clamp(0.0, 1.0);
-        (45.0 * short + 30.0 * win + 25.0 * gain)
-            .round()
-            .clamp(0.0, 100.0) as u8
+        let score = match self
+            .avg_markout(1)
+            .filter(|_| self.markout_count[1] >= Self::MIN_TRADES)
+        {
+            Some(m) => {
+                let mo = (m / 3.0).clamp(0.0, 1.0);
+                35.0 * short + 22.0 * win + 18.0 * gain + 25.0 * mo
+            }
+            None => 45.0 * short + 30.0 * win + 25.0 * gain,
+        };
+        score.round().clamp(0.0, 100.0) as u8
     }
 }
 

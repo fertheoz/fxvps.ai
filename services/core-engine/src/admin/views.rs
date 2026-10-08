@@ -283,6 +283,9 @@ pub fn client_flow(e: &Engine, admin: &AdminState) -> Value {
                 "realisedPnl": f.pnl_minor as f64 / div,
                 "brokerPnl": f.broker_pnl_minor as f64 / div,
                 "avgSlipGainPoints": f.avg_slip_gain_points(),
+                "markout1s": f.avg_markout(0),
+                "markout5s": f.avg_markout(1),
+                "markout60s": f.avg_markout(2),
                 "toxicity": f.toxicity(),
             }))
         })

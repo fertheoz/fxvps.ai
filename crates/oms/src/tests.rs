@@ -1721,3 +1721,21 @@ fn copy_trading_never_reopens_a_followers_manual_close() {
     h.market(1, "p2", Side::Buy, "1");
     assert!(h.e.positions_of(2).is_empty());
 }
+fn markout_measures_mid_move_after_fills() {
+    let mut h = b();
+    h.market(1, "m1", Side::Buy, "1");
+    // fill at the ask (1.10010); 1 s later the mid is 1.10035 -> +25 points (5 digits)
+    h.ts += 1_000_000_000;
+    h.quote("EURUSD", "1.10030", "1.10040");
+    let f = h.e.flow(1).unwrap().clone();
+    assert_eq!(f.markout_count, [1, 0, 0]);
+    assert_eq!(f.markout_points_sum[0], 25);
+    // 60 s later all horizons are measured and the sample is gone
+    h.ts += 60_000_000_000;
+    h.quote("EURUSD", "1.09990", "1.10000");
+    let f = h.e.flow(1).unwrap().clone();
+    assert_eq!(f.markout_count, [1, 1, 1]);
+    assert_eq!(f.markout_points_sum[2], -15);
+    let replayed = Engine::replay(h.config.clone(), &h.journal);
+    assert_eq!(replayed.state_digest(), h.e.state_digest());
+}
