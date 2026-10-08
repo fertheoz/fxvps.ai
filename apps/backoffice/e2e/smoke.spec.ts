@@ -9,7 +9,7 @@ test("dashboard renders and screenshot is captured", async ({ page }) => {
 });
 
 test("every page loads for admin", async ({ page }) => {
-  for (const p of ["clients", "groups", "symbols", "positions", "risk", "lp", "reports", "audit", "users", "settings"]) {
+  for (const p of ["clients", "groups", "symbols", "positions", "risk", "lp", "reports", "audit", "users", "settings", "calendar"]) {
     await page.goto(`/${p}/`);
     await expect(page.getByTestId(`page-${p}`)).toBeVisible();
   }

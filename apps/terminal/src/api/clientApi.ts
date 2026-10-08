@@ -6,6 +6,7 @@
 import { isGatewayApi } from '../store/api';
 import { defaultGateway, loadGateway } from '../store/connection';
 import { sessionToken } from '../store/session';
+import type { EconEvent } from '../lib/econCalendar';
 
 export interface ClientAccount {
   externalId: string;
@@ -173,6 +174,8 @@ export const clientApi = {
   copySubscribe: (r: { account: string; provider: number; ratioBps: number; equityStopPct: number }) => call<{ ok: boolean }>('/copy/subscribe', json(r)),
   copyUnsubscribe: (r: { account: string; provider: number; close: boolean }) => call<{ ok: boolean }>('/copy/unsubscribe', json(r)),
   me: () => call<ClientMe>('/me'),
+  /** Economic calendar between `from` and `to` (epoch ms), all currencies. */
+  calendar: (from: number, to: number) => call<{ from: number; to: number; events: EconEvent[] }>(`/calendar?from=${Math.floor(from)}&to=${Math.floor(to)}`),
   requestFunding: (req: { account: string; kind: FundingKind; method: FundingMethod; amount: number; details: string }) =>
     call<FundingRequest>('/funding', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req) }),
   uploadDocument: (account: string, kind: string, file: File) =>

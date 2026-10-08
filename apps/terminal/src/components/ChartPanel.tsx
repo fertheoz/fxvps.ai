@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AreaSeries,
   BarSeries,
@@ -9,10 +9,14 @@ import {
   LineSeries,
   LineStyle,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type MouseEventParams,
   type SeriesType,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { ContextMenu, type MenuItem } from './ContextMenu';
@@ -56,6 +60,8 @@ import { isTauri, openChartWindow } from '../native';
 import { dragProtection, hitLine } from '../lib/chartDrag';
 import { ShapesPrimitive, timeAtX, type ShapeGeometry } from '../lib/chartShapes';
 import type { ChartShape } from '@fxvps/trading-core';
+import { useEconEvents, useNow } from '../store/econ';
+import { IMPACT_COLOR, countdown, eventPins, eventsFor, nextEvent, symbolCurrencies, type EconEvent, type EventPin } from '../lib/econCalendar';
 
 type Line = ISeriesApi<'Line'>;
 
@@ -164,11 +170,27 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
   useEffect(() => {
     replayRef.current = replay;
   }, [replay]);
+  /** Economic calendar pins (series markers) and the releases of each pinned bar. */
+  const pinsRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const pinMapRef = useRef<Map<number, EventPin>>(new Map());
+  const pinEventsRef = useRef<EconEvent[]>([]);
+  const [pinHover, setPinHover] = useState<{ x: number; pin: EventPin } | null>(null);
+  /** Pins the releases of the chart's currencies onto `bars` (the bars drawn); none on Renko (synthetic times). */
+  const refreshPins = (bars: Bar[]) => {
+    const plugin = pinsRef.current;
+    if (!plugin) return;
+    const on = useTerminal.getState().showEventPins && chartStyle !== 'renko' && !!timeframe;
+    const pins = on ? eventPins(pinEventsRef.current, bars.map((b) => b.time), TIMEFRAME_SECONDS[timeframe!]) : [];
+    pinMapRef.current = new Map(pins.map((p) => [p.time, p]));
+    plugin.setMarkers(pins.map((p) => ({ time: ts(p.time), position: 'belowBar' as const, shape: 'circle' as const, color: p.color, text: p.text, size: 1 })));
+    setPinHover(null);
+  };
   /** Draws `bars` in the current style (candles / HA / renko / ...). */
   const drawMain = (bars: Bar[]) => {
     const shown = chartStyle === 'heikin' ? heikinAshi(bars) : chartStyle === 'renko' ? renko(bars, boxRef.current) : bars;
     if (chartStyle === 'heikin') haRef.current = shown;
     (candleRef.current as ISeriesApi<SeriesType>)?.setData(shown.map((b) => mainPoint(chartStyle, b)) as never);
+    refreshPins(bars);
   };
   const linesRef = useRef<IPriceLine[]>([]);
   /** Draggable SL/TP lines of open positions. */
@@ -229,14 +251,24 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
             ? chart.addSeries(AreaSeries, { lineWidth: 2 })
             : chart.addSeries(CandlestickSeries, { borderVisible: false });
     candleRef.current = main as ISeriesApi<'Candlestick'>;
+    pinsRef.current = createSeriesMarkers(main, []);
+    // hovering a pinned bar lists its releases
+    const onCrosshair = (p: MouseEventParams) => {
+      const pin = p.point && typeof p.time === 'number' ? pinMapRef.current.get(p.time) : undefined;
+      setPinHover((h) => (pin ? (h?.pin === pin ? h : { x: p.point!.x, pin }) : null));
+    };
+    chart.subscribeCrosshairMove(onCrosshair);
     const shapes = new ShapesPrimitive();
     candleRef.current.attachPrimitive(shapes);
     shapesRef.current = shapes;
     setChartGen((g) => g + 1);
     return () => {
+      chart.unsubscribeCrosshairMove(onCrosshair);
       chart.remove();
       chartRef.current = null;
       candleRef.current = null;
+      pinsRef.current = null;
+      pinMapRef.current = new Map();
       volRef.current = null;
       indRef.current = {};
       linesRef.current = [];
@@ -363,6 +395,21 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     chartRef.current?.timeScale().scrollToRealTime();
   };
 
+  // economic calendar pins: the chart symbol's currencies, medium and high impact
+  const econ = useEconEvents();
+  const showEventPins = useTerminal((s) => s.showEventPins);
+  const toggleEventPins = useTerminal((s) => s.toggleEventPins);
+  const pinEvents = useMemo(() => (spec ? eventsFor(econ, symbolCurrencies(spec), 'medium') : []), [econ, spec]);
+  useEffect(() => {
+    pinEventsRef.current = pinEvents;
+    if (loading) return;
+    const r = replayRef.current;
+    refreshPins(r ? barsRef.current.slice(0, r.at) : barsRef.current);
+  }, [pinEvents, showEventPins, loading, chartGen]); // eslint-disable-line react-hooks/exhaustive-deps -- refreshPins reads refs
+  const now = useNow();
+  const upcoming = showEventPins && chartStyle !== 'renko' && !bare ? nextEvent(pinEvents, now) : undefined;
+  const upcomingIn = upcoming && upcoming.time - now <= 24 * 3_600_000 ? countdown(upcoming.time - now) : null;
+
   // indicator toggles
   useEffect(() => {
     if (!loading) refreshIndicators(indicators);
@@ -378,6 +425,8 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
     const same = !!last && bar.time === last.time;
     if (same) bars[bars.length - 1] = bar;
     else bars.push(bar);
+    // a new bar can hold a release that just came due
+    if (!same && chartStyle !== 'renko') refreshPins(bars);
     if (chartStyle === 'renko') {
       // bricks change only when price moves a full box; redraw is cheap
       const n = renko(bars, boxRef.current).length;
@@ -878,6 +927,7 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
       { label: replay ? t('replay.stop') : t('replay.start'), onClick: () => (replay ? stopReplay() : startReplay()) },
       { label: t('chart.volume'), hint: tick(indicatorsOn.volume), onClick: () => toggleIndicator('volume') },
       { label: t('chart.askLine'), hint: tick(showAskLine), onClick: toggleAskLine },
+      { label: chartStyle === 'renko' ? t('chart.eventPinsRenko') : t('chart.eventPins'), hint: tick(showEventPins), onClick: toggleEventPins, disabled: chartStyle === 'renko' },
       {
         label: t('obj.clearAll'),
         separator: true,
@@ -1081,6 +1131,31 @@ export function ChartPanel({ index, detached = false, bare = false, draft }: { i
         />
         {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} testId="chart-menu" />}
         {loading && <div className="absolute inset-0 grid place-items-center text-muted">{t('chart.loading')}</div>}
+        {pinHover && (
+          <div
+            className="absolute bottom-8 z-20 max-w-[280px] px-2 py-1 rounded border border-line bg-panel shadow-xl text-[11px] pointer-events-none"
+            style={{ left: Math.max(4, pinHover.x - 140) }}
+            data-testid={`chart-pin-tip-${index}`}
+          >
+            {pinHover.pin.events.map((e) => (
+              <div key={e.id} className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: IMPACT_COLOR[e.impact] }} />
+                <span className="font-semibold">{e.currency}</span>
+                <span className="truncate">{e.title}</span>
+                {e.actual && <span className="num ml-auto pl-1">{e.actual}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+        {upcoming && upcomingIn && (
+          <div
+            className="absolute top-2 right-16 z-10 max-w-[45%] px-2 h-6 rounded-full border border-line bg-panel/90 text-[11px] flex items-center gap-1.5 shadow pointer-events-none"
+            data-testid={`chart-next-event-${index}`}
+          >
+            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: IMPACT_COLOR[upcoming.impact] }} />
+            <span className="truncate">{t('cal.next', { currency: upcoming.currency, title: upcoming.title, h: upcomingIn.h, m: String(upcomingIn.m).padStart(2, '0') })}</span>
+          </div>
+        )}
         {replay && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-2 h-8 rounded-full bg-panel border border-line shadow text-[12px]" data-testid={`replay-bar-${index}`}>
             <span className="text-accent font-medium mr-1">{t('replay.title')}</span>

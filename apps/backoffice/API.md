@@ -91,6 +91,11 @@ auth and seeded data and runs `e2e-live/` against it.
 | PUT | `/v1/admin-users/{id}` | `saveUser(u)` | users.edit | `AdminUser` |
 | GET | `/v1/settings` | `getSettings()` | settings.view | `Settings` |
 | PUT | `/v1/settings` | `saveSettings(s)` | settings.edit | `Settings` |
+| GET | `/v1/econ-calendar?from=&to=&currency=` | `listEconEvents(from, to)` | settings.view | `{from, to, events: EconEvent[]}` ordered by time; `from`/`to` epoch ms or ISO date (default last 7 days → 14 days ahead, at most 400 days); `currency` comma separated (`ALL` events always match) |
+| POST | `/v1/econ-calendar` | `createEconEvent(e)` | settings.edit | `{time (epoch ms), currency, title, impact: low\|medium\|high, actual?, forecast?, previous?}`; `409 duplicate` for the same title + currency + time |
+| PUT / DELETE | `/v1/econ-calendar/{id}` | `updateEconEvent` / `deleteEconEvent` | settings.edit | journaled (`calendar.event` / `calendar.delete` in the audit log) |
+| POST | `/v1/econ-calendar/import` | `importEconWeek()` | settings.edit | fetches the ForexFactory weekly JSON server side (`CORE_ECON_FEED_URL` overrides); idempotent by (title, currency, time) → `{total, added, updated, unchanged, skipped}`; `502 feed_unavailable` when the feed is down / rate-limited |
+| GET | `/v1/client/calendar?from=&to=&currency=` | terminal (`/api/client/calendar`) | client token | same shape as `/v1/econ-calendar`; read-only API keys allowed |
 | GET | `/v1/me` | — | authenticated | `{sub, name, role, permissions}` |
 | POST | `/v1/stream/ticket` | `subscribe()` | authenticated | `{ticket, expiresInMs}`: single-use, 30 s; the bearer token never goes into a URL |
 | GET | `/v1/stream?ticket=` | `subscribe()` | ticket (or `Authorization` header) | SSE: `event: invalidate`, `data: {"topics": [AdminApi method names]}` (`"*"` = everything). Sent on admin mutations and whenever the engine sequence moves (client orders, fills, quotes). The UI invalidates those queries and stops polling while connected |

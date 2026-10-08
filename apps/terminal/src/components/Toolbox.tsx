@@ -7,8 +7,9 @@ import { closePrice, distanceToPips, formatMoney, formatPrice, lotsToVolume, pip
 import { formatTimeShort as formatTime, parseDecimal } from '@fxvps/trading-core';
 import { VirtualTable } from './VirtualTable';
 import { Modal } from './Dialogs';
+import { CalendarTab } from './CalendarTab';
 
-const TABS: ToolboxTab[] = ['positions', 'orders', 'history', 'journal'];
+const TABS: ToolboxTab[] = ['positions', 'orders', 'history', 'journal', 'calendar'];
 const POS_COLS = '48px 104px 60px 36px 44px 68px 68px 68px 40px 68px 48px 72px minmax(250px,1fr)';
 const ORD_COLS = '48px 104px 60px 104px 44px 140px 68px 68px 68px 104px minmax(110px,1fr)';
 const HIST_COLS = '48px 104px 60px 36px 36px 44px 80px 64px 80px 70px';
@@ -575,6 +576,7 @@ export function Toolbox() {
         {tab === 'orders' && <Orders />}
         {tab === 'history' && <History />}
         {tab === 'journal' && <Journal />}
+        {tab === 'calendar' && <CalendarTab />}
       </div>
         </>
       )}

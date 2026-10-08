@@ -93,4 +93,22 @@ describe("trading sessions", () => {
     expect(isTradingAt(fx, new Date("2026-10-04T10:00:00Z"))).toBe(false); // Sunday
     expect(isTradingAt([{ day: "mon", open: "01:05", close: "23:55" }], new Date("2026-10-05T00:30:00Z"))).toBe(false);
   });
+  it("economic calendar: create, duplicate guard, idempotent import, RBAC", async () => {
+    const api = createMockApi({ latencyMs: 0 });
+    const time = Date.UTC(2030, 0, 3, 13, 30);
+    const ev = await api.createEconEvent({ time, currency: "usd", title: " CPI y/y ", impact: "high", forecast: "3.1%" }, admin);
+    expect(ev).toMatchObject({ currency: "USD", title: "CPI y/y", impact: "high", forecast: "3.1%", actual: null, at: "2030-01-03T13:30:00.000Z" });
+    await expect(api.createEconEvent({ time, currency: "USD", title: "cpi y/y", impact: "low" }, admin)).rejects.toThrow(/already exists/);
+    await expect(api.createEconEvent({ time, currency: "USD", title: "x", impact: "low" }, dealer)).rejects.toBeInstanceOf(ForbiddenError);
+    const listed = await api.listEconEvents("2030-01-01", "2030-01-10");
+    expect(listed.events.map((e) => e.id)).toEqual([ev.id]);
+    const first = await api.importEconWeek(admin);
+    expect(first.added).toBeGreaterThan(0);
+    const again = await api.importEconWeek(admin);
+    expect(again).toMatchObject({ added: 0, unchanged: first.added + first.unchanged });
+    await api.deleteEconEvent(ev.id, admin);
+    expect((await api.listEconEvents("2030-01-01", "2030-01-10")).events).toEqual([]);
+    const [last] = await api.listAudit();
+    expect(last).toMatchObject({ action: "calendar.delete", target: ev.id });
+  });
 });

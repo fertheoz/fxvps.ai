@@ -489,6 +489,20 @@ pub enum AdminCmd {
         group: String,
         old: String,
     },
+    /// Economic calendar (plan item 10): an event created or edited in the console.
+    EconEventSaved {
+        event: super::econ_calendar::EconEvent,
+    },
+    EconEventDeleted {
+        id: String,
+    },
+    /// Feed import: only the new or changed events (by title, currency, time).
+    EconEventsImported {
+        events: Vec<super::econ_calendar::EconEvent>,
+        added: usize,
+        updated: usize,
+        source: String,
+    },
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -549,6 +563,9 @@ pub struct AdminState {
     /// Copy trading strategies by provider account.
     #[serde(default)]
     pub strategies: BTreeMap<u64, super::copy_admin::StrategyRec>,
+    /// Economic calendar events by id.
+    #[serde(default)]
+    pub econ_events: BTreeMap<String, super::econ_calendar::EconEvent>,
     /// Oldest first.
     pub audit: Vec<AuditRec>,
 }
@@ -917,6 +934,47 @@ impl AdminState {
                 format!("#{account}"),
                 format!("{old} → {group}"),
             ),
+            AdminCmd::EconEventSaved { event } => {
+                self.econ_events.insert(event.id.clone(), event.clone());
+                self.audit(
+                    r,
+                    "calendar.event".into(),
+                    event.id.clone(),
+                    format!(
+                        "{} {} {} ({})",
+                        super::views::iso(event.time_ns),
+                        event.currency,
+                        event.title,
+                        event.impact.as_str()
+                    ),
+                )
+            }
+            AdminCmd::EconEventDeleted { id } => {
+                let old = self.econ_events.remove(id);
+                self.audit(
+                    r,
+                    "calendar.delete".into(),
+                    id.clone(),
+                    old.map(|e| format!("{} {}", e.currency, e.title))
+                        .unwrap_or_default(),
+                )
+            }
+            AdminCmd::EconEventsImported {
+                events,
+                added,
+                updated,
+                source,
+            } => {
+                for e in events {
+                    self.econ_events.insert(e.id.clone(), e.clone());
+                }
+                self.audit(
+                    r,
+                    "calendar.import".into(),
+                    source.clone(),
+                    format!("{added} added, {updated} updated"),
+                )
+            }
             AdminCmd::GroupSaved { group, details } => {
                 self.audit(r, "group.update".into(), group.clone(), details.clone())
             }

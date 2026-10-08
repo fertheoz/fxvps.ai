@@ -1623,3 +1623,216 @@ async fn api_key_tokens_cannot_move_money_or_change_links() {
     assert_eq!(s, StatusCode::NOT_FOUND);
     t.stop();
 }
+
+/// Trading-client token (identity service shape): `accounts` claim, no role.
+fn client_token(accounts: &[&str]) -> String {
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+        &json!({ "sub": "client-7", "name": "Client Seven", "accounts": accounts, "exp": unix_now() + 600 }),
+        &jsonwebtoken::EncodingKey::from_secret(SECRET),
+    )
+    .unwrap()
+}
+
+/// Serves `body` at `http://127.0.0.1:<port>/ff.json` (stand-in for the calendar feed).
+async fn feed_server(body: &'static str) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route("/ff.json", axum::routing::get(move || async move { body }));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}/ff.json")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn economic_calendar_crud_import_and_client_read() {
+    const FEED: &str = r#"[
+      {"title":"Non-Farm Employment Change","country":"USD","date":"2026-10-09T08:30:00-04:00","impact":"High","forecast":"140K","previous":"22K"},
+      {"title":"German Industrial Production m/m","country":"EUR","date":"2026-10-08T02:00:00-04:00","impact":"Medium","forecast":"","previous":"1.3%"},
+      {"title":"Bank Holiday","country":"JPY","date":"2026-10-12T00:00:00-04:00","impact":"Holiday","forecast":"","previous":""},
+      {"title":"Broken row","country":"USD","date":"soon","impact":"High"}
+    ]"#;
+    let dir = tempfile::tempdir().unwrap();
+    let t = T::start(dir.path(), true).await;
+    let admin = admin_t();
+    let dealer = token("dan", Role::Dealer);
+    let range = "from=2026-10-05&to=2026-10-19";
+    // 2026-10-08T12:30:00Z
+    let claims = json!({ "time": 1_791_462_600_000u64, "currency": "usd", "title": " Initial Jobless Claims ",
+                         "impact": "medium", "forecast": "225K" });
+    let create = "/v1/econ-calendar";
+
+    // console: create / validate / edit (settings.edit)
+    let (s, v) = t
+        .req(
+            Method::POST,
+            create,
+            Some(&dealer),
+            Some(claims.clone()),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert_eq!(v["error"]["permission"], "settings.edit");
+    let (s, created) = t
+        .req(
+            Method::POST,
+            create,
+            Some(&admin),
+            Some(claims.clone()),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{created}");
+    assert_eq!(created["currency"], "USD");
+    assert_eq!(created["title"], "Initial Jobless Claims");
+    assert_eq!(created["at"], "2026-10-08T12:30:00.000Z");
+    assert_eq!(created["actual"], Value::Null);
+    let id = created["id"].as_str().unwrap().to_string();
+    let (s, _) = t
+        .req(
+            Method::POST,
+            create,
+            Some(&admin),
+            Some(claims.clone()),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    let bad = json!({ "time": 1, "currency": "US", "title": "x", "impact": "high" });
+    let (s, _) = t
+        .req(Method::POST, create, Some(&admin), Some(bad), &[])
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let mut edited = claims.clone();
+    edited["actual"] = json!("219K");
+    let (s, v) = t
+        .req(
+            Method::PUT,
+            &format!("/v1/econ-calendar/{id}"),
+            Some(&admin),
+            Some(edited.clone()),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        (v["id"].as_str(), v["actual"].as_str()),
+        (Some(id.as_str()), Some("219K"))
+    );
+    let (s, _) = t
+        .req(
+            Method::PUT,
+            "/v1/econ-calendar/nope",
+            Some(&admin),
+            Some(edited),
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // "import this week": fetched server side, idempotent by (title, currency, time)
+    std::env::set_var("CORE_ECON_FEED_URL", feed_server(FEED).await);
+    let import = "/v1/econ-calendar/import";
+    let (s, v) = t.req(Method::POST, import, Some(&dealer), None, &[]).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    let (s, v) = t.req(Method::POST, import, Some(&admin), None, &[]).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        (
+            v["added"].as_u64(),
+            v["updated"].as_u64(),
+            v["skipped"].as_u64()
+        ),
+        (Some(3), Some(0), Some(1))
+    );
+    let (s, v) = t.req(Method::POST, import, Some(&admin), None, &[]).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        (
+            v["added"].as_u64(),
+            v["updated"].as_u64(),
+            v["unchanged"].as_u64()
+        ),
+        (Some(0), Some(0), Some(3))
+    );
+    let (s, v) = t.get(&format!("/v1/econ-calendar?{range}"), &admin).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let titles: Vec<&str> = v["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "German Industrial Production m/m",
+            "Initial Jobless Claims",
+            "Non-Farm Employment Change",
+            "Bank Holiday"
+        ]
+    );
+    let (s, _) = t.get(&format!("/v1/econ-calendar?{range}"), &dealer).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+
+    // terminal: /v1/client/calendar with a client token, filtered by currency
+    let client_path = format!("/v1/client/calendar?{range}");
+    let (s, _) = t.req(Method::GET, &client_path, None, None, &[]).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let (s, _) = t.get(&client_path, &admin).await;
+    assert_eq!(
+        s,
+        StatusCode::UNAUTHORIZED,
+        "a staff token has no trading accounts"
+    );
+    let client = client_token(&["7"]);
+    let (s, v) = t
+        .get(&format!("{client_path}&currency=usd,JPY"), &client)
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let events = v["events"].as_array().unwrap();
+    assert_eq!(events.len(), 3, "{v}");
+    let nfp = &events[1];
+    assert_eq!(nfp["title"], "Non-Farm Employment Change");
+    assert_eq!(nfp["impact"], "high");
+    assert_eq!(nfp["time"], 1_791_549_000_000u64);
+    assert_eq!(nfp["forecast"], "140K");
+    assert_eq!(events[2]["impact"], "low");
+    let (s, _) = t
+        .get("/v1/client/calendar?from=2026-10-10&to=2026-10-09", &client)
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // delete, audit trail, replay
+    let del = format!("/v1/econ-calendar/{id}");
+    let (s, _) = t.req(Method::DELETE, &del, Some(&admin), None, &[]).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = t.req(Method::DELETE, &del, Some(&admin), None, &[]).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (_, audit) = t.get("/v1/audit", &admin).await;
+    let actions: Vec<&str> = audit
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a["action"].as_str())
+        .filter(|a| a.starts_with("calendar."))
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            "calendar.delete",
+            "calendar.import",
+            "calendar.event",
+            "calendar.event"
+        ]
+    );
+    t.stop();
+    let st = store::replay(dir.path()).unwrap();
+    assert_eq!(st.econ_events.len(), 3);
+    assert!(st
+        .econ_events
+        .values()
+        .all(|e| e.title != "Initial Jobless Claims"));
+}
