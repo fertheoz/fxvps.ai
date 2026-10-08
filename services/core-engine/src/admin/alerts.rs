@@ -544,12 +544,16 @@ pub fn spawn(ctx: AdminCtx) {
     tokio::spawn(async move {
         let mut iv = tokio::time::interval(Duration::from_secs(15));
         let mut report_sent_day = 0u64;
+        let started = std::time::Instant::now();
         loop {
             iv.tick().await;
             let now_ns = domain::now_ns();
             let st = ctx.view_state().await;
             let settings = st.alerts.clone();
             let grace_ms = settings.lp_down_grace_s * 1000;
+            // warm-up: a process that just took over (blue/green) has no LP
+            // status yet; give the links one grace period before judging them
+            let warming_up = started.elapsed().as_millis() < u128::from(grace_ms);
             let Ok(mut conditions) = ctx
                 .engine
                 .read(move |e| engine_conditions(e, &st, now_ns))
@@ -557,7 +561,9 @@ pub fn spawn(ctx: AdminCtx) {
             else {
                 break;
             };
-            conditions.extend(infra_conditions(&ctx, now_ns / 1_000_000, grace_ms));
+            if !warming_up {
+                conditions.extend(infra_conditions(&ctx, now_ns / 1_000_000, grace_ms));
+            }
             let (raised, resolved) = ctx.alerts.apply_full(now_ns, conditions);
             for a in &raised {
                 tracing::warn!(kind = %a.kind, target = %a.target, detail = %a.detail, "alert raised");
