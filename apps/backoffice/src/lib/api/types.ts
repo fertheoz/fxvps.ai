@@ -509,6 +509,31 @@ export interface RevenueReport {
   rows: RevenueRow[];
 }
 
+/** One closed deal in the reconciliation report: client side vs LP side, the broker's legs in minor units. */
+export interface ReconciliationRow {
+  id: string;
+  at: string;
+  login: number;
+  position: string;
+  symbol: string;
+  side: "buy" | "sell";
+  lots: number;
+  book: "A" | "B";
+  reason: string;
+  openClient: number;
+  openLp: number | null;
+  closeClient: number;
+  closeLp: number | null;
+  clientPnl: number;
+  lpPnl: number;
+  markup: number;
+  commission: number;
+  swapFee: number;
+  broker: number;
+  /** client P&L + markup = LP P&L (A-book) held for this deal. */
+  ok: boolean;
+}
+
 /**
  * The back-office contract. The mock adapter implements it in-browser;
  * the HTTP adapter maps 1:1 to the future backoffice-api REST endpoints
@@ -633,6 +658,7 @@ export interface AdminApi {
   execution(): Promise<ExecutionReport>;
   /** Realized broker revenue from the ledger (markup, B-book, commission). */
   revenue(): Promise<RevenueReport>;
+  reconciliation(): Promise<ReconciliationRow[]>;
 
   listAudit(): Promise<AuditEntry[]>;
 

@@ -9,7 +9,7 @@ import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
 import { useToast } from "@/components/shell/providers";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { Trade } from "@/lib/schemas";
-import type { BestExecutionRow, ClientFlowRow, IbRow, ExecutionRow, ExecutionSummary, LpExecution, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
+import type { BestExecutionRow, ClientFlowRow, IbRow, ExecutionRow, ExecutionSummary, LpExecution, ReconciliationRow, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
 import { formatMinorPlain } from "@/lib/money";
 import { downloadCsv, toCsv } from "@/lib/utils";
 
@@ -23,7 +23,8 @@ const fc = createColumnHelper<ClientFlowRow>();
 const txc = createColumnHelper<TransactionRow>();
 const bxc = createColumnHelper<BestExecutionRow>();
 const ibc = createColumnHelper<IbRow>();
-type Tab = "trades" | "statements" | "lp" | "execution" | "revenue" | "flow" | "transactions" | "bestexec" | "ib";
+const mc = createColumnHelper<ReconciliationRow>();
+type Tab = "trades" | "statements" | "lp" | "execution" | "revenue" | "flow" | "transactions" | "bestexec" | "ib" | "reconciliation";
 
 const pts = (v: number | null | undefined, digits = 1) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(digits)}`);
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
@@ -39,6 +40,7 @@ export default function ReportsPage() {
   const statements = useApiQuery("statements");
   const lp = useApiQuery("listLpExecutions", [], { live: 5000 });
   const revenue = useApiQuery("revenue", [], { live: 5000 });
+  const recon = useApiQuery("reconciliation", [], { live: 5000, enabled: tab === "reconciliation" });
   const execution = useApiQuery("execution", [], { live: 5000 });
   const flow = useApiQuery("clientFlow", [], { live: 10000, enabled: tab === "flow" });
   const [range, setRange] = React.useState<{ from: string; to: string }>({ from: "", to: "" });
@@ -98,6 +100,31 @@ export default function ReportsPage() {
   ];
   const leg = (k: "client" | "broker" | "lp", label: "reports.clientLeg" | "reports.brokerLeg" | "reports.lpLeg") =>
     rc.accessor(k, { header: t(label), cell: (c) => <Pnl value={c.getValue()}>{f.money(c.getValue())}</Pnl> });
+  const gain = (k: "markup" | "commission" | "swapFee" | "broker") =>
+    mc.accessor(k, { header: t(`reports.recon.${k}`), cell: (c) => <span className={`tabular-nums ${c.getValue() > 0 ? "text-emerald-600 dark:text-emerald-400" : c.getValue() < 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>{f.money(c.getValue())}</span> });
+  const px = (v: number | null) => <span className="tabular-nums">{v ?? "—"}</span>;
+  const reconCols = [
+    mc.accessor("at", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
+    mc.accessor("login", { header: t("clients.login") }),
+    mc.accessor("symbol", { header: t("positions.symbol") }),
+    mc.accessor("side", { header: t("positions.side"), cell: (c) => <SideBadge side={c.getValue()} /> }),
+    mc.accessor("lots", { header: t("positions.lots") }),
+    mc.accessor("book", { header: t("groups.book"), cell: (c) => <BookBadge book={c.getValue()} /> }),
+    mc.accessor("openClient", { header: t("reports.recon.openClient"), cell: (c) => px(c.getValue()) }),
+    mc.accessor("openLp", { header: t("reports.recon.openLp"), cell: (c) => px(c.getValue()) }),
+    mc.accessor("closeClient", { header: t("reports.recon.closeClient"), cell: (c) => px(c.getValue()) }),
+    mc.accessor("closeLp", { header: t("reports.recon.closeLp"), cell: (c) => px(c.getValue()) }),
+    mc.accessor("clientPnl", { header: t("reports.recon.clientPnl"), cell: (c) => <Pnl value={c.getValue()}>{f.money(c.getValue())}</Pnl> }),
+    mc.accessor("lpPnl", { header: t("reports.recon.lpPnl"), cell: (c) => (c.row.original.book === "A" ? <Pnl value={c.getValue()}>{f.money(c.getValue())}</Pnl> : "—") }),
+    gain("markup"), gain("commission"), gain("swapFee"), gain("broker"),
+    mc.accessor("ok", { header: t("reports.recon.ok"), cell: (c) => <Badge tone={c.getValue() ? "success" : "danger"}>{c.getValue() ? "✓" : "✗"}</Badge> }),
+    mc.accessor("reason", { header: t("reports.recon.reason"), cell: (c) => <span className="text-xs text-muted-foreground">{c.getValue()}</span> }),
+  ];
+  const reconTotals = React.useMemo(() => {
+    const rows = recon.data ?? [];
+    const sum = (k: "clientPnl" | "lpPnl" | "markup" | "commission" | "swapFee" | "broker") => rows.reduce((a, r) => a + r[k], 0);
+    return { n: rows.length, bad: rows.filter((r) => !r.ok).length, clientPnl: sum("clientPnl"), lpPnl: sum("lpPnl"), markup: sum("markup"), commission: sum("commission"), swapFee: sum("swapFee"), broker: sum("broker") };
+  }, [recon.data]);
   const revCols = [
     rc.accessor("at", { header: t("audit.at"), cell: (c) => f.date(c.getValue()) }),
     rc.accessor("login", { header: t("clients.login") }),
@@ -234,7 +261,7 @@ export default function ReportsPage() {
         {actor.can("reports.export") && <Button variant="outline" onClick={exportCsv} data-testid="export-csv"><Download className="h-4 w-4" />{t("common.export")}</Button>}
       </PageHeader>
       <div className="mb-3">
-        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }, { value: "flow", label: t("reports.flow") }, { value: "transactions", label: t("reports.transactions") }, { value: "bestexec", label: t("reports.bestExec") }, { value: "ib", label: t("reports.ib") }]} />
+        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }, { value: "flow", label: t("reports.flow") }, { value: "transactions", label: t("reports.transactions") }, { value: "bestexec", label: t("reports.bestExec") }, { value: "ib", label: t("reports.ib") }, { value: "reconciliation", label: t("reports.recon") }]} />
       </div>
       {tab === "trades" && <DataTable data={trades.data ?? []} columns={tradeCols} getRowId={(x) => x.id} />}
       {tab === "statements" && <DataTable data={statements.data ?? []} columns={stmtCols} getRowId={(x) => String(x.login)} />}
@@ -276,6 +303,20 @@ export default function ReportsPage() {
         <div data-testid="flow-report">
           <p className="mb-2 text-xs text-muted-foreground">{t("reports.flowHint")}</p>
           <DataTable data={flow.data ?? []} columns={flowCols} getRowId={(x) => String(x.login)} />
+        </div>
+      )}
+      {tab === "reconciliation" && (
+        <div data-testid="reconciliation-report">
+          <p className="mb-2 text-xs text-muted-foreground">{t("reports.recon.hint")}</p>
+          <div className="mb-3 grid grid-cols-2 gap-3 xl:grid-cols-6">
+            <Stat label={t("reports.recon.clientPnl")} value={<Pnl value={reconTotals.clientPnl}>{f.money(reconTotals.clientPnl)}</Pnl>} sub={`${reconTotals.n} ${t("reports.recon.deals")}`} />
+            <Stat label={t("reports.recon.lpPnl")} value={<Pnl value={reconTotals.lpPnl}>{f.money(reconTotals.lpPnl)}</Pnl>} sub="A-book" />
+            <Stat label={t("reports.recon.markup")} value={<Pnl value={reconTotals.markup}>{f.money(reconTotals.markup)}</Pnl>} sub={t("reports.brokerLeg")} />
+            <Stat label={t("reports.recon.commission")} value={<Pnl value={reconTotals.commission}>{f.money(reconTotals.commission)}</Pnl>} sub={t("reports.brokerLeg")} />
+            <Stat label={t("reports.recon.broker")} value={<Pnl value={reconTotals.broker}>{f.money(reconTotals.broker)}</Pnl>} sub={t("reports.recon.expected")} />
+            <Stat label={t("reports.recon.ok")} value={<Badge tone={reconTotals.bad === 0 ? "success" : "danger"}>{reconTotals.bad === 0 ? t("reports.recon.allOk") : `${reconTotals.bad} ✗`}</Badge>} sub={t("reports.recon.invariant")} />
+          </div>
+          <DataTable data={recon.data ?? []} columns={reconCols} getRowId={(x) => x.id} />
         </div>
       )}
       {tab === "revenue" && (
