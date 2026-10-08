@@ -1,5 +1,5 @@
 import {
-  Activity, BarChart3, Building2, Copy, CheckCheck, Cable, Network, ShieldCheck, FileText, GitBranch, LayoutDashboard, Layers, ScrollText, Settings, ShieldAlert, Tag, UserCog, Users,
+  Activity, BarChart3, Building2, CalendarDays, Copy, CheckCheck, Cable, Network, ShieldCheck, FileText, GitBranch, LayoutDashboard, Layers, ScrollText, Settings, ShieldAlert, Tag, UserCog, Users,
   type LucideIcon,
 } from "lucide-react";
 import type { MessageKey } from "@/lib/i18n";
@@ -19,6 +19,7 @@ export const NAV: NavItem[] = [
   { href: "/bridge", key: "nav.bridge", icon: Network },
   { href: "/denetim", key: "nav.denetim", icon: ShieldCheck },
   { href: "/copy", key: "nav.copy", icon: Copy },
+  { href: "/calendar", key: "nav.econCalendar", icon: CalendarDays },
   { href: "/partner", key: "nav.partner", icon: Building2 },
   { href: "/reports", key: "nav.reports", icon: BarChart3 },
   { href: "/approvals", key: "nav.approvals", icon: CheckCheck },

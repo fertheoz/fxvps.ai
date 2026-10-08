@@ -66,6 +66,7 @@ pub fn router() -> Router<AdminCtx> {
         )
         .route("/v1/client/ib", get(client_ib))
         .route("/v1/client/ib/link", post(client_ib_link))
+        .route("/v1/client/calendar", get(super::econ_admin::client_list))
         .route("/v1/client/funding", post(client_funding_request))
         .route("/v1/client/kyc/documents", post(client_kyc_upload))
         .route("/v1/reports/transactions", get(transactions))
@@ -87,6 +88,15 @@ pub fn router() -> Router<AdminCtx> {
             get(alert_settings_get).put(alert_settings_put),
         )
         .route("/v1/settings/calendar", get(calendar_get).put(calendar_put))
+        .route(
+            "/v1/econ-calendar",
+            get(super::econ_admin::list).post(super::econ_admin::create),
+        )
+        .route("/v1/econ-calendar/import", post(super::econ_admin::import))
+        .route(
+            "/v1/econ-calendar/{id}",
+            put(super::econ_admin::update).delete(super::econ_admin::remove),
+        )
         .route("/v1/lp/sim/state", get(sim_state))
         .route("/v1/lp/sim/shock", post(sim_shock))
         .route("/v1/lp/sim/scenario", post(sim_scenario))

@@ -343,6 +343,12 @@ export interface AlertSettings {
   dailyReportHourUtc: number | null;
 }
 export interface TradingCalendar { holidays: string[] }
+/** Economic calendar (plan item 10): release events, `time` in epoch ms (UTC). */
+export type EconImpact = "low" | "medium" | "high";
+export interface EconEvent { id: string; time: number; at: string; currency: string; title: string; impact: EconImpact; actual: string | null; forecast: string | null; previous: string | null }
+export interface EconEventInput { time: number; currency: string; title: string; impact: EconImpact; actual?: string | null; forecast?: string | null; previous?: string | null }
+export interface EconEventList { from: number; to: number; events: EconEvent[] }
+export interface EconImportResult { total: number; added: number; updated: number; unchanged: number; skipped: number }
 export interface RuleVersionMeta { id: string; at: string; actor: string; count: number }
 export interface SimState { scenario: { rejectPct: number; latencyMs: number }; instruments: { securityId: string; mid: string | null }[] }
 
@@ -503,6 +509,13 @@ export interface AdminApi {
   saveAlertSettings(s: AlertSettings, actor: Actor): Promise<AlertSettings>;
   getCalendar(): Promise<TradingCalendar>;
   saveCalendar(c: TradingCalendar, actor: Actor): Promise<TradingCalendar>;
+  /** Economic calendar: `from` / `to` are epoch ms or YYYY-MM-DD (default: last 7 days to 14 days ahead). */
+  listEconEvents(from?: string, to?: string): Promise<EconEventList>;
+  createEconEvent(e: EconEventInput, actor: Actor): Promise<EconEvent>;
+  updateEconEvent(id: string, e: EconEventInput, actor: Actor): Promise<EconEvent>;
+  deleteEconEvent(id: string, actor: Actor): Promise<{ ok: boolean }>;
+  /** Fetches this week's ForexFactory feed server side; idempotent by (title, currency, time). */
+  importEconWeek(actor: Actor): Promise<EconImportResult>;
   ruleVersions(): Promise<RuleVersionMeta[]>;
   restoreRuleVersion(id: string, actor: Actor): Promise<RoutingRule[]>;
   simState(): Promise<SimState>;

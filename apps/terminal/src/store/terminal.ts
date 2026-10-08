@@ -29,7 +29,7 @@ export type ColorScheme = 'classic' | 'blueOrange' | 'mono';
 export const MAX_CHARTS = 6;
 /** Drawing tool armed on the chart. */
 export type ChartTool = 'hline' | 'alert' | 'trend' | 'rect' | 'fib' | null;
-export type ToolboxTab = 'positions' | 'orders' | 'history' | 'journal';
+export type ToolboxTab = 'positions' | 'orders' | 'history' | 'journal' | 'calendar';
 
 export interface ChartSlot {
   symbol: string;
@@ -119,6 +119,8 @@ export interface TerminalState {
   indicatorSettings: IndicatorSettings;
   /** Draw the ask price as a second line (candles follow the bid). */
   showAskLine: boolean;
+  /** Economic calendar pins on the chart time axis (symbol's base / quote currency). */
+  showEventPins: boolean;
   oneClickVolume: number;
   /** Auto-reconnect interval (ms) after the quick retries; 0 = manual (lightning button). */
   reconnectEveryMs: number;
@@ -177,6 +179,7 @@ export interface TerminalState {
   applyTemplate(id: string): void;
   deleteTemplate(id: string): void;
   toggleAskLine(): void;
+  toggleEventPins(): void;
   setOneClickVolume(v: number): void;
   setReconnectEvery(ms: number): void;
   setMaxDeviationPips(v: number): void;
@@ -248,6 +251,7 @@ export const useTerminal = create<TerminalState>()(
       indicators: { sma: false, ema: true, bollinger: false, rsi: false, volume: true },
       indicatorSettings: DEFAULT_INDICATOR_SETTINGS,
       showAskLine: false,
+      showEventPins: true,
       oneClickVolume: 10,
       reconnectEveryMs: 3000,
       maxDeviationPips: 0,
@@ -500,6 +504,9 @@ export const useTerminal = create<TerminalState>()(
       toggleAskLine() {
         set({ showAskLine: !get().showAskLine });
       },
+      toggleEventPins() {
+        set({ showEventPins: !get().showEventPins });
+      },
       toggleIndicator(k) {
         set({ indicators: { ...get().indicators, [k]: !get().indicators[k] } });
       },
@@ -573,6 +580,7 @@ export const useTerminal = create<TerminalState>()(
         indicators: s.indicators,
         indicatorSettings: s.indicatorSettings,
         showAskLine: s.showAskLine,
+        showEventPins: s.showEventPins,
         oneClickVolume: s.oneClickVolume,
         reconnectEveryMs: s.reconnectEveryMs,
         maxDeviationPips: s.maxDeviationPips,

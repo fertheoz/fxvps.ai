@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
@@ -34,6 +34,35 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
   let tenants: Tenant[] = [{ id: "fxvps", name: "fxvps.ai", groups: ["demo-retail", "demo-hedge"], hostnames: ["trade.fxvps.ai", "console.fxvps.ai"] }];
   let alertSettings: AlertSettings = { lpDownGraceS: 60, fillRateMinOrders: 10, fillRateFloorPct: 90, latencyFloorMs: 500, latencyMultiplier: 3, webhookUrl: "", telegramToken: "", telegramTokenSet: false, telegramChatId: "", quietHoursUtc: null, dailyReportHourUtc: 7 };
   let calendar: TradingCalendar = { holidays: ["2026-12-25", "2027-01-01"] };
+  // Economic calendar: a few releases around "now" (the import adds the rest of the week).
+  const hourMs = 3_600_000;
+  const dayStart = Date.now() - (Date.now() % 86_400_000);
+  const econRow = (id: string, offsetH: number, currency: string, title: string, impact: EconEvent["impact"], forecast: string | null, previous: string | null): EconEvent => {
+    const time = dayStart + offsetH * hourMs;
+    return { id, time, at: new Date(time).toISOString(), currency, title, impact, actual: null, forecast, previous };
+  };
+  let econ: EconEvent[] = [
+    econRow("ev1", -21.5, "EUR", "German Industrial Production m/m", "medium", "0.4%", "1.3%"),
+    econRow("ev2", 12.5, "USD", "CPI m/m", "high", "0.3%", "0.4%"),
+    econRow("ev3", 14, "USD", "Crude Oil Inventories", "low", "-1.2M", "2.1M"),
+    econRow("ev4", 36.5, "USD", "Non-Farm Employment Change", "high", "140K", "22K"),
+  ];
+  const econWeek = (): EconEvent[] => [
+    econRow("", 8, "GBP", "GDP m/m", "high", "0.2%", "-0.1%"),
+    econRow("", 12.5, "USD", "CPI m/m", "high", "0.3%", "0.4%"),
+    econRow("", 25, "JPY", "BOJ Policy Rate", "high", "0.50%", "0.50%"),
+    econRow("", 60, "EUR", "ECB President Speaks", "medium", null, null),
+  ];
+  const econKey = (e: { title: string; currency: string; time: number }) => `${e.title.toLowerCase()}|${e.currency}|${e.time}`;
+  const econBuild = (id: string, e: EconEventInput): EconEvent => {
+    const v = (x?: string | null) => (x?.trim() ? x.trim() : null);
+    const currency = e.currency.trim().toUpperCase();
+    const title = e.title.trim();
+    if (!/^[A-Z]{3}$/.test(currency)) throw new Error(`currency must be a 3-letter code, got "${e.currency}"`);
+    if (!title || title.length > 120) throw new Error("title must be 1..120 characters");
+    if (!(e.time > 0)) throw new Error("time is required");
+    return { id, time: e.time, at: new Date(e.time).toISOString(), currency, title, impact: e.impact, actual: v(e.actual), forecast: v(e.forecast), previous: v(e.previous) };
+  };
   const ruleVersions: RuleVersionMeta[] = [{ id: "rv12", at: new Date(Date.now() - 864e5).toISOString(), actor: "admin", count: 2 }];
   let sim = { rejectPct: 0, latencyMs: 0 };
   const funding: FundingRequest[] = [
@@ -380,6 +409,50 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     async getAlertSettings() { return delay(alertSettings); },
     async saveAlertSettings(s2, actor) { guard(actor, "settings.edit"); alertSettings = { ...s2, telegramToken: "", telegramTokenSet: !!s2.telegramToken || alertSettings.telegramTokenSet }; audit(actor, "settings.alerts", "alerts", "updated"); return delay(alertSettings); },
     async getCalendar() { return delay(calendar); },
+    async listEconEvents(from, to) {
+      const ms = (x: string | undefined, d: number) => (!x ? d : /^\d+$/.test(x) ? Number(x) : Date.parse(x));
+      const f = ms(from, Date.now() - 7 * 864e5), t = ms(to, Date.now() + 14 * 864e5);
+      const events = econ.filter((e) => e.time >= f && e.time < t).sort((a, b) => a.time - b.time);
+      return delay({ from: f, to: t, events });
+    },
+    async createEconEvent(e, actor) {
+      guard(actor, "settings.edit");
+      const ev = econBuild(`ev${++seq}`, e);
+      if (econ.some((x) => econKey(x) === econKey(ev))) throw new Error(`${ev.currency} ${ev.title} already exists`);
+      econ.push(ev);
+      audit(actor, "calendar.event", ev.id, `${ev.at} ${ev.currency} ${ev.title} (${ev.impact})`);
+      return delay(ev);
+    },
+    async updateEconEvent(id, e, actor) {
+      guard(actor, "settings.edit");
+      if (!econ.some((x) => x.id === id)) throw new Error(`unknown event ${id}`);
+      const ev = econBuild(id, e);
+      if (econ.some((x) => x.id !== id && econKey(x) === econKey(ev))) throw new Error(`${ev.currency} ${ev.title} already exists`);
+      econ = econ.map((x) => (x.id === id ? ev : x));
+      audit(actor, "calendar.event", id, `${ev.at} ${ev.currency} ${ev.title} (${ev.impact})`);
+      return delay(ev);
+    },
+    async deleteEconEvent(id, actor) {
+      guard(actor, "settings.edit");
+      const old = econ.find((x) => x.id === id);
+      if (!old) throw new Error(`unknown event ${id}`);
+      econ = econ.filter((x) => x.id !== id);
+      audit(actor, "calendar.delete", id, `${old.currency} ${old.title}`);
+      return delay({ ok: true });
+    },
+    async importEconWeek(actor) {
+      guard(actor, "settings.edit");
+      const have = new Map(econ.map((e) => [econKey(e), e]));
+      let added = 0, unchanged = 0;
+      const batch = ++seq;
+      econWeek().forEach((e, i) => {
+        if (have.has(econKey(e))) return void unchanged++;
+        econ.push({ ...e, id: `ev${batch}.${i}` });
+        added++;
+      });
+      if (added) audit(actor, "calendar.import", "forexfactory", `${added} added, 0 updated`);
+      return delay({ total: added + unchanged, added, updated: 0, unchanged, skipped: 0 });
+    },
     async saveCalendar(c, actor) { guard(actor, "settings.edit"); calendar = { holidays: [...c.holidays].sort() }; audit(actor, "settings.calendar", "calendar", `${calendar.holidays.length} holidays`); return delay(calendar); },
     async ruleVersions() { return delay(ruleVersions); },
     async restoreRuleVersion(id, actor) { guard(actor, "groups.edit"); const v = ruleVersions.find((x) => x.id === id); if (!v) throw new Error("not found"); ruleVersions.unshift({ id: `rv${Date.now()}`, at: new Date().toISOString(), actor: actor.name, count: mockRules.length }); audit(actor, "rules.update", "routing", `restored ${id}`); return delay(mockRules); },
