@@ -159,10 +159,18 @@ export interface Statement {
   equity: number;
   margin: number;
   trades: { at: string; symbol: string; side: 'buy' | 'sell'; lots: number; price: number; pnl: number; commission: number; swap: number; position: number }[];
-  totals: { trades: number; lots: number; pnl: number; commission: number; swap: number };
+  /** `commission` covers every deal in the period (both sides); `commissionOpen` is its opening-side part. */
+  totals: { trades: number; lots: number; pnl: number; commission: number; commissionOpen?: number; swap: number };
   positions: { id: number; symbol: string; side: 'buy' | 'sell'; lots: number; openPrice: number; openedAt: string; swap: number }[];
-  cash: { at: string; kind: 'deposit' | 'withdraw'; amount: number; reason: string }[];
+  /** `amount` is a magnitude; the kind gives the direction (see `cashSigned`). */
+  cash: { at: string; kind: StatementCashKind; amount: number; reason: string }[];
 }
+
+export type StatementCashKind = 'deposit' | 'withdraw' | 'copy_fee' | 'copy_fee_income' | 'nbp';
+
+/** Signed balance effect of a statement cash row (credit > 0). */
+export const cashSigned = (c: { kind: StatementCashKind; amount: number }) =>
+  c.kind === 'deposit' || c.kind === 'copy_fee_income' || c.kind === 'nbp' ? c.amount : -c.amount;
 
 export const clientApi = {
   ib: () => call<{ ibs: IbDashboard[] }>('/ib'),

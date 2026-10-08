@@ -217,6 +217,31 @@ pub struct Deal {
     pub swap_fee: i128,
 }
 
+/// Kind of an engine-made balance move that is neither a deal nor an admin
+/// cash operation.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum CashMoveKind {
+    /// Copy trading performance fee: debit on the follower.
+    CopyFee,
+    /// The same fee credited to the strategy provider.
+    CopyFeeIncome,
+    /// Negative balance protection: the broker covered a negative balance.
+    NegativeBalanceCompensation,
+}
+
+/// Balance move booked by the engine itself (statement history).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub struct CashMove {
+    pub account: AccountNo,
+    pub kind: CashMoveKind,
+    /// Signed amount in the account currency (negative = debit).
+    pub amount: Money,
+    /// The other account of a copy fee (provider / follower).
+    #[serde(default)]
+    pub counterparty: Option<AccountNo>,
+    pub ts: u64,
+}
+
 /// New parameters of a pending order (`Command::ModifyOrder`); every field
 /// is the full new value.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]

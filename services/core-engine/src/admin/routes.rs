@@ -2744,11 +2744,35 @@ async fn list_tenants(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
 async fn save_tenants(
     State(ctx): State<AdminCtx>,
     actor: Actor,
-    Json(ts): Json<Vec<super::store::TenantRec>>,
+    Json(mut ts): Json<Vec<super::store::TenantRec>>,
 ) -> ApiResult {
     need(&actor, "users.edit")?;
     if ts.len() > 50 {
         return Err(ApiError::bad("at most 50 tenants"));
+    }
+    // Hostnames key the public branding lookup: store them in the form the
+    // terminal compares (`location.hostname`) and give each one one owner.
+    let mut owner: BTreeMap<String, String> = BTreeMap::new();
+    for t in &mut ts {
+        let mut hosts: Vec<String> = Vec::new();
+        for h in &t.hostnames {
+            let Some(h) = norm_hostname(h).map_err(ApiError::bad)? else {
+                continue;
+            };
+            if let Some(o) = owner.get(&h).filter(|o| **o != t.id) {
+                return Err(ApiError::bad(format!(
+                    "hostname {h} is already used by tenant {o}"
+                )));
+            }
+            owner.insert(h.clone(), t.id.clone());
+            if !hosts.contains(&h) {
+                hosts.push(h);
+            }
+        }
+        if hosts.len() > 20 {
+            return Err(ApiError::bad("at most 20 hostnames per tenant"));
+        }
+        t.hostnames = hosts;
     }
     let mut ids = std::collections::BTreeSet::new();
     for t in &ts {
@@ -2789,6 +2813,41 @@ async fn save_tenants(
     drop(store);
     ctx.notify(&["listTenants", "listAudit"]);
     Ok(Json(json!(out)))
+}
+
+/// A tenant hostname as the browser reports it (`location.hostname`):
+/// trimmed and lower-cased; `Ok(None)` for a blank entry. No scheme, port,
+/// path or spaces; labels of `[a-z0-9-]`.
+fn norm_hostname(raw: &str) -> Result<Option<String>, String> {
+    let h = raw.trim().to_ascii_lowercase();
+    if h.is_empty() {
+        return Ok(None);
+    }
+    let bad = |why: &str| Err(format!("hostname {:?}: {why}", raw.trim()));
+    if h.contains("://") {
+        return bad("no scheme (https://), host name only");
+    }
+    if h.contains(':') {
+        return bad("no port, host name only");
+    }
+    if h.contains('/') || h.contains('?') || h.contains('#') {
+        return bad("no path, host name only");
+    }
+    if h.chars().any(char::is_whitespace) {
+        return bad("no spaces");
+    }
+    if h.len() > 253
+        || h.split('.').any(|l| {
+            l.is_empty()
+                || l.len() > 63
+                || l.starts_with('-')
+                || l.ends_with('-')
+                || !l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+    {
+        return bad("not a valid host name");
+    }
+    Ok(Some(h))
 }
 
 /// Logins the actor may see: `None` = everything (no tenant), else the
@@ -3341,11 +3400,16 @@ struct BrandQuery {
 /// branded too). Unknown hosts get the platform defaults.
 async fn client_brand(State(ctx): State<AdminCtx>, Query(q): Query<BrandQuery>) -> ApiResult {
     let host = q.host.trim().to_ascii_lowercase();
-    let st = ctx.view_state().await;
-    let t = st
-        .tenants
-        .values()
-        .find(|t| t.hostnames.iter().any(|h| h.eq_ignore_ascii_case(&host)));
+    // Anonymous route: read just the brand fields under a short store lock
+    // (no `view_state` clone of the whole admin state per request).
+    let st = &ctx.store.lock().await.state;
+    let t = (!host.is_empty() && host.len() <= 253)
+        .then(|| {
+            st.tenants
+                .values()
+                .find(|t| t.hostnames.iter().any(|h| h.eq_ignore_ascii_case(&host)))
+        })
+        .flatten();
     Ok(Json(match t {
         Some(t) => json!({
             "tenant": t.id, "name": t.name, "brandColor": t.brand_color,
@@ -3388,78 +3452,124 @@ async fn client_statement(
             .and_then(parse_iso_ns)
             .map(|t| t + DAY_NS)
             .unwrap_or(u64::MAX);
-    let st = ctx.view_state().await;
-    let cash: Vec<Value> = st
-        .ops
-        .values()
-        .filter(|o| {
-            o.account == login && o.status == OpStatus::Applied && o.kind != BalanceKind::Credit
-        })
-        .filter(|o| {
-            let t = o.decided_at.unwrap_or(o.requested_at);
-            t >= from && t < to
-        })
-        .map(|o| {
-            json!({
-                "at": views::iso(o.decided_at.unwrap_or(o.requested_at)),
-                "kind": if o.kind == BalanceKind::Deposit { "deposit" } else { "withdraw" },
-                "amount": o.amount,
-                "reason": o.reason,
+    // Only this account's applied cash ops, the name and the broker name,
+    // copied under a short lock (no `view_state` clone of the whole state).
+    let (ops, profile, broker) = {
+        let st = &ctx.store.lock().await.state;
+        let ops: Vec<(u64, Value)> = st
+            .ops
+            .values()
+            .filter(|o| {
+                o.account == login && o.status == OpStatus::Applied && o.kind != BalanceKind::Credit
             })
-        })
-        .collect();
-    let profile = st.profiles.get(&login).map(|p| p.name.clone());
-    let broker = st.settings.broker_name.clone();
+            .map(|o| (o.decided_at.unwrap_or(o.requested_at), o))
+            .filter(|(t, _)| *t >= from && *t < to)
+            .map(|(t, o)| {
+                let kind = if o.kind == BalanceKind::Deposit {
+                    "deposit"
+                } else {
+                    "withdraw"
+                };
+                (t, json!({ "at": views::iso(t), "kind": kind, "amount": o.amount, "reason": o.reason }))
+            })
+            .collect();
+        let profile = st.profiles.get(&login).map(|p| p.name.clone());
+        (ops, profile, st.settings.broker_name.clone())
+    };
+    // Full deal-history scan: on the read replica, never the writer thread.
     let body = ctx
-        .q(move |e| {
-            let a = e.account(login)?;
-            let g = e.group(&a.group)?;
-            let trades: Vec<Value> = e
-                .deals()
-                .iter()
-                .filter(|d| d.account == login && d.entry == oms::DealEntry::Out && d.ts >= from && d.ts < to)
-                .map(|d| {
-                    json!({
-                        "at": views::iso(d.ts), "symbol": d.symbol, "side": if d.side == oms::Side::Buy { "buy" } else { "sell" },
-                        "lots": views::qty_f(d.volume), "price": views::price_f(d.price),
-                        "pnl": d.pnl.minor as i64, "commission": d.commission.minor as i64, "swap": d.swap as i64,
-                        "position": d.position_id,
-                    })
-                })
-                .collect();
-            let sum = |k: &str| trades.iter().map(|t| t[k].as_i64().unwrap_or(0)).sum::<i64>();
-            let totals = json!({
-                "trades": trades.len(),
-                "lots": trades.iter().map(|t| t["lots"].as_f64().unwrap_or(0.0)).sum::<f64>(),
-                "pnl": sum("pnl"), "commission": sum("commission"), "swap": sum("swap"),
-            });
-            let positions: Vec<Value> = e
-                .positions_of(login)
-                .iter()
-                .map(|p| {
-                    json!({
-                        "id": p.id, "symbol": p.symbol, "side": if p.side == oms::Side::Buy { "buy" } else { "sell" },
-                        "lots": views::qty_f(p.volume), "openPrice": views::price_f(p.open_price),
-                        "openedAt": views::iso(p.opened_ts), "swap": p.swap_minor as i64,
-                    })
-                })
-                .collect();
-            let r = e.account_risk(login).ok()?;
-            Some(json!({
-                "account": login, "group": a.group, "currency": g.currency.to_string(),
-                "from": views::iso(from), "to": if to == u64::MAX { Value::Null } else { json!(views::iso(to - 1)) },
-                "generatedAt": views::iso(e.now_ns()),
-                "balance": r.balance.minor as i64, "equity": r.equity.minor as i64, "margin": r.margin.minor as i64,
-                "trades": trades, "totals": totals, "positions": positions,
-            }))
-        })
+        .qr(move |e| statement_body(e, login, from, to, ops))
         .await?
         .ok_or_else(|| ApiError::not_found("unknown account"))?;
     let mut body = body;
-    body["cash"] = json!(cash);
     body["name"] = json!(profile.unwrap_or(client.name));
     body["broker"] = json!(broker);
     Ok(Json(body))
+}
+
+/// Statement of `login` for `[from, to)`: closed trades (out deals), totals
+/// (commission of every deal in the period, opening side included), cash
+/// rows (admin `ops` plus the engine's own balance moves: copy fees, negative
+/// balance compensation), open positions and the current balance.
+fn statement_body(
+    e: &Engine,
+    login: u64,
+    from: u64,
+    to: u64,
+    mut cash: Vec<(u64, Value)>,
+) -> Option<Value> {
+    let a = e.account(login)?;
+    let g = e.group(&a.group)?;
+    let deals: Vec<&oms::Deal> = e
+        .deals()
+        .iter()
+        .filter(|d| d.account == login && d.ts >= from && d.ts < to)
+        .collect();
+    let trades: Vec<Value> = deals
+        .iter()
+        .filter(|d| d.entry == oms::DealEntry::Out)
+        .map(|d| {
+            json!({
+                "at": views::iso(d.ts), "symbol": d.symbol, "side": if d.side == oms::Side::Buy { "buy" } else { "sell" },
+                "lots": views::qty_f(d.volume), "price": views::price_f(d.price),
+                "pnl": d.pnl.minor as i64, "commission": d.commission.minor as i64, "swap": d.swap as i64,
+                "position": d.position_id,
+            })
+        })
+        .collect();
+    let sum = |k: &str| {
+        trades
+            .iter()
+            .map(|t| t[k].as_i64().unwrap_or(0))
+            .sum::<i64>()
+    };
+    // Commission is charged per side; the opening side sits on the in deal.
+    let commission: i64 = deals.iter().map(|d| d.commission.minor as i64).sum();
+    let commission_open: i64 = deals
+        .iter()
+        .filter(|d| d.entry == oms::DealEntry::In)
+        .map(|d| d.commission.minor as i64)
+        .sum();
+    let totals = json!({
+        "trades": trades.len(),
+        "lots": trades.iter().map(|t| t["lots"].as_f64().unwrap_or(0.0)).sum::<f64>(),
+        "pnl": sum("pnl"), "commission": commission, "commissionOpen": commission_open, "swap": sum("swap"),
+    });
+    cash.extend(
+        e.cash_moves()
+            .iter()
+            .filter(|m| m.account == login && m.ts >= from && m.ts < to)
+            .map(|m| {
+                let kind = match m.kind {
+                    oms::CashMoveKind::CopyFee => "copy_fee",
+                    oms::CashMoveKind::CopyFeeIncome => "copy_fee_income",
+                    oms::CashMoveKind::NegativeBalanceCompensation => "nbp",
+                };
+                // amount stays a magnitude; the kind carries the direction
+                (m.ts, json!({ "at": views::iso(m.ts), "kind": kind, "amount": (m.amount.minor as i64).abs(), "reason": "" }))
+            }),
+    );
+    cash.sort_by_key(|(t, _)| *t);
+    let cash: Vec<Value> = cash.into_iter().map(|(_, v)| v).collect();
+    let positions: Vec<Value> = e
+        .positions_of(login)
+        .iter()
+        .map(|p| {
+            json!({
+                "id": p.id, "symbol": p.symbol, "side": if p.side == oms::Side::Buy { "buy" } else { "sell" },
+                "lots": views::qty_f(p.volume), "openPrice": views::price_f(p.open_price),
+                "openedAt": views::iso(p.opened_ts), "swap": p.swap_minor as i64,
+            })
+        })
+        .collect();
+    let r = e.account_risk(login).ok()?;
+    Some(json!({
+        "account": login, "group": a.group, "currency": g.currency.to_string(),
+        "from": views::iso(from), "to": if to == u64::MAX { Value::Null } else { json!(views::iso(to - 1)) },
+        "generatedAt": views::iso(e.now_ns()),
+        "balance": r.balance.minor as i64, "equity": r.equity.minor as i64, "margin": r.margin.minor as i64,
+        "trades": trades, "totals": totals, "positions": positions, "cash": cash,
+    }))
 }
 
 #[cfg(test)]
@@ -3475,5 +3585,194 @@ mod ib_month_tests {
         assert_eq!(views::iso(last), "2026-09-01T00:00:00.000Z");
         let jan = (days_from_civil(2027, 1, 15) as u64) * DAY_NS;
         assert_eq!(views::iso(month_start(jan).1), "2026-12-01T00:00:00.000Z");
+    }
+}
+
+#[cfg(test)]
+mod client_tests {
+    use super::*;
+    use money::{px, qty};
+    use oms::{Envelope, NewOrder, NullRouter};
+    use risk::{GroupCommission, GroupConfig, Routing, Side, SymbolSpec};
+
+    #[test]
+    fn hostnames_are_normalized_and_checked() {
+        assert_eq!(
+            norm_hostname("  Trade.ACME.com ").unwrap().as_deref(),
+            Some("trade.acme.com")
+        );
+        assert_eq!(norm_hostname("   ").unwrap(), None);
+        assert_eq!(
+            norm_hostname("localhost").unwrap().as_deref(),
+            Some("localhost")
+        );
+        for bad in [
+            "https://trade.acme.com",
+            "trade.acme.com:443",
+            "trade.acme.com/",
+            "trade.acme.com/login",
+            "trade acme.com",
+            "trade..acme.com",
+            "-trade.acme.com",
+            "trade_acme.com",
+        ] {
+            assert!(norm_hostname(bad).is_err(), "{bad} accepted");
+        }
+    }
+
+    struct E {
+        e: Engine,
+        seq: u64,
+        ts: u64,
+    }
+
+    impl E {
+        fn cmd(&mut self, cmd: Command) -> Vec<Event> {
+            self.seq += 1;
+            self.ts += 1_000;
+            self.e.apply(&Envelope {
+                seq: self.seq,
+                ts: self.ts,
+                cmd,
+            })
+        }
+    }
+
+    /// Group "c": B-book, 3.50 per lot per side.
+    fn engine() -> E {
+        let mut h = E {
+            e: Engine::new(Default::default(), Box::new(NullRouter)),
+            seq: 0,
+            ts: 1_000,
+        };
+        h.cmd(Command::AddSymbol(SymbolSpec::fx(
+            "EURUSD",
+            Currency::EUR,
+            Currency::USD,
+            5,
+        )));
+        let mut g = GroupConfig::retail("c", Currency::USD, Routing::BBook);
+        g.esma = None;
+        g.leverage = 100;
+        g.commission = Some(GroupCommission::PerLot { minor: 350 });
+        h.cmd(Command::SetGroup(g));
+        h.cmd(Command::Quote {
+            symbol: "EURUSD".into(),
+            bid: px("1.10000"),
+            ask: px("1.10010"),
+        });
+        h.cmd(Command::OpenAccount {
+            account: 5,
+            group: "c".into(),
+        });
+        h.cmd(Command::Deposit {
+            account: 5,
+            amount: Money::parse("10000", Currency::USD).unwrap(),
+            key: "d5".into(),
+        });
+        h
+    }
+
+    #[test]
+    fn statement_commission_includes_the_opening_side() {
+        let mut h = engine();
+        // round trip: open and close 1 lot -> 3.50 on each side
+        h.cmd(Command::PlaceOrder(NewOrder::market(
+            5,
+            "o1",
+            "EURUSD",
+            Side::Buy,
+            qty("1"),
+        )));
+        let pid = h.e.positions_of(5)[0].id;
+        h.cmd(Command::ClosePosition {
+            account: 5,
+            position_id: pid,
+            volume: None,
+            client_order_id: "c1".into(),
+        });
+        // still open at the end of the period: its opening commission counts
+        h.cmd(Command::PlaceOrder(NewOrder::market(
+            5,
+            "o2",
+            "EURUSD",
+            Side::Sell,
+            qty("1"),
+        )));
+        let s = statement_body(&h.e, 5, 0, u64::MAX, vec![]).unwrap();
+        assert_eq!(s["totals"]["trades"], 1);
+        assert_eq!(s["trades"][0]["commission"], -350);
+        assert_eq!(s["totals"]["commission"], -1050);
+        assert_eq!(s["totals"]["commissionOpen"], -700);
+        assert_eq!(s["positions"].as_array().unwrap().len(), 1);
+        // the deposit is an engine command here, not an admin op: no cash rows
+        assert_eq!(s["cash"], json!([]));
+        // a period that ends before the trades shows none of them
+        let s = statement_body(&h.e, 5, 0, 1, vec![]).unwrap();
+        assert_eq!(s["totals"]["commission"], 0);
+        assert!(statement_body(&h.e, 99, 0, u64::MAX, vec![]).is_none());
+    }
+
+    #[test]
+    fn statement_lists_admin_ops_and_engine_cash_moves_in_time_order() {
+        let mut h = engine();
+        h.cmd(Command::OpenAccount {
+            account: 6,
+            group: "c".into(),
+        });
+        h.cmd(Command::Deposit {
+            account: 6,
+            amount: Money::parse("10000", Currency::USD).unwrap(),
+            key: "d6".into(),
+        });
+        // follower 5 copies provider 6, 20 % performance fee
+        h.cmd(Command::CopySubscribe {
+            follower: 5,
+            provider: 6,
+            ratio_bps: 10_000,
+            equity_stop_pct: 0,
+            perf_fee_bps: 2_000,
+        });
+        h.cmd(Command::PlaceOrder(NewOrder::market(
+            6,
+            "p1",
+            "EURUSD",
+            Side::Buy,
+            qty("1"),
+        )));
+        h.cmd(Command::Quote {
+            symbol: "EURUSD".into(),
+            bid: px("1.10500"),
+            ask: px("1.10510"),
+        });
+        let pid = h.e.positions_of(6)[0].id;
+        h.cmd(Command::ClosePosition {
+            account: 6,
+            position_id: pid,
+            volume: None,
+            client_order_id: "c1".into(),
+        });
+        h.cmd(Command::CopySettle { provider: 6 });
+        let fee =
+            h.e.cash_moves()
+                .iter()
+                .find(|m| m.account == 5)
+                .expect("copy fee booked")
+                .amount
+                .minor as i64;
+        assert!(fee < 0);
+        let op = (
+            1,
+            json!({ "at": views::iso(1), "kind": "deposit", "amount": 100, "reason": "" }),
+        );
+        let s = statement_body(&h.e, 5, 0, u64::MAX, vec![op]).unwrap();
+        let cash = s["cash"].as_array().unwrap();
+        assert_eq!(cash.len(), 2);
+        assert_eq!(cash[0]["kind"], "deposit");
+        assert_eq!(cash[1]["kind"], "copy_fee");
+        assert_eq!(cash[1]["amount"], -fee);
+        let p = statement_body(&h.e, 6, 0, u64::MAX, vec![]).unwrap();
+        assert_eq!(p["cash"][0]["kind"], "copy_fee_income");
+        assert_eq!(p["cash"][0]["amount"], -fee);
     }
 }

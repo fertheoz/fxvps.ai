@@ -103,6 +103,10 @@ struct State {
     /// Fills waiting for their markout horizons (oldest first, bounded).
     #[serde(default)]
     markouts: std::collections::VecDeque<MarkoutSample>,
+    /// Balance moves the engine books on its own (copy fees, negative
+    /// balance compensation), oldest first: statement history.
+    #[serde(default)]
+    cash_moves: Vec<CashMove>,
 }
 
 /// A client fill whose later mid moves feed `FlowStats` markout.
@@ -320,6 +324,11 @@ impl Engine {
     /// All deals, oldest first.
     pub fn deals(&self) -> &[Deal] {
         &self.st.deals
+    }
+    /// Engine-booked balance moves (copy fees, negative balance
+    /// compensation), oldest first.
+    pub fn cash_moves(&self) -> &[CashMove] {
+        &self.st.cash_moves
     }
     pub fn order_by_client_id(&self, account: AccountNo, clid: &str) -> Option<&Order> {
         self.st
@@ -1919,6 +1928,13 @@ impl Engine {
                 )
                 .is_ok()
             {
+                self.st.cash_moves.push(CashMove {
+                    account,
+                    kind: CashMoveKind::NegativeBalanceCompensation,
+                    amount: c,
+                    counterparty: None,
+                    ts: self.st.now,
+                });
                 self.events
                     .push(Event::NegativeBalanceCompensated { account, amount: c });
             }
@@ -2693,6 +2709,23 @@ impl Engine {
             )?;
             self.balance_event(s.follower);
             self.balance_event(s.provider);
+            let ts = self.st.now;
+            self.st.cash_moves.extend([
+                CashMove {
+                    account: s.follower,
+                    kind: CashMoveKind::CopyFee,
+                    amount: Money::new(-fee, ccy),
+                    counterparty: Some(s.provider),
+                    ts,
+                },
+                CashMove {
+                    account: s.provider,
+                    kind: CashMoveKind::CopyFeeIncome,
+                    amount: m,
+                    counterparty: Some(s.follower),
+                    ts,
+                },
+            ]);
             self.events.push(Event::CopyFee {
                 follower: s.follower,
                 provider: s.provider,
