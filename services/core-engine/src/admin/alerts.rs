@@ -65,8 +65,14 @@ pub struct AlertBook(Mutex<Book>);
 impl AlertBook {
     /// Applies the current condition set; returns the newly raised alerts.
     pub fn apply(&self, now_ns: u64, conditions: Vec<Condition>) -> Vec<Alert> {
+        self.apply_full(now_ns, conditions).0
+    }
+
+    /// [`Self::apply`] that also returns the alerts this pass resolved.
+    pub fn apply_full(&self, now_ns: u64, conditions: Vec<Condition>) -> (Vec<Alert>, Vec<Alert>) {
         let mut b = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut raised = Vec::new();
+        let mut resolved = Vec::new();
         let keys: std::collections::BTreeSet<String> =
             conditions.iter().map(Condition::key).collect();
         // resolve what disappeared
@@ -79,6 +85,7 @@ impl AlertBook {
         for k in gone {
             if let Some(mut a) = b.active.remove(&k) {
                 a.resolved_at = Some(now_ns);
+                resolved.push(a.clone());
                 b.history.push(a);
             }
         }
@@ -112,7 +119,7 @@ impl AlertBook {
             let cut = b.history.len() - 200;
             b.history.drain(..cut);
         }
-        raised
+        (raised, resolved)
     }
 
     pub fn ack(&self, id: &str) -> bool {
@@ -426,6 +433,14 @@ pub fn infra_conditions(ctx: &AdminCtx, now_ms: u64, grace_ms: u64) -> Vec<Condi
 
 /// Sends `text` to the configured channels (settings first, env as fallback).
 /// `critical` bypasses quiet hours.
+fn human_secs(s: u64) -> String {
+    match s {
+        0..=89 => format!("{s} s"),
+        90..=5399 => format!("{} min", s / 60),
+        _ => format!("{} h {} min", s / 3600, (s % 3600) / 60),
+    }
+}
+
 async fn notify_channels(
     ctx: &AdminCtx,
     settings: &super::store::AlertSettings,
@@ -543,7 +558,7 @@ pub fn spawn(ctx: AdminCtx) {
                 break;
             };
             conditions.extend(infra_conditions(&ctx, now_ns / 1_000_000, grace_ms));
-            let raised = ctx.alerts.apply(now_ns, conditions);
+            let (raised, resolved) = ctx.alerts.apply_full(now_ns, conditions);
             for a in &raised {
                 tracing::warn!(kind = %a.kind, target = %a.target, detail = %a.detail, "alert raised");
                 let cmd = AdminCmd::AlertRaised {
@@ -559,24 +574,30 @@ pub fn spawn(ctx: AdminCtx) {
                 {
                     tracing::warn!(error = %e, "alert not audited");
                 }
-                let body = json!({
-                    "kind": a.kind, "severity": a.severity, "title": a.title,
-                    "detail": a.detail, "target": a.target, "at": views::iso(a.raised_at),
-                });
-                let text = format!(
-                    "⚠ {} [{:?}]\n{}\n{}",
-                    a.title, a.severity, a.target, a.detail
-                );
-                notify_channels(
-                    &ctx,
-                    &settings,
-                    a.severity == Severity::Critical,
-                    &text,
-                    &body,
-                )
-                .await;
             }
-            if !raised.is_empty() {
+            // one message per pass with everything raised and everything
+            // resolved, instead of one message per session
+            if !raised.is_empty() || !resolved.is_empty() {
+                let mut lines: Vec<String> = raised
+                    .iter()
+                    .map(|a| format!("⚠ {} [{:?}]\n{}", a.title, a.severity, a.detail))
+                    .collect();
+                lines.extend(resolved.iter().map(|a| {
+                    let secs = now_ns.saturating_sub(a.raised_at) / 1_000_000_000;
+                    format!("✅ {} resolved after {}", a.title, human_secs(secs))
+                }));
+                let body = json!({
+                    "raised": raised.iter().map(|a| json!({
+                        "kind": a.kind, "severity": a.severity, "title": a.title,
+                        "detail": a.detail, "target": a.target, "at": views::iso(a.raised_at),
+                    })).collect::<Vec<_>>(),
+                    "resolved": resolved.iter().map(|a| json!({
+                        "kind": a.kind, "title": a.title, "target": a.target,
+                        "at": views::iso(a.raised_at), "resolvedAt": views::iso(now_ns),
+                    })).collect::<Vec<_>>(),
+                });
+                let critical = raised.iter().any(|a| a.severity == Severity::Critical);
+                notify_channels(&ctx, &settings, critical, &lines.join("\n\n"), &body).await;
                 ctx.notify(&["listAlerts", "listAudit"]);
             }
             // daily operations report
