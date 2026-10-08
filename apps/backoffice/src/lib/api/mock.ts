@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, Statement, SymbolExposure, IbPayoutPreview } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, ReconciliationRow, Statement, SymbolExposure, IbPayoutPreview } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
@@ -701,6 +701,21 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
         };
       });
       return delay({ rows, bySymbol });
+    },
+    async reconciliation(): Promise<ReconciliationRow[]> {
+      // Demo data: A-book closes hedged 1:1 at the LP one pip inside the client price; markup = the pip × lots × 100000 / 100.
+      return delay(s.trades.slice(0, 100).map((t) => {
+        const a = t.book === "A";
+        const pip = t.symbol.endsWith("JPY") ? 0.01 : 0.0001;
+        const markup = a ? Math.round(t.lots * 2 * pip * 100000 * 100) / 100 : -t.pnl;
+        const closeLp = a ? Number((t.closePrice + (t.side === "buy" ? -pip : pip)).toFixed(5)) : null;
+        const openLp = a ? Number((t.openPrice + (t.side === "buy" ? -pip : pip)).toFixed(5)) : null;
+        return {
+          id: t.id, at: t.closedAt, login: t.login, position: t.id, symbol: t.symbol, side: t.side, lots: t.lots, book: t.book, reason: "Client",
+          openClient: t.openPrice, openLp, closeClient: t.closePrice, closeLp, clientPnl: t.pnl, lpPnl: a ? t.pnl + markup : 0,
+          markup, commission: -t.commission, swapFee: 0, broker: markup - t.commission, ok: true,
+        };
+      }));
     },
     async revenue(): Promise<RevenueReport> {
       const dayAgo = Date.now() - 86_400_000;

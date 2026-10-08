@@ -157,6 +157,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/lp/aggregation", get(lp_agg_get).put(lp_agg_put))
         .route("/v1/reports/lp", get(lp_report))
         .route("/v1/reports/trades", get(trades))
+        .route("/v1/reports/reconciliation", get(reconciliation))
         .route("/v1/reports/statements", get(statements))
         .route("/v1/reports/lp-executions", get(lp_executions))
         .route("/v1/reports/execution", get(execution))
@@ -3475,6 +3476,15 @@ async fn trades(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     let __allowed = tenant_logins(&ctx, &actor).await?;
     Ok(Json(tenant_filter(
         ctx.qr(views::trades).await?,
+        &__allowed,
+    )))
+}
+
+async fn reconciliation(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "reports.view")?;
+    let __allowed = tenant_logins(&ctx, &actor).await?;
+    Ok(Json(tenant_filter(
+        ctx.qr(views::reconciliation).await?,
         &__allowed,
     )))
 }

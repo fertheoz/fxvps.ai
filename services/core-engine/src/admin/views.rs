@@ -797,6 +797,83 @@ pub fn presets() -> Value {
 
 /// Closed-trade history: one row per closing (`Out`) deal, newest first. The
 /// open price is the volume-weighted price of the position's `In` deals.
+/// Reconciliation: the last 100 closed deals, client side and LP side next to
+/// each other with the broker's legs in their own columns. For an A-book deal
+/// `client P&L + markup = LP P&L` (the invariant the row's `ok` checks); the
+/// commission of the closed part (its share of the opening deals' commission
+/// plus the closing deal's) and the swap-free fee are the broker's too.
+pub fn reconciliation(e: &Engine) -> Value {
+    let deals = e.deals();
+    let mut rows: Vec<Value> = deals
+        .iter()
+        .rev()
+        .filter(|d| d.entry == oms::DealEntry::Out)
+        .take(100)
+        .map(|d| {
+            let (mut vol, mut notional, mut lp_notional, mut in_comm) = (0f64, 0f64, 0f64, 0i128);
+            let mut lp_open = true;
+            for i in deals
+                .iter()
+                .filter(|i| i.position_id == d.position_id && i.entry == oms::DealEntry::In)
+            {
+                let v = qty_f(i.volume);
+                vol += v;
+                notional += v * price_f(i.price);
+                match i.lp_price {
+                    Some(p) => lp_notional += v * price_f(p),
+                    None => lp_open = false,
+                }
+                in_comm += i.commission.minor;
+            }
+            let open = if vol > 0.0 {
+                notional / vol
+            } else {
+                price_f(d.price)
+            };
+            let open_lp = (lp_open && vol > 0.0).then(|| lp_notional / vol);
+            let a_book = d.lp_price.is_some();
+            // the closed part's share of the opening commission + the closing deal's
+            let share = if vol > 0.0 {
+                (in_comm as f64 * qty_f(d.volume) / vol).round() as i128
+            } else {
+                0
+            };
+            let commission = -(share + d.commission.minor);
+            let swap_fee = -d.swap_fee;
+            let broker = d.broker_pnl + commission + swap_fee;
+            let ok = if a_book {
+                d.pnl.minor + d.broker_pnl == d.lp_pnl
+            } else {
+                d.lp_pnl == 0 && d.broker_pnl == -d.pnl.minor
+            };
+            json!({
+                "id": d.id.to_string(),
+                "at": iso(d.ts),
+                "login": d.account,
+                "position": d.position_id.to_string(),
+                "symbol": d.symbol,
+                "side": side_str(d.side.opposite()),
+                "lots": qty_f(d.volume),
+                "book": if a_book { "A" } else { "B" },
+                "reason": format!("{:?}", d.reason),
+                "openClient": open,
+                "openLp": open_lp,
+                "closeClient": price_f(d.price),
+                "closeLp": d.lp_price.map(price_f),
+                "clientPnl": minor(d.pnl.minor),
+                "lpPnl": minor(d.lp_pnl),
+                "markup": minor(d.broker_pnl),
+                "commission": minor(commission),
+                "swapFee": minor(swap_fee),
+                "broker": minor(broker),
+                "ok": ok,
+            })
+        })
+        .collect();
+    rows.shrink_to_fit();
+    Value::Array(rows)
+}
+
 pub fn trades(e: &Engine) -> Value {
     let deals = e.deals();
     let mut rows: Vec<Value> = deals
