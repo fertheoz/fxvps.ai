@@ -94,7 +94,7 @@ export function CopyTab({ acc }: { acc: ClientAccount }) {
               </div>
             )}
             <div className="flex flex-wrap gap-x-4 text-[11px] text-muted num">
-              <span>30d: <span className={s.pnl30d < 0 ? 'text-down' : 'text-up'}>{s.return30dPct == null ? '—' : `${s.return30dPct.toFixed(1)}%`}</span></span>
+              <span>30d: <span className={(s.return30dPct ?? 0) < 0 ? 'text-down' : 'text-up'}>{s.return30dPct == null ? '—' : `${s.return30dPct.toFixed(1)}%`}</span></span>
               <span data-testid={`copy-maxdd-${s.account}`}>{t('copy.maxDrawdown')}: {s.maxDrawdownPct == null ? '—' : <span className={s.maxDrawdownPct > 0 ? 'text-down' : ''}>{`${s.maxDrawdownPct.toFixed(1)}%`}</span>}</span>
               <span>{t('copy.deals')}: {s.deals30d}</span>
               <span>{t('copy.winRate')}: {s.winRate == null ? '—' : `${Math.round(s.winRate * 100)}%`}</span>

@@ -146,10 +146,19 @@ async fn strategy_stats(ctx: &AdminCtx, recs: Vec<StrategyRec>) -> Result<Vec<Va
                     .iter()
                     .filter(|d| d.account == r.account && d.entry == DealEntry::Out && d.ts >= since)
                     .collect();
-                let results: Vec<(u64, i128)> = closes
+                // commission is charged per side: the opening side sits on the
+                // in deal and counts at its own time
+                let mut results: Vec<(u64, i128)> = closes
                     .iter()
                     .map(|d| (d.ts, d.pnl.minor + d.commission.minor + d.swap))
                     .collect();
+                results.extend(
+                    e.deals()
+                        .iter()
+                        .filter(|d| d.account == r.account && d.entry == DealEntry::In && d.ts >= since)
+                        .map(|d| (d.ts, d.commission.minor)),
+                );
+                results.sort_by_key(|r| r.0);
                 let pnl: i128 = results.iter().map(|r| r.1).sum();
                 let wins = closes.iter().filter(|d| d.pnl.minor > 0).count();
                 let followers = subs.iter().filter(|s| s.provider == r.account && s.active).count();
@@ -381,6 +390,8 @@ pub async fn client_list(State(ctx): State<AdminCtx>, client: ClientActor) -> Ap
             o.remove("equity");
             o.remove("maxDrawdown");
             o.remove("equityCurve");
+            // with the absolute result the balance is pnl / return: hide it too
+            o.remove("pnl30d");
         }
     }
     let logins: Vec<u64> = client.logins.iter().map(|(_, l)| *l).collect();

@@ -353,14 +353,26 @@ async fn orders_positions_and_idempotency_against_the_core() {
     assert_eq!(again["order"]["status"], "new");
     assert_eq!(again["order"]["type"], "limit");
     // the same id for a different order is a conflict, not a second order
-    let mut other = limit.clone();
-    other["side"] = json!("sell");
-    let (s, v) = api.post("/orders", &t, other).await;
-    assert_eq!(
-        (s, code(&v)),
-        (StatusCode::CONFLICT, "client_order_id_conflict"),
-        "{v}"
-    );
+    // (side, qty, type and price all count: a reused id with other terms is
+    // never a silent "replayed")
+    for (k, v) in [
+        ("side", json!("sell")),
+        ("qty", json!("500000")),
+        ("type", json!("market")),
+        ("limit_price", json!(off(bid, "-0.0300"))),
+    ] {
+        let mut other = limit.clone();
+        other[k] = v;
+        if k == "type" {
+            other.as_object_mut().unwrap().remove("limit_price");
+        }
+        let (s, v) = api.post("/orders", &t, other).await;
+        assert_eq!(
+            (s, code(&v)),
+            (StatusCode::CONFLICT, "client_order_id_conflict"),
+            "{k}: {v}"
+        );
+    }
     // the Idempotency-Key header works the same way
     let mut keyed = limit.clone();
     keyed.as_object_mut().unwrap().remove("client_order_id");

@@ -120,7 +120,8 @@ export interface CopyStrategy {
   description: string;
   perfFeeBps: number;
   public: boolean;
-  pnl30d: number;
+  /** Absolute 30-day result; not sent to clients (would reveal the provider's balance). */
+  pnl30d?: number;
   return30dPct: number | null;
   deals30d: number;
   winRate: number | null;

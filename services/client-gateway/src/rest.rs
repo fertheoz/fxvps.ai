@@ -901,6 +901,15 @@ async fn quote(
         .iter()
         .filter_map(|a| hub.account_group(a))
         .collect();
+    // accounts in several groups see different mark-ups: the caller must say
+    // which account the price is for, or get a price it cannot trade on
+    if groups.len() > 1 {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "account_required",
+            "the token holds accounts in several groups: pass ?account=",
+        ));
+    }
     let q = hub
         .last_quotes(std::slice::from_ref(&symbol), &groups)
         .pop()
@@ -1066,6 +1075,12 @@ async fn place_order(
         max_deviation_points: b.max_deviation_points.filter(|d| *d != 0),
     };
     let symbol = order.symbol.clone();
+    let (qty, limit, stop, kind) = (
+        order.qty,
+        order.limit_price,
+        order.stop_price,
+        order.ord_type,
+    );
     match hub.place_order(order).await {
         Ok(order_id) => ok(
             StatusCode::CREATED,
@@ -1078,8 +1093,17 @@ async fn place_order(
         ),
         Err(e) if e.is_duplicate_order() => {
             let side = client_proto::Side::from_domain(side) as i32;
+            // a replay only when it is the SAME order; a reused id with other
+            // terms is a conflict, not a silent success
+            let kind = crate::hub::order_type(kind) as i32;
             replay(&hub, &account, &clid, |o| {
-                o.symbol == symbol && o.side == side && o.close_position_id.is_empty()
+                o.symbol == symbol
+                    && o.side == side
+                    && o.close_position_id.is_empty()
+                    && o.order_type == kind
+                    && o.qty.and_then(Decimal::to_fixed) == Some(qty)
+                    && o.limit_price.and_then(Decimal::to_fixed) == limit
+                    && o.stop_price.and_then(Decimal::to_fixed) == stop
             })
             .await
         }
