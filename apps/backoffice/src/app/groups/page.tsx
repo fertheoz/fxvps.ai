@@ -141,7 +141,7 @@ function LeverageWindowsField({ value, onChange }: { value: { fromMs: number; to
 type MarkupWindow = { weekdays: number[]; fromMin: number; toMin: number; addPoints: number };
 const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-const minutes = (s: string) => { const [h, m] = s.split(":").map(Number); return Number.isFinite(h) ? Math.min(1440, h * 60 + (Number.isFinite(m) ? m : 0)) : 0; };
+const minutes = (s: string) => { const [h = 0, m = 0] = s.split(":").map(Number); return Number.isFinite(h) ? Math.min(1440, h * 60 + (Number.isFinite(m) ? m : 0)) : 0; };
 
 /** Scheduled markup windows: extra points inside a daily UTC window on the chosen weekdays. */
 function MarkupWindowsField({ value, onChange }: { value: MarkupWindow[]; onChange: (v: MarkupWindow[]) => void }) {
