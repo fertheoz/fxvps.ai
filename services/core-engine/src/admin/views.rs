@@ -15,6 +15,13 @@ use std::collections::BTreeMap;
 pub fn price_f(p: Price) -> f64 {
     p.raw() as f64 / 1e8
 }
+/// A computed price (VWAP, averages) shown at the symbol's digits: the
+/// industry convention, and it hides float noise like 1.3261799999999997.
+pub fn round_px(e: &Engine, symbol: &str, x: f64) -> f64 {
+    let d = e.symbol_spec(symbol).map_or(5, |s| s.digits);
+    let f = 10f64.powi(d as i32);
+    (x * f).round() / f
+}
 pub fn qty_f(q: Qty) -> f64 {
     q.raw() as f64 / 1e8
 }
@@ -834,11 +841,11 @@ pub fn reconciliation(e: &Engine, from: u64, to: u64, limit: usize) -> Value {
                 in_comm += i.commission.minor;
             }
             let open = if vol > 0.0 {
-                notional / vol
+                round_px(e, &d.symbol, notional / vol)
             } else {
                 price_f(d.price)
             };
-            let open_lp = (lp_open && vol > 0.0).then(|| lp_notional / vol);
+            let open_lp = (lp_open && vol > 0.0).then(|| round_px(e, &d.symbol, lp_notional / vol));
             let a_book = d.lp_price.is_some();
             // the closed part's share of the opening commission + the closing deal's
             let share = if vol > 0.0 {
@@ -971,7 +978,7 @@ pub fn trades(e: &Engine, from: u64, to: u64, limit: usize) -> Value {
             }
             let order = e.order(d.order_id);
             let close = price_f(d.price);
-            let open = if vol > 0.0 { notional / vol } else { close };
+            let open = if vol > 0.0 { round_px(e, &d.symbol, notional / vol) } else { close };
             let routing = e
                 .account(d.account)
                 .and_then(|a| e.group(&a.group))
@@ -1398,7 +1405,7 @@ pub fn lp_executions(e: &Engine, from: u64, to: u64, limit: usize) -> Value {
                 "side": side_str(l.side),
                 "lots": qty_f(l.volume),
                 "filledLots": lots,
-                "avgPrice": if lots > 0.0 { notional / lots } else { 0.0 },
+                "avgPrice": if lots > 0.0 { round_px(e, &l.symbol, notional / lots) } else { 0.0 },
                 "status": status,
                 "reason": l.reject_reason,
                 "createdAt": iso(l.created_ts),
