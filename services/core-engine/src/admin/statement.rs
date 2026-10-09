@@ -972,6 +972,7 @@ mod tests {
             .unwrap();
         let (mailer, stub) = Mailer::stub("statements@fxvps.test").unwrap();
         let ctx = AdminCtx {
+            fix_log_dir: std::path::PathBuf::from("/nonexistent"),
             engine: h.clone(),
             store: std::sync::Arc::new(tokio::sync::Mutex::new(store)),
             auth: std::sync::Arc::new(super::super::auth::Authenticator::hs256(b"statement-test")),

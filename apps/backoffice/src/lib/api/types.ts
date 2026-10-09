@@ -266,9 +266,24 @@ export interface LpExecution {
   detail?: LpOrderDetail;
 }
 
+/** One raw FIX frame of the trading session, SOH shown as `|`. */
+export interface FixMessage {
+  at: string;
+  lp: string;
+  dir: "in" | "out";
+  msgType: string;
+  clOrdId: string | null;
+  origClOrdId: string | null;
+  orderId: string | null;
+  execId: string | null;
+  raw: string;
+}
+
 /** One LP order as the bridge saw it: what went out and every report back. */
 export interface LpOrderDetail {
   lpOrderId?: string;
+  /** ClOrdID of the first revision at the LP (`LP-<id>`). */
+  clOrdId?: string;
   lp?: string | null;
   lots?: number;
   side?: "buy" | "sell";
@@ -703,6 +718,8 @@ export interface AdminApi {
   applyPreset(presetId: string, groupId: string, actor: Actor): Promise<Group>;
 
   listFixSessions(): Promise<FixSession[]>;
+  /** Raw FIX frames of one LP order (ClOrdID), oldest first; read-only. */
+  fixMessages(clOrdId: string): Promise<{ clOrdId: string; messages: FixMessage[] }>;
   /** MT5 plugin bridge institutions (+ live sessions). */
   listInstitutions(): Promise<InstitutionList>;
   /** Denetçi: LP/core reconciliation status, settings and corrections. */

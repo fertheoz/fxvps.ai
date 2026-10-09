@@ -15,7 +15,7 @@ pub mod tls;
 
 pub use session::{Action, Role, Session, SessionConfig, State};
 pub use store::{FileStore, MemoryStore, MessageStore};
-pub use transport::{run_session, SessionCommand, SessionEvent};
+pub use transport::{run_session, run_session_with_tap, SessionCommand, SessionEvent, WireFrame};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {

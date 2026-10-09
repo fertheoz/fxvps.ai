@@ -5,6 +5,7 @@
 
 pub mod audit;
 pub mod config;
+pub mod fixlog;
 pub mod gateway;
 pub mod managed;
 pub mod normalize;

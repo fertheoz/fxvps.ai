@@ -131,6 +131,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/alerts/{id}/ack", post(ack_alert))
         .route("/v1/reports/clients", get(client_flow))
         .route("/v1/lp/sessions", get(lp_sessions))
+        .route("/v1/lp/fix-messages", get(fix_messages))
         .route("/v1/lp/config", get(lp_config_get).put(lp_config_put))
         .route(
             "/v1/bridge/institutions",
@@ -3406,6 +3407,39 @@ async fn margin_calls(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
 async fn presets(actor: Actor) -> ApiResult {
     need(&actor, "risk.view")?;
     Ok(Json(views::presets()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FixMessagesQuery {
+    cl_ord_id: String,
+}
+
+/// The raw FIX frames of one LP order (every ClOrdID revision, cancels and
+/// the reports under its OrderID), oldest first, from the gateway's wire log.
+/// Read-only: the treasurer copies them into their own LP correspondence.
+async fn fix_messages(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<FixMessagesQuery>,
+) -> ApiResult {
+    need(&actor, "lp.view")?;
+    let id = q.cl_ord_id.trim().to_string();
+    if id.is_empty()
+        || id.len() > 40
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(ApiError::bad("clOrdId: 1-40 characters [A-Za-z0-9-_]"));
+    }
+    let dir = ctx.fix_log_dir.clone();
+    let rows = tokio::task::spawn_blocking(move || views::fix_messages(&dir, &id))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(Json(
+        json!({ "clOrdId": q.cl_ord_id.trim(), "messages": rows }),
+    ))
 }
 
 async fn lp_sessions(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

@@ -33,19 +33,42 @@ pub enum SessionEvent {
 /// Timer granularity for heartbeat/timeout checks.
 const TICK: Duration = Duration::from_millis(100);
 
+/// One raw frame as it went over the wire (a wire tap for audit logs).
+#[derive(Debug, Clone)]
+pub struct WireFrame {
+    pub outbound: bool,
+    pub bytes: Vec<u8>,
+}
+
 /// Runs the session until disconnect. Returns the session (and its store) so the
 /// caller can reconnect while keeping sequence numbers.
 pub async fn run_session<T, S>(
-    mut io: T,
-    mut session: Session<S>,
-    mut commands: mpsc::Receiver<SessionCommand>,
+    io: T,
+    session: Session<S>,
+    commands: mpsc::Receiver<SessionCommand>,
     events: mpsc::Sender<SessionEvent>,
 ) -> Session<S>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: MessageStore,
 {
-    let reason = drive(&mut io, &mut session, &mut commands, &events).await;
+    run_session_with_tap(io, session, commands, events, None).await
+}
+
+/// [`run_session`] that also hands every raw frame (both directions) to
+/// `tap`; a full tap drops frames rather than slowing the session.
+pub async fn run_session_with_tap<T, S>(
+    mut io: T,
+    mut session: Session<S>,
+    mut commands: mpsc::Receiver<SessionCommand>,
+    events: mpsc::Sender<SessionEvent>,
+    tap: Option<mpsc::Sender<WireFrame>>,
+) -> Session<S>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+    S: MessageStore,
+{
+    let reason = drive(&mut io, &mut session, &mut commands, &events, tap.as_ref()).await;
     let reason = match reason {
         Ok(r) => r,
         Err(e) => e.to_string(),
@@ -61,6 +84,7 @@ async fn drive<T, S>(
     session: &mut Session<S>,
     commands: &mut mpsc::Receiver<SessionCommand>,
     events: &mpsc::Sender<SessionEvent>,
+    tap: Option<&mpsc::Sender<WireFrame>>,
 ) -> Result<String, SessionError>
 where
     T: AsyncRead + AsyncWrite + Unpin,
@@ -73,7 +97,7 @@ where
     let mut commands_open = true;
 
     let actions = session.on_connect(Instant::now().into_std())?;
-    if let Some(r) = apply(io, events, actions).await? {
+    if let Some(r) = apply(io, events, actions, tap).await? {
         return Ok(r);
     }
 
@@ -91,6 +115,9 @@ where
                     match frame_len(&buf[consumed..]) {
                         Ok(Some(len)) => {
                             let frame = &buf[consumed..consumed + len];
+                            if let Some(t) = tap {
+                                let _ = t.try_send(WireFrame { outbound: false, bytes: frame.to_vec() });
+                            }
                             actions.extend(session.on_frame(frame, Instant::now().into_std())?);
                             consumed += len;
                         }
@@ -123,7 +150,7 @@ where
             }
             _ = ticker.tick() => session.on_timer(Instant::now().into_std())?,
         };
-        if let Some(r) = apply(io, events, actions).await? {
+        if let Some(r) = apply(io, events, actions, tap).await? {
             return Ok(r);
         }
     }
@@ -133,12 +160,19 @@ async fn apply<T: AsyncWrite + Unpin>(
     io: &mut T,
     events: &mpsc::Sender<SessionEvent>,
     actions: Vec<Action>,
+    tap: Option<&mpsc::Sender<WireFrame>>,
 ) -> Result<Option<String>, SessionError> {
     let mut wrote = false;
     for a in actions {
         match a {
             Action::Send(bytes) => {
                 io.write_all(&bytes).await?;
+                if let Some(t) = tap {
+                    let _ = t.try_send(WireFrame {
+                        outbound: true,
+                        bytes: bytes.clone(),
+                    });
+                }
                 wrote = true;
             }
             Action::Deliver(m) => {

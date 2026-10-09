@@ -10,7 +10,7 @@ use risk::{
     SymbolSpec,
 };
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub fn price_f(p: Price) -> f64 {
     p.raw() as f64 / 1e8
@@ -1210,6 +1210,7 @@ fn lp_order_detail(e: &Engine, l: &oms::LpOrder, attempt: (usize, usize)) -> Val
         "market IOC"
     };
     json!({
+        "clOrdId": format!("LP-{}", l.id),
         "kind": kind,
         "limit": l.limit.map(price_f),
         "stop": l.stop.map(price_f),
@@ -2016,4 +2017,99 @@ pub fn rules_dry_run(e: &Engine, admin: &AdminState, since_ns: u64) -> Value {
         "unmatched": { "orders": unmatched.0, "lots": unmatched.1 },
         "samples": samples,
     })
+}
+
+/// Wire-log lines of one LP order: ClOrdID `id` and its revisions (`id-r1`,
+/// `id-c2`…), plus every report under the OrderIDs those lines carry.
+/// Newest 60 day files are scanned; at most 400 lines, oldest first.
+pub fn fix_messages(dir: &std::path::Path, id: &str) -> Vec<Value> {
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files.reverse();
+    let ours = |v: Option<&str>| v.is_some_and(|c| c == id || c.starts_with(&format!("{id}-")));
+    let mut lines: Vec<Value> = Vec::new();
+    let mut order_ids: BTreeSet<String> = BTreeSet::new();
+    for f in files.iter().take(60) {
+        let Ok(text) = std::fs::read_to_string(f) else {
+            continue;
+        };
+        for l in text.lines() {
+            let Ok(v) = serde_json::from_str::<Value>(l) else {
+                continue;
+            };
+            if ours(v["cl_ord_id"].as_str()) || ours(v["orig_cl_ord_id"].as_str()) {
+                if let Some(o) = v["order_id"].as_str().filter(|o| !o.is_empty()) {
+                    order_ids.insert(o.to_string());
+                }
+                lines.push(v);
+            }
+        }
+    }
+    // second pass: reports that only carry the LP's OrderID (e.g. unsolicited cancels)
+    if !order_ids.is_empty() {
+        for f in files.iter().take(60) {
+            let Ok(text) = std::fs::read_to_string(f) else {
+                continue;
+            };
+            for l in text.lines() {
+                let Ok(v) = serde_json::from_str::<Value>(l) else {
+                    continue;
+                };
+                let by_order = v["order_id"]
+                    .as_str()
+                    .is_some_and(|o| order_ids.contains(o));
+                let already = ours(v["cl_ord_id"].as_str()) || ours(v["orig_cl_ord_id"].as_str());
+                if by_order && !already {
+                    lines.push(v);
+                }
+            }
+        }
+    }
+    lines.sort_by_key(|v| v["ts_ms"].as_u64().unwrap_or(0));
+    lines.truncate(400);
+    lines
+        .into_iter()
+        .map(|v| {
+            json!({
+                "at": iso(v["ts_ms"].as_u64().unwrap_or(0) * 1_000_000),
+                "lp": v["lp"], "dir": v["dir"], "msgType": v["msg_type"],
+                "clOrdId": v["cl_ord_id"], "origClOrdId": v["orig_cl_ord_id"],
+                "orderId": v["order_id"], "execId": v["exec_id"], "raw": v["raw"],
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod fix_messages_tests {
+    use super::fix_messages;
+
+    #[test]
+    fn finds_revisions_and_reports_by_order_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let day = dir.path().join("2026-10-08.jsonl");
+        std::fs::write(&day, concat!(
+            r#"{"ts_ms":3,"lp":"LMAX","dir":"in","msg_type":"8","cl_ord_id":"LP-170-r1","orig_cl_ord_id":"LP-170","order_id":"O1","exec_id":"E2","raw":"8=FIX.4.4|35=8|"}"#, "\n",
+            r#"{"ts_ms":1,"lp":"LMAX","dir":"out","msg_type":"D","cl_ord_id":"LP-170","orig_cl_ord_id":null,"order_id":null,"exec_id":null,"raw":"8=FIX.4.4|35=D|"}"#, "\n",
+            r#"{"ts_ms":2,"lp":"LMAX","dir":"out","msg_type":"D","cl_ord_id":"LP-1700","orig_cl_ord_id":null,"order_id":null,"exec_id":null,"raw":"8=FIX.4.4|35=D|"}"#, "\n",
+            r#"{"ts_ms":4,"lp":"LMAX","dir":"in","msg_type":"8","cl_ord_id":null,"orig_cl_ord_id":null,"order_id":"O1","exec_id":"E3","raw":"8=FIX.4.4|35=8|37=O1|"}"#, "\n",
+        )).unwrap();
+        let rows = fix_messages(dir.path(), "LP-170");
+        let ids: Vec<String> = rows
+            .iter()
+            .map(|r| r["clOrdId"].as_str().unwrap_or("-").to_string())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["LP-170", "LP-170-r1", "-"],
+            "oldest first, no LP-1700, order-id report included"
+        );
+        assert!(fix_messages(dir.path(), "LP-999").is_empty());
+    }
 }

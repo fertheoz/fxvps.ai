@@ -718,6 +718,11 @@ async fn trade_task(
     let mut orders_open = true;
     let mut brake = Brake::new(cfg.max_orders_per_sec);
     let mut retry = Retry::default();
+    // every order-related frame of this session, both directions, kept on disk
+    let tap = cfg
+        .store_dir
+        .as_ref()
+        .map(|d| crate::fixlog::spawn(d.join("fixlog"), cfg.lp.clone()));
     while let Some(s) = session.take() {
         let io = match connect(&cfg.trade.addr, tls.as_ref(), &mut sd).await {
             None => break,
@@ -738,7 +743,13 @@ async fn trade_task(
         };
         let (cmd, cmd_rx) = mpsc::channel(1024);
         let (ev_tx, mut ev) = mpsc::channel(4096);
-        let handle = tokio::spawn(run_session(io, s, cmd_rx, ev_tx));
+        let handle = tokio::spawn(fix_session::run_session_with_tap(
+            io,
+            s,
+            cmd_rx,
+            ev_tx,
+            tap.clone(),
+        ));
         let mut up = false;
         let mut stop = false;
         let mut stats = Stats::default();

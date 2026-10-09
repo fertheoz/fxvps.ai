@@ -60,6 +60,8 @@ pub struct AdminConfig {
     pub mailer: Option<Arc<statement::Mailer>>,
     /// hazine.io payment links for USDT deposits (`HAZINE_PAYLINK_KEY`); `None`: manual.
     pub hazine: Option<usdt_watch::Hazine>,
+    /// fix-gateway wire log (`<store_dir>/fixlog`, `CORE_FIX_LOG_DIR`), read-only.
+    pub fix_log_dir: PathBuf,
 }
 
 /// fix-gateway admin endpoint (`FIX_ADMIN_TOKEN` on the gateway side).
@@ -85,12 +87,16 @@ impl AdminConfig {
             names: None,
             mailer: None,
             hazine: None,
+            fix_log_dir: PathBuf::from("/var/lib/fix-gateway/fixlog"),
         }
     }
 
     /// Reads `CORE_CORS_ORIGINS` (comma separated). `*` (any origin) is only
     /// accepted together with dev auth (G15); otherwise startup fails.
     pub fn with_env(mut self, dev_auth: bool) -> Result<AdminConfig, String> {
+        if let Ok(v) = std::env::var("CORE_FIX_LOG_DIR") {
+            self.fix_log_dir = PathBuf::from(v);
+        }
         if let Ok(v) = std::env::var("CORE_CORS_ORIGINS") {
             let list: Vec<String> = v
                 .split(',')
@@ -114,6 +120,7 @@ impl AdminConfig {
 
 #[derive(Clone)]
 pub struct AdminCtx {
+    pub fix_log_dir: PathBuf,
     pub engine: EngineHandle,
     pub store: Arc<Mutex<AdminStore>>,
     pub auth: Arc<Authenticator>,
@@ -363,6 +370,7 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
     }
     let (live, _) = broadcast::channel(256);
     let ctx = AdminCtx {
+        fix_log_dir: cfg.fix_log_dir.clone(),
         engine: engine.clone(),
         store: Arc::new(Mutex::new(store)),
         auth: Arc::new(auth),
