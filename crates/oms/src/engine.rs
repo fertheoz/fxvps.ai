@@ -156,6 +156,19 @@ impl EngineSnapshot {
     }
 }
 
+/// Many accounts sending the same symbol and side within a short window
+/// (parça 11): a signal for the dealer and the rule engine.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HerdSignal {
+    pub symbol: String,
+    pub side: Side,
+    pub accounts: u32,
+    pub lots: Qty,
+    pub first_ts: u64,
+    pub last_ts: u64,
+}
+
 pub struct Engine {
     st: State,
     ledger: Ledger,
@@ -455,6 +468,21 @@ impl Engine {
             .filter(|d| d.account == account && d.entry == DealEntry::In)
             .map(|d| (d.ts, d.volume.raw() / 1_000_000))
             .collect();
+        // herd: other accounts' client orders, same symbol and side, last 10 min
+        let since10 = self.st.now.saturating_sub(600_000_000_000);
+        let same_side: Vec<(u64, u64)> = self
+            .st
+            .orders
+            .values()
+            .filter(|o| {
+                o.created_ts >= since10
+                    && o.origin == OrderOrigin::Client
+                    && o.req.account != account
+                    && o.req.symbol == symbol
+                    && o.req.side == req.side
+            })
+            .map(|o| (o.created_ts, o.req.account))
+            .collect();
         let ctx = risk::RuleCtx {
             group,
             account,
@@ -473,6 +501,7 @@ impl Engine {
             platform: req.platform,
             ip: req.ip.as_deref(),
             news_times: &self.st.news_times,
+            same_side: &same_side,
             now_ns: self.st.now,
             spread_points: self.st.quotes.get(symbol).and_then(|q| {
                 let point = self.st.symbols.get(symbol)?.point().raw().max(1);
@@ -480,6 +509,42 @@ impl Engine {
             }),
         };
         self.st.rules.iter().find(|r| r.matches(&ctx))
+    }
+
+    /// Herd signals of the last `window_ns`: symbol + side sent by at least
+    /// two distinct accounts, most accounts first (parça 11).
+    #[allow(clippy::type_complexity)]
+    pub fn herd_signals(&self, window_ns: u64) -> Vec<HerdSignal> {
+        let from = self.st.now.saturating_sub(window_ns);
+        let mut m: BTreeMap<(String, Side), (BTreeSet<AccountNo>, i64, u64, u64)> = BTreeMap::new();
+        for o in self.st.orders.values() {
+            if o.created_ts < from || o.origin != OrderOrigin::Client {
+                continue;
+            }
+            let e = m
+                .entry((o.req.symbol.clone(), o.req.side))
+                .or_insert_with(|| (BTreeSet::new(), 0, u64::MAX, 0));
+            e.0.insert(o.req.account);
+            e.1 += o.req.volume.raw();
+            e.2 = e.2.min(o.created_ts);
+            e.3 = e.3.max(o.created_ts);
+        }
+        let mut out: Vec<HerdSignal> = m
+            .into_iter()
+            .filter(|(_, (accounts, ..))| accounts.len() >= 2)
+            .map(
+                |((symbol, side), (accounts, lots, first, last))| HerdSignal {
+                    symbol,
+                    side,
+                    accounts: accounts.len() as u32,
+                    lots: Qty::from_raw(lots),
+                    first_ts: first,
+                    last_ts: last,
+                },
+            )
+            .collect();
+        out.sort_by(|a, b| b.accounts.cmp(&a.accounts).then(a.symbol.cmp(&b.symbol)));
+        out
     }
 
     fn client_quote(&self, g: &GroupConfig, symbol: &str) -> Result<Quote, RiskError> {

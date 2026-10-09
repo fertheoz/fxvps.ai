@@ -134,7 +134,7 @@ function AlertsCard() {
         <NumField label={t("settings.lpDownGrace")} value={cfg.lpDownGraceS} onChange={(v) => set("lpDownGraceS", Math.max(0, Math.round(v)))} step={10} disabled={!editable} />
         <NumField label={t("settings.lpSlow")} value={cfg.lpSlowMs ?? 0} onChange={(v) => set("lpSlowMs", Math.min(60000, Math.max(0, Math.round(v))))} step={100} disabled={!editable} />
         <p className="text-xs font-medium sm:col-span-2">{t("settings.behavior")}</p>
-        {(["windowH", "scalperHoldS", "scalperMinCloses", "scalperPct", "burstPerMin", "churnConnects", "authFails", "ipCount"] as const).map((k) => (
+        {(["windowH", "scalperHoldS", "scalperMinCloses", "scalperPct", "burstPerMin", "churnConnects", "authFails", "ipCount", "herdAccounts", "herdWindowS"] as const).map((k) => (
           <NumField key={k} label={t(`settings.behavior.${k}` as MessageKey)} value={(cfg.behavior ?? DEFAULT_BEHAVIOR)[k]} onChange={(v) => set("behavior", { ...(cfg.behavior ?? DEFAULT_BEHAVIOR), [k]: Math.max(k === "windowH" ? 1 : 0, Math.min(k === "windowH" ? 168 : k === "scalperPct" ? 100 : 1_000_000, Math.round(v))) })} step={1} disabled={!editable} />
         ))}
         <NumField label={t("settings.fillRateMinOrders")} value={cfg.fillRateMinOrders} onChange={(v) => set("fillRateMinOrders", Math.max(1, Math.round(v)))} step={1} disabled={!editable} />

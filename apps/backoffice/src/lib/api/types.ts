@@ -209,6 +209,9 @@ export interface RoutingRule {
   minWindowLots: number | null;
   /** Scalper profile; null = any. */
   scalper: boolean | null;
+  /** Herd: at least this many accounts sent the same symbol and side within herdWindowS (default 60). */
+  herdAccounts: number | null;
+  herdWindowS: number | null;
   /** Within ± minutes of a high-impact calendar event; null = any. */
   newsWindowMin: number | null;
   /** Daily window in minutes of the UTC day [from, to), wraps past midnight; null = any. */
@@ -485,8 +488,11 @@ export interface BehaviorThresholds {
   churnConnects: number;
   authFails: number;
   ipCount: number;
+  herdAccounts: number;
+  herdWindowS: number;
 }
-export const DEFAULT_BEHAVIOR: BehaviorThresholds = { windowH: 24, scalperHoldS: 60, scalperMinCloses: 10, scalperPct: 50, burstPerMin: 30, churnConnects: 30, authFails: 10, ipCount: 5 };
+export const DEFAULT_BEHAVIOR: BehaviorThresholds = { windowH: 24, scalperHoldS: 60, scalperMinCloses: 10, scalperPct: 50, burstPerMin: 30, churnConnects: 30, authFails: 10, ipCount: 5, herdAccounts: 5, herdWindowS: 60 };
+export interface HerdSignal { symbol: string; side: "Buy" | "Sell"; accounts: number; lots: number; firstTs: number; lastTs: number }
 
 export const RULE_METRICS = ["exposure_net_lots", "unhedged_b_lots", "b_book_net_lots", "var_total_usd", "var_symbol_usd", "currency_exposure_usd", "margin_calls", "stop_outs", "orders_per_min", "open_positions", "lp_latency_ms"] as const;
 export type RuleMetric = (typeof RULE_METRICS)[number];
@@ -517,7 +523,7 @@ export interface AccountActivity {
   score: number;
 }
 export interface IpActivity { ip: string; authFails: number; keyFails: number; connRejects: number; accounts: number[]; flags: BehaviorFlag[] }
-export interface ActivityReport { windowH: number; accounts: AccountActivity[]; ips: IpActivity[] }
+export interface ActivityReport { windowH: number; accounts: AccountActivity[]; ips: IpActivity[]; herd?: HerdSignal[] }
 export type ActivityKind = "connect" | "disconnect" | "auth_fail" | "key_fail" | "conn_reject";
 export interface ActivityEvent { tsMs: number; kind: ActivityKind; account: number | null; names: string[]; platform: string; ip: string | null; detail: string }
 

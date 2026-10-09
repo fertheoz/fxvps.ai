@@ -662,6 +662,8 @@ fn routing_rules_decide_book_and_override_markup() {
         minutes_utc: None,
         weekdays: vec![],
         min_spread_points: None,
+        herd_accounts: None,
+        herd_window_s: None,
     };
     // EURUSD -> A-book with a 20-point markup; everything else stays in the B-book group.
     h.cmd(Command::SetRules(vec![rule(
@@ -1349,6 +1351,8 @@ fn toxicity_feeds_rules_and_profile() {
         minutes_utc: None,
         weekdays: vec![],
         min_spread_points: None,
+        herd_accounts: None,
+        herd_window_s: None,
     }]));
     // five scalps: open and close within the same second, all winners
     for i in 0..5 {
@@ -2872,6 +2876,8 @@ fn abook_rule(id: &str) -> risk::RoutingRule {
         minutes_utc: None,
         weekdays: vec![],
         min_spread_points: None,
+        herd_accounts: None,
+        herd_window_s: None,
     }
 }
 
@@ -3356,5 +3362,34 @@ fn manual_hedge_sends_a_broker_order_and_books_it_pending() {
         side: Side::Buy,
         volume: qty("0"),
     });
+    assert!(h.router.take().is_empty());
+}
+
+#[test]
+fn herd_rule_matches_once_enough_accounts_send_the_same_side() {
+    let mut h = H::new(EngineConfig::default());
+    for a in 1..=4 {
+        h.account(a, "b", "100000");
+    }
+    let mut r = abook_rule("herd");
+    r.herd_accounts = Some(3);
+    r.herd_window_s = Some(60);
+    h.cmd(Command::SetRules(vec![r]));
+    h.market(1, "h1", Side::Buy, "1");
+    h.market(2, "h2", Side::Buy, "1");
+    assert!(h.router.take().is_empty(), "two accounts: no herd yet");
+    h.market(3, "h3", Side::Sell, "1");
+    assert!(h.router.take().is_empty(), "other side does not count");
+    let id = h.market(3, "h4", Side::Buy, "1");
+    assert_eq!(h.router.take().len(), 1, "third buyer: herd, A-book");
+    assert_eq!(h.e.order(id).unwrap().rule.as_deref(), Some("herd"));
+    let sig = h.e.herd_signals(60_000_000_000);
+    assert_eq!(
+        (sig[0].symbol.as_str(), sig[0].side, sig[0].accounts),
+        ("EURUSD", Side::Buy, 3)
+    );
+    // the window slides: 2 minutes later a lone buyer is no herd
+    h.ts += 120_000_000_000;
+    h.market(4, "h5", Side::Buy, "1");
     assert!(h.router.take().is_empty());
 }
