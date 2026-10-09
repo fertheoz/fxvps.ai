@@ -634,6 +634,15 @@ impl Engine {
                 t.dedup();
                 self.st.news_times = t;
             }
+            Command::ManualHedge {
+                symbol,
+                side,
+                volume,
+            } => {
+                if self.symbol_spec(symbol).is_some() && volume.raw() > 0 {
+                    self.send_hedge(symbol.clone(), *side, *volume);
+                }
+            }
             Command::SetHedge(policy) => {
                 self.st.hedge = policy.clone();
                 // every symbol with a hedge or a B-book position is re-judged
@@ -1530,8 +1539,37 @@ impl Engine {
     /// flight, in 0.01-lot steps.
     fn rebalance_hedge(&mut self, symbol: &str) {
         let h = self.st.hedge.clone();
-        if !h.enabled || h.mode != HedgeMode::HedgeExcess {
+        let Some(target) = self.hedge_target(&h, symbol) else {
             return;
+        };
+        let cur = self.hedge_net(symbol) + self.hedge_pending(symbol);
+        const STEP: i64 = 1_000_000; // 0.01 lot
+        let mut delta = (target - cur) / STEP * STEP;
+        if delta == 0 {
+            return;
+        }
+        // time-limited hedging: one slice per interval
+        if let Some(slice) = h.slice_lots.map(|q| q.raw()) {
+            let last = self.st.hedge_last_ts.get(symbol).copied().unwrap_or(0);
+            let wait = u64::from(h.slice_interval_s) * 1_000_000_000;
+            if last > 0 && self.st.now.saturating_sub(last) < wait {
+                return;
+            }
+            delta = delta.clamp(-slice, slice) / STEP * STEP;
+            if delta == 0 {
+                return;
+            }
+        }
+        let side = if delta > 0 { Side::Buy } else { Side::Sell };
+        self.send_hedge(symbol.to_string(), side, Qty::from_raw(delta.abs()));
+    }
+
+    /// Broker hedge target of `symbol` under policy `h` (signed raw lots,
+    /// orders in flight counted as done); `None` when `h` does not hedge.
+    /// Shared by the rebalancer and the console's change preview.
+    pub fn hedge_target(&self, h: &HedgePolicy, symbol: &str) -> Option<i64> {
+        if !h.enabled || h.mode != HedgeMode::HedgeExcess {
+            return None;
         }
         let net = self.b_book_net(symbol);
         let cur = self.hedge_net(symbol) + self.hedge_pending(symbol);
@@ -1555,25 +1593,7 @@ impl Engine {
                 }
             }
         }
-        const STEP: i64 = 1_000_000; // 0.01 lot
-        let mut delta = (target - cur) / STEP * STEP;
-        if delta == 0 {
-            return;
-        }
-        // time-limited hedging: one slice per interval
-        if let Some(slice) = h.slice_lots.map(|q| q.raw()) {
-            let last = self.st.hedge_last_ts.get(symbol).copied().unwrap_or(0);
-            let wait = u64::from(h.slice_interval_s) * 1_000_000_000;
-            if last > 0 && self.st.now.saturating_sub(last) < wait {
-                return;
-            }
-            delta = delta.clamp(-slice, slice) / STEP * STEP;
-            if delta == 0 {
-                return;
-            }
-        }
-        let side = if delta > 0 { Side::Buy } else { Side::Sell };
-        self.send_hedge(symbol.to_string(), side, Qty::from_raw(delta.abs()));
+        Some(target)
     }
 
     fn send_hedge(&mut self, symbol: String, side: Side, volume: Qty) {

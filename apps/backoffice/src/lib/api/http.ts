@@ -52,6 +52,17 @@ export interface HttpApiOptions {
  * is derived server-side from the bearer token; the `actor` argument is only
  * sent as an `x-actor-hint` header for logs.
  */
+/** Hedge policy as the engine reads it: lots as raw 1e8 fixed-point (Qty). */
+function wireHedge(p: Parameters<AdminApi["saveHedgePolicy"]>[0]) {
+  return {
+    ...p,
+    defaultSymbolLimit: p.defaultSymbolLimit == null ? null : Math.round(p.defaultSymbolLimit * 1e8),
+    totalLimit: p.totalLimit == null ? null : Math.round(p.totalLimit * 1e8),
+    accountLimit: p.accountLimit == null ? null : Math.round(p.accountLimit * 1e8),
+    symbolLimits: Object.fromEntries(Object.entries(p.symbolLimits).map(([k, v]: [string, number]) => [k, Math.round(v * 1e8)])),
+  };
+}
+
 export function createHttpApi(baseUrl: string, getToken: () => string | null | Promise<string | null>, opts: HttpApiOptions = {}): AdminApi {
   const base = baseUrl.replace(/\/+$/, "");
   const doFetch = opts.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -98,13 +109,12 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     ackAlert: (id, actor) => call("POST", `/v1/alerts/${enc(id)}/ack`, {}, actor),
     hedgePolicy: () => call("GET", "/v1/risk/hedge"),
     // lots travel as raw 1e8 fixed-point on the wire (engine Qty)
-    saveHedgePolicy: (p, actor) => call("PUT", "/v1/risk/hedge", {
-      ...p,
-      defaultSymbolLimit: p.defaultSymbolLimit == null ? null : Math.round(p.defaultSymbolLimit * 1e8),
-      totalLimit: p.totalLimit == null ? null : Math.round(p.totalLimit * 1e8),
-      accountLimit: p.accountLimit == null ? null : Math.round(p.accountLimit * 1e8),
-      symbolLimits: Object.fromEntries(Object.entries(p.symbolLimits).map(([k, v]) => [k, Math.round(v * 1e8)])),
-    }, actor),
+    saveHedgePolicy: (p, actor) => call("PUT", "/v1/risk/hedge", wireHedge(p), actor),
+    manualHedge: (req, actor) => call("POST", "/v1/risk/hedge/manual", req, actor),
+    previewHedgePolicy: (p, actor) => call("POST", "/v1/risk/hedge/preview", wireHedge(p), actor),
+    alertRules: () => call("GET", "/v1/alerts/rules"),
+    saveAlertRules: (rules, actor) => call("PUT", "/v1/alerts/rules", rules, actor),
+    previewAlertRules: (rules, actor) => call("POST", "/v1/alerts/rules/preview", rules, actor),
     clientFlow: () => call("GET", "/v1/reports/clients"),
     listClients: (q) => call("GET", `/v1/accounts${q?.search ? `?search=${enc(q.search)}` : ""}`),
     openAccount: (req, actor) => call("POST", "/v1/accounts", req, actor),

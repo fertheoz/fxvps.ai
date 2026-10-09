@@ -555,6 +555,13 @@ pub enum Command {
     },
     /// B-book exposure limits / auto-hedge policy (stage 7).
     SetHedge(HedgePolicy),
+    /// A dealer sends a broker hedge order to the LP by hand (console Risk →
+    /// "send to LP"); booked on the hedge book like an automatic slice.
+    ManualHedge {
+        symbol: String,
+        side: Side,
+        volume: Qty,
+    },
     /// Rollover schedule (stage 8).
     SetSwapConfig(SwapConfig),
     /// Holiday calendar (stage 13).

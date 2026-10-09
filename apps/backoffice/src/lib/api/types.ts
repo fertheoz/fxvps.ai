@@ -488,6 +488,15 @@ export interface BehaviorThresholds {
 }
 export const DEFAULT_BEHAVIOR: BehaviorThresholds = { windowH: 24, scalperHoldS: 60, scalperMinCloses: 10, scalperPct: 50, burstPerMin: 30, churnConnects: 30, authFails: 10, ipCount: 5 };
 
+export const RULE_METRICS = ["exposure_net_lots", "unhedged_b_lots", "b_book_net_lots", "var_total_usd", "var_symbol_usd", "currency_exposure_usd", "margin_calls", "stop_outs", "orders_per_min", "open_positions", "lp_latency_ms"] as const;
+export type RuleMetric = (typeof RULE_METRICS)[number];
+export interface AlertRule { id: string; enabled: boolean; metric: RuleMetric; target: string; op: "gt" | "lt"; threshold: number; severity: AlertSeverity; title: string }
+export interface RuleEval { id: string; value: number | null; fired: boolean }
+export interface RuleFiring { id: string; severity: AlertSeverity; title: string; detail: string }
+export interface AlertRulesView { rules: AlertRule[]; metrics: string[]; evals: RuleEval[]; firing: RuleFiring[] }
+export interface HedgePreviewRow { symbol: string; bBookNetLots: number; hedgeLots: number; targetLots: number; deltaLots: number; firstOrder: { side: "buy" | "sell"; lots: number } | null; limitLots: number | null; varUsd: number | null }
+export interface HedgePreview { symbols: HedgePreviewRow[]; varTotalUsd: number; varLimitUsd: number | null; varOver: boolean; currency: { currency: string; usd: number; limitUsd: number | null; over: boolean }[] }
+
 export type BehaviorFlag = "scalper" | "burst" | "churn" | "brute_force" | "ip_hopping" | "flood";
 export interface AccountActivity {
   login: number;
@@ -779,6 +788,12 @@ export interface AdminApi {
   ackAlert(id: string, actor: Actor): Promise<AlertList>;
   hedgePolicy(): Promise<HedgePolicy>;
   saveHedgePolicy(p: HedgePolicy, actor: Actor): Promise<HedgePolicy>;
+  /** Parça 10b: manual hedge, policy change preview, dealer-defined alert rules. */
+  manualHedge(req: { symbol: string; side: "buy" | "sell"; lots: number }, actor: Actor): Promise<{ ok: boolean }>;
+  previewHedgePolicy(p: HedgePolicy, actor: Actor): Promise<HedgePreview>;
+  alertRules(): Promise<AlertRulesView>;
+  saveAlertRules(rules: AlertRule[], actor: Actor): Promise<AlertRulesView>;
+  previewAlertRules(rules: AlertRule[], actor: Actor): Promise<Pick<AlertRulesView, "evals" | "firing">>;
   /** Per-client flow profile with the toxicity score the rules use. */
   clientFlow(): Promise<ClientFlowRow[]>;
 

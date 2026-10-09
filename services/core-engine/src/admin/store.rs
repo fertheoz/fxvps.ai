@@ -249,6 +249,40 @@ impl PlatformUser {
     }
 }
 
+/// A dealer-defined alert (parça 10b, Settings → Alert rules): `metric`
+/// read for `target` (symbol / currency / LP, "" = whole book) compared with
+/// `threshold`; evaluated every 15 s next to the built-in conditions.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlertRule {
+    pub id: String,
+    #[serde(default = "d_rule_on")]
+    pub enabled: bool,
+    /// One of [`super::alerts::RULE_METRICS`].
+    pub metric: String,
+    #[serde(default)]
+    pub target: String,
+    /// `gt` | `lt`
+    #[serde(default = "d_rule_gt")]
+    pub op: String,
+    pub threshold: f64,
+    /// `info` | `warning` | `critical`
+    #[serde(default = "d_rule_warning")]
+    pub severity: String,
+    #[serde(default)]
+    pub title: String,
+}
+
+fn d_rule_on() -> bool {
+    true
+}
+fn d_rule_gt() -> String {
+    "gt".into()
+}
+fn d_rule_warning() -> String {
+    "warning".into()
+}
+
 /// Alert thresholds, channels and the daily operations report (stage 13).
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -649,6 +683,14 @@ pub enum AdminCmd {
     HedgeSaved {
         details: String,
     },
+    /// Manual broker hedge order (engine journal has the order itself).
+    ManualHedge {
+        details: String,
+    },
+    /// Dealer-defined alert rules, full replacement.
+    AlertRulesSaved {
+        rules: Vec<AlertRule>,
+    },
     /// Rollover schedule (engine journal).
     SwapConfigSaved {
         details: String,
@@ -782,6 +824,9 @@ pub struct AdminState {
     /// Platform (MT5) users reported by bridge plugins or imported, by `institution:login`.
     #[serde(default)]
     pub platform_users: BTreeMap<String, PlatformUser>,
+    /// Dealer-defined alert rules (parça 10b).
+    #[serde(default)]
+    pub alert_rules: Vec<AlertRule>,
     /// Copy trading strategies by provider account.
     #[serde(default)]
     pub strategies: BTreeMap<u64, super::copy_admin::StrategyRec>,
@@ -1279,6 +1324,18 @@ impl AdminState {
             } => self.audit(r, format!("alert.{kind}"), target.clone(), detail.clone()),
             AdminCmd::HedgeSaved { details } => {
                 self.audit(r, "risk.hedge".into(), "engine".into(), details.clone())
+            }
+            AdminCmd::ManualHedge { details } => {
+                self.audit(r, "risk.manualHedge".into(), "lp".into(), details.clone())
+            }
+            AdminCmd::AlertRulesSaved { rules } => {
+                self.alert_rules = rules.clone();
+                self.audit(
+                    r,
+                    "alerts.rules".into(),
+                    "alerts".into(),
+                    format!("{} rule(s)", rules.len()),
+                )
             }
             AdminCmd::AggregationSaved { cfg } => {
                 self.aggregation = Some(cfg.clone());

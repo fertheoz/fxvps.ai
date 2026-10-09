@@ -4,7 +4,7 @@ import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, 
 import { NumField, SelectField, TextField, useZodForm } from "@/components/form";
 import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
-import { DEFAULT_BEHAVIOR, type AlertSettings, type SwapConfig, type Tenant } from "@/lib/api";
+import { DEFAULT_BEHAVIOR, RULE_METRICS, type AlertRule, type AlertSettings, type AlertSeverity, type RuleEval, type RuleFiring, type RuleMetric, type SwapConfig, type Tenant } from "@/lib/api";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import { Book, Settings } from "@/lib/schemas";
 import { CURRENCY_MINOR_DIGITS } from "@/lib/money";
@@ -22,6 +22,7 @@ export default function SettingsPage() {
         {data ? <SettingsForm initial={data} /> : <Card className="p-4">{t("common.loading")}</Card>}
         <SwapCard />
         <AlertsCard />
+        <AlertRulesCard />
         <StatementMailCard />
         <CalendarCard />
         <TenantsCard />
@@ -155,6 +156,59 @@ function AlertsCard() {
 }
 
 /** Plan item 8: monthly statement e-mail (env switch) + a test send to oneself. */
+/** Parça 10b: dealer-defined alert rules (metric / target / threshold / severity) with a live reading and preview. */
+function AlertRulesCard() {
+  const t = useT();
+  const actor = useActor();
+  const toast = useToast();
+  const mfaOk = useMfaOk();
+  const editable = actor.can("settings.edit") && mfaOk;
+  const q = useApiQuery("alertRules", [], { live: 15000 });
+  const [draft, setDraft] = React.useState<AlertRule[] | null>(null);
+  const [preview, setPreview] = React.useState<{ evals: RuleEval[]; firing: RuleFiring[] } | null>(null);
+  const rules = draft ?? q.data?.rules ?? [];
+  const evals = new Map((preview?.evals ?? q.data?.evals ?? []).map((e) => [e.id, e]));
+  const save = useApiMutation((r: AlertRule[]) => api().saveAlertRules(r, actor), () => { toast(t("common.saved")); setDraft(null); setPreview(null); });
+  const prev = useApiMutation((r: AlertRule[]) => api().previewAlertRules(r, actor), setPreview);
+  const upd = (i: number, patch: Partial<AlertRule>) => setDraft(rules.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const add = () => setDraft([...rules, { id: `rule-${rules.length + 1}`, enabled: true, metric: "var_total_usd", target: "", op: "gt", threshold: 0, severity: "warning", title: "" }]);
+  if (!q.data) return <Card className="p-4">{t("common.loading")}</Card>;
+  return (
+    <Card data-testid="alert-rules">
+      <CardHeader><CardTitle>{t("settings.rules")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-xs text-muted-foreground">{t("settings.rulesHint")}</p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead><tr>{[t("settings.rule.id"), t("settings.rule.metric"), t("settings.rule.target"), t("settings.rule.op"), t("settings.rule.threshold"), t("settings.rule.severity"), t("settings.rule.title"), t("settings.rule.now"), ""].map((h, i) => <th key={i} className="whitespace-nowrap px-1 py-1 text-left font-medium text-muted-foreground">{h}</th>)}</tr></thead>
+            <tbody>
+              {rules.length === 0 && <tr><td colSpan={9} className="px-1 py-3 text-center text-muted-foreground">{t("settings.rulesNone")}</td></tr>}
+              {rules.map((r, i) => {
+                const ev = evals.get(r.id);
+                return (
+                  <tr key={i} className="border-t border-border/60">
+                    <td className="px-1 py-1"><span className="flex items-center gap-1"><input type="checkbox" checked={r.enabled} onChange={(e) => upd(i, { enabled: e.target.checked })} disabled={!editable} aria-label={t("settings.rule.id")} /><Input className="w-24 font-mono" value={r.id} onChange={(e) => upd(i, { id: e.target.value })} disabled={!editable} /></span></td>
+                    <td className="px-1 py-1"><select className="rounded-md border border-border bg-background p-1" value={r.metric} onChange={(e) => upd(i, { metric: e.target.value as RuleMetric })} disabled={!editable}>{RULE_METRICS.map((m) => <option key={m} value={m}>{t(`settings.metric.${m}` as MessageKey)}</option>)}</select></td>
+                    <td className="px-1 py-1"><Input className="w-20 font-mono uppercase" value={r.target} placeholder="*" onChange={(e) => upd(i, { target: e.target.value.toUpperCase() })} disabled={!editable} /></td>
+                    <td className="px-1 py-1"><select className="rounded-md border border-border bg-background p-1" value={r.op} onChange={(e) => upd(i, { op: e.target.value as "gt" | "lt" })} disabled={!editable}><option value="gt">&gt;</option><option value="lt">&lt;</option></select></td>
+                    <td className="px-1 py-1"><Input type="number" className="w-24" value={r.threshold} onChange={(e) => upd(i, { threshold: Number(e.target.value) })} disabled={!editable} /></td>
+                    <td className="px-1 py-1"><select className="rounded-md border border-border bg-background p-1" value={r.severity} onChange={(e) => upd(i, { severity: e.target.value as AlertSeverity })} disabled={!editable}>{(["info", "warning", "critical"] as const).map((s) => <option key={s} value={s}>{s}</option>)}</select></td>
+                    <td className="px-1 py-1"><Input className="w-40" value={r.title} onChange={(e) => upd(i, { title: e.target.value })} disabled={!editable} /></td>
+                    <td className="whitespace-nowrap px-1 py-1 tabular-nums">{ev ? <>{ev.value == null ? "—" : ev.value.toFixed(2)} {ev.fired && <Badge tone={r.severity === "critical" ? "danger" : "warning"}>{t("settings.rule.fires")}</Badge>}</> : "—"}</td>
+                    <td className="px-1 py-1">{editable && <Button size="sm" variant="ghost" onClick={() => setDraft(rules.filter((_, j) => j !== i))} aria-label="remove">×</Button>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {preview && <div className="text-xs text-muted-foreground">{t("settings.rulesPreview", { n: preview.firing.length })}{preview.firing.map((f) => <span key={f.id} className="ml-2"><Badge tone={f.severity === "critical" ? "danger" : "warning"}>{f.id}</Badge> {f.detail}</span>)}</div>}
+        {editable && <div className="flex gap-2"><Button variant="outline" onClick={add} data-testid="rule-add">{t("settings.ruleAdd")}</Button><Button variant="outline" onClick={() => prev.mutate(rules)} disabled={prev.isPending || rules.length === 0} data-testid="rules-preview">{t("risk.preview")}</Button><Button onClick={() => save.mutate(rules)} disabled={save.isPending || draft == null} data-testid="rules-save">{t("common.save")}</Button></div>}
+      </CardContent>
+    </Card>
+  );
+}
+
 function StatementMailCard() {
   const t = useT();
   const actor = useActor();
