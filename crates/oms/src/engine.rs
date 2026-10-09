@@ -1031,6 +1031,24 @@ impl Engine {
             routing = Routing::ABook;
             rule_tag = Some("hedge:limit".into());
         }
+        // currency-leg cap: a leg over its USD limit sends the flow A-book
+        if routing == Routing::BBook
+            && close.is_none()
+            && self.st.hedge.enabled
+            && self.currency_over_limit(&req.symbol, req.side, req.volume)
+        {
+            routing = Routing::ABook;
+            rule_tag = Some("hedge:currency".into());
+        }
+        // news window: new flow A-book while the event is near
+        if routing == Routing::BBook
+            && close.is_none()
+            && self.st.hedge.news_action == risk::NewsAction::ABook
+            && self.in_news_window()
+        {
+            routing = Routing::ABook;
+            rule_tag = Some("news".into());
+        }
         let order = Order {
             id,
             req,
@@ -1121,6 +1139,13 @@ impl Engine {
             && self.spread_too_wide(g, &r.symbol)
         {
             return Err("spread too wide".into());
+        }
+        if o.close_position.is_none()
+            && matches!(o.origin, OrderOrigin::Client | OrderOrigin::Copy)
+            && self.st.hedge.news_action == risk::NewsAction::Reject
+            && self.in_news_window()
+        {
+            return Err("news window: new orders paused".into());
         }
         let cq = self.client_quote(g, &r.symbol).map_err(e2s)?;
         let entry = match r.side {
@@ -2576,6 +2601,103 @@ impl Engine {
         {
             self.rebalance_hedge(symbol);
         }
+    }
+
+    /// Currency legs of the open positions: for every currency the net amount
+    /// (minor units of that currency) of the A-book and the B-book. A long
+    /// EURUSD lot is +100k EUR and −100k × price USD.
+    pub fn currency_exposure(&self) -> BTreeMap<money::Currency, (i128, i128)> {
+        let mut m: BTreeMap<money::Currency, (i128, i128)> = BTreeMap::new();
+        for p in self.st.positions.values() {
+            let Some(spec) = self.st.symbols.get(&p.symbol) else {
+                continue;
+            };
+            let sign = p.side.sign() as i128;
+            let units = p.volume.raw() as i128 * spec.contract_size as i128; // scaled 1e8
+            let base_minor = sign * units * 10i128.pow(spec.base.minor_exponent()) / SCALE as i128;
+            let quote_minor = -sign * units * p.open_price.raw() as i128 / SCALE as i128
+                * 10i128.pow(spec.quote.minor_exponent())
+                / SCALE as i128;
+            for (ccy, amt) in [(spec.base, base_minor), (spec.quote, quote_minor)] {
+                let e = m.entry(ccy).or_default();
+                match p.routing {
+                    Routing::ABook => e.0 += amt,
+                    Routing::BBook => e.1 += amt,
+                }
+            }
+        }
+        m
+    }
+
+    /// USD value (minor) of an amount (minor) of `ccy`, if a rate is known.
+    pub fn to_usd_minor(&self, ccy: money::Currency, minor: i128) -> Option<i128> {
+        self.st
+            .quotes
+            .convert(
+                Money::new(minor, ccy),
+                money::Currency::USD,
+                Rounding::HalfEven,
+            )
+            .ok()
+            .map(|m| m.minor)
+    }
+
+    /// Would `side × volume` of `symbol` push a B-book currency leg over its
+    /// USD limit (risk-increasing only)?
+    fn currency_over_limit(&self, symbol: &str, side: Side, volume: Qty) -> bool {
+        let h = &self.st.hedge;
+        if h.currency_limits_usd.is_empty() {
+            return false;
+        }
+        let Some(spec) = self.st.symbols.get(symbol) else {
+            return false;
+        };
+        let Some(q) = self.st.quotes.get(symbol) else {
+            return false;
+        };
+        let exposure = self.currency_exposure();
+        let sign = side.sign() as i128;
+        let units = volume.raw() as i128 * spec.contract_size as i128;
+        let mid = (q.bid.raw() + q.ask.raw()) / 2;
+        let legs = [
+            (
+                spec.base,
+                sign * units * 10i128.pow(spec.base.minor_exponent()) / SCALE as i128,
+            ),
+            (
+                spec.quote,
+                -sign * units * mid as i128 / SCALE as i128
+                    * 10i128.pow(spec.quote.minor_exponent())
+                    / SCALE as i128,
+            ),
+        ];
+        for (ccy, delta) in legs {
+            let Some(limit) = h.currency_limits_usd.get(&ccy.to_string()) else {
+                continue;
+            };
+            let cur = exposure.get(&ccy).map_or(0, |x| x.1);
+            let (Some(cur_usd), Some(proj_usd)) = (
+                self.to_usd_minor(ccy, cur),
+                self.to_usd_minor(ccy, cur + delta),
+            ) else {
+                continue;
+            };
+            if proj_usd.abs() > cur_usd.abs() && proj_usd.abs() > *limit as i128 * 100 {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Inside ± `news_window_min` of a high-impact event (hedge policy).
+    pub fn in_news_window(&self) -> bool {
+        let w = u64::from(self.st.hedge.news_window_min) * 60_000_000_000;
+        w > 0
+            && self
+                .st
+                .news_times
+                .iter()
+                .any(|t| t.abs_diff(self.st.now) <= w)
     }
 
     /// Daily volatility (fraction) of a symbol from its EWMA state.

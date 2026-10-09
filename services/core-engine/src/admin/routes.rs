@@ -31,6 +31,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/dashboard", get(dashboard))
         .route("/v1/dashboard/series", get(dashboard_series))
         .route("/v1/exposure", get(exposure))
+        .route("/v1/exposure/currency", get(currency_exposure))
         .route("/v1/accounts", get(list_accounts).post(open_account))
         .route("/v1/accounts/{id}", get(get_account))
         .route("/v1/accounts/{id}/positions", get(account_positions))
@@ -496,6 +497,11 @@ async fn dashboard_series(
 async fn exposure(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     need(&actor, "dashboard.view")?;
     Ok(Json(ctx.q(views::exposure).await?))
+}
+
+async fn currency_exposure(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "dashboard.view")?;
+    Ok(Json(ctx.q(views::currency_exposure).await?))
 }
 
 #[derive(Deserialize)]

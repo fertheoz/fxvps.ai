@@ -4,7 +4,7 @@ import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Label, PageHea
 import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
-import { HEDGE_MODES, type HedgeMode, type HedgePolicy, type MarginCallRow } from "@/lib/api";
+import { HEDGE_MODES, NEWS_ACTIONS, type HedgeMode, type HedgePolicy, type MarginCallRow, type NewsAction } from "@/lib/api";
 import { NumField, SelectField } from "@/components/form";
 import { useMfaOk } from "@/lib/queries";
 import type { MessageKey } from "@/lib/i18n";
@@ -15,6 +15,7 @@ export default function RiskPage() {
   const actor = useActor();
   const toast = useToast();
   const exp = useApiQuery("exposure", [], { live: 5000 });
+  const ccy = useApiQuery("currencyExposure", [], { live: 5000 });
   const mc = useApiQuery("marginCalls", [], { live: 5000 });
   const presets = useApiQuery("esmaPresets");
   const groups = useApiQuery("listGroups");
@@ -63,6 +64,27 @@ export default function RiskPage() {
                     <td className="text-right">{e.varUsd ? Math.round(e.varUsd).toLocaleString() : "—"}</td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
+        <Card data-testid="currency-exposure">
+          <CardHeader><CardTitle>{t("risk.currencyExposure")}</CardTitle></CardHeader>
+          <CardContent>
+            <table className="w-full text-sm">
+              <thead className="text-xs text-muted-foreground"><tr><th className="text-left">{t("risk.currency")}</th><th className="text-right">A</th><th className="text-right">B</th><th className="text-right">Net</th><th className="text-right">B USD</th><th className="text-right">{t("risk.limitCol")}</th></tr></thead>
+              <tbody>
+                {(ccy.data ?? []).map((r) => (
+                  <tr key={r.currency} className="border-t border-border tabular-nums">
+                    <td className="py-1 font-medium">{r.currency}</td>
+                    <td className="text-right">{Math.round(r.aAmount).toLocaleString()}</td>
+                    <td className="text-right">{Math.round(r.bAmount).toLocaleString()}</td>
+                    <td className="text-right">{Math.round(r.netAmount).toLocaleString()}</td>
+                    <td className="text-right">{r.bUsd === null ? "—" : Math.round(r.bUsd).toLocaleString()}</td>
+                    <td className={`text-right ${r.overLimit ? "text-red-600 dark:text-red-400 font-semibold" : ""}`}>{r.limitUsd ?? "—"}</td>
+                  </tr>
+                ))}
+                {(ccy.data ?? []).length === 0 && <tr><td colSpan={6} className="py-2 text-center text-muted-foreground">{t("common.noResults")}</td></tr>}
               </tbody>
             </table>
           </CardContent>
@@ -124,6 +146,7 @@ function HedgeForm({ initial }: { initial: HedgePolicy }) {
   const editable = actor.can("risk.edit") && mfaOk;
   const [p, setP] = React.useState<HedgePolicy>(initial);
   const [limitsText, setLimitsText] = React.useState(Object.entries(initial.symbolLimits).map(([k, v]) => `${k} ${v}`).join("\n"));
+  const [ccyText, setCcyText] = React.useState(Object.entries(initial.currencyLimitsUsd ?? {}).map(([k, v]) => `${k} ${v}`).join("\n"));
   const mut = useApiMutation((v: HedgePolicy) => api().saveHedgePolicy(v, actor), () => toast(t("risk.hedgeSaved")));
   const set = <K extends keyof HedgePolicy>(k: K, v: HedgePolicy[K]) => setP({ ...p, [k]: v });
   const save = () => {
@@ -133,7 +156,13 @@ function HedgeForm({ initial }: { initial: HedgePolicy }) {
       const n = Number(lots);
       if (sym && n > 0) symbolLimits[sym.toUpperCase()] = n;
     }
-    mut.mutate({ ...p, symbolLimits });
+    const currencyLimitsUsd: Record<string, number> = {};
+    for (const line of ccyText.split("\n")) {
+      const [c, usd] = line.trim().split(/[\s,=]+/);
+      const n = Number(usd);
+      if (c && n > 0) currencyLimitsUsd[c.toUpperCase()] = Math.round(n);
+    }
+    mut.mutate({ ...p, symbolLimits, currencyLimitsUsd });
   };
   return (
     <Card data-testid="hedge-policy">
@@ -161,6 +190,19 @@ function HedgeForm({ initial }: { initial: HedgePolicy }) {
           {t("risk.symbolLimits")}
           <textarea className="min-h-16 rounded-md border border-border bg-background p-2 font-mono text-xs" value={limitsText} onChange={(e) => setLimitsText(e.target.value)} disabled={!editable} placeholder="XAUUSD 5" />
         </Label>
+        <Label>
+          {t("risk.currencyLimits")}
+          <textarea className="min-h-16 rounded-md border border-border bg-background p-2 font-mono text-xs" value={ccyText} onChange={(e) => setCcyText(e.target.value)} disabled={!editable} placeholder="EUR 500000" data-testid="currency-limits" />
+        </Label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <NumField label={t("risk.newsWindow")} value={p.newsWindowMin ?? 0} onChange={(v) => set("newsWindowMin", Math.min(1440, Math.max(0, Math.round(v))))} step={5} disabled={!editable} />
+          <Label>
+            {t("risk.newsAction")}{p.inNewsWindow ? <span className="ml-2 text-xs text-amber-600 dark:text-amber-400">{t("risk.newsNow")}</span> : null}
+            <select className="rounded-md border border-border bg-background p-2 text-sm" value={p.newsAction ?? "none"} onChange={(e) => set("newsAction", e.target.value as NewsAction)} disabled={!editable} data-testid="news-action">
+              {NEWS_ACTIONS.map((a) => <option key={a} value={a}>{t(`risk.newsAction.${a}` as MessageKey)}</option>)}
+            </select>
+          </Label>
+        </div>
         {editable && <div><Button onClick={save} disabled={mut.isPending} data-testid="hedge-save">{t("common.save")}</Button></div>}
       </CardContent>
     </Card>

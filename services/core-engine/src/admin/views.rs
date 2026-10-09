@@ -254,6 +254,43 @@ pub fn exposure(e: &Engine) -> Value {
     Value::Array(out)
 }
 
+/// Currency-leg exposure (`GET /v1/exposure/currency`): per currency the net
+/// amount (major units) of the A-book and the B-book, their USD value and
+/// the B-book cap.
+pub fn currency_exposure(e: &Engine) -> Value {
+    let h = e.hedge_policy();
+    let mut rows: Vec<Value> = e
+        .currency_exposure()
+        .into_iter()
+        .map(|(ccy, (a, b))| {
+            let div = 10f64.powi(ccy.minor_exponent() as i32);
+            let usd = |m: i128| e.to_usd_minor(ccy, m).map(|u| u as f64 / 100.0);
+            let limit = h.currency_limits_usd.get(&ccy.to_string()).copied();
+            let b_usd = usd(b);
+            json!({
+                "currency": ccy.to_string(),
+                "aAmount": a as f64 / div,
+                "bAmount": b as f64 / div,
+                "netAmount": (a + b) as f64 / div,
+                "aUsd": usd(a),
+                "bUsd": b_usd,
+                "netUsd": usd(a + b),
+                "limitUsd": limit,
+                "overLimit": limit.is_some_and(|l| b_usd.is_some_and(|u| u.abs() > l as f64)),
+            })
+        })
+        .collect();
+    rows.sort_by(|x, y| {
+        y["netUsd"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .abs()
+            .partial_cmp(&x["netUsd"].as_f64().unwrap_or(0.0).abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Value::Array(rows)
+}
+
 /// B-book exposure / auto-hedge policy (`GET /v1/risk/hedge`), lots as floats.
 pub fn hedge_policy(e: &Engine) -> Value {
     let h = e.hedge_policy();
@@ -271,6 +308,10 @@ pub fn hedge_policy(e: &Engine) -> Value {
         "sliceIntervalS": h.slice_interval_s,
         "varLimitUsd": h.var_limit_usd,
         "varTotalUsd": e.var_total_usd().minor as f64 / 100.0,
+        "currencyLimitsUsd": h.currency_limits_usd,
+        "newsWindowMin": h.news_window_min,
+        "newsAction": h.news_action,
+        "inNewsWindow": e.in_news_window(),
     })
 }
 

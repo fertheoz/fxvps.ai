@@ -54,6 +54,29 @@ export interface HedgePolicy {
   varLimitUsd?: number | null;
   /** Live total VaR (USD), read-only. */
   varTotalUsd?: number;
+  /** Per-currency B-book caps (USD notional of the leg); flow over a cap goes A-book. */
+  currencyLimitsUsd?: Record<string, number>;
+  /** News restriction: ± minutes of a high-impact event, and what to do with new flow. */
+  newsWindowMin?: number;
+  newsAction?: NewsAction;
+  /** Read-only: an event is near right now. */
+  inNewsWindow?: boolean;
+}
+
+export type NewsAction = "none" | "a_book" | "reject";
+export const NEWS_ACTIONS: readonly NewsAction[] = ["none", "a_book", "reject"];
+
+/** One currency leg across the open positions. */
+export interface CurrencyExposure {
+  currency: string;
+  aAmount: number;
+  bAmount: number;
+  netAmount: number;
+  aUsd: number | null;
+  bUsd: number | null;
+  netUsd: number | null;
+  limitUsd: number | null;
+  overLimit: boolean;
 }
 
 export interface ClientFlowRow {
@@ -682,6 +705,7 @@ export interface AdminApi {
   dashboard(): Promise<DashboardStats>;
   dashboardSeries(range: DashboardRange): Promise<DashboardSeries>;
   exposure(): Promise<SymbolExposure[]>;
+  currencyExposure(): Promise<CurrencyExposure[]>;
   listAlerts(): Promise<AlertList>;
   ackAlert(id: string, actor: Actor): Promise<AlertList>;
   hedgePolicy(): Promise<HedgePolicy>;
