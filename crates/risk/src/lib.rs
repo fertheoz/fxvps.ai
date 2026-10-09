@@ -531,6 +531,9 @@ pub struct GroupConfig {
     /// Inventory skew of the client price (B-book price formation).
     #[serde(default)]
     pub skew: Option<SkewPolicy>,
+    /// Last look on API / bridge market orders.
+    #[serde(default)]
+    pub last_look: Option<LastLook>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -644,6 +647,16 @@ impl SkewPolicy {
     }
 }
 
+/// Last look for API / bridge flow: hold a market order `hold_ms`, then
+/// reject it if the client's price improved by more than `max_move_points`
+/// since the request (stale-price picking); otherwise fill at the current price.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LastLook {
+    pub hold_ms: u32,
+    pub max_move_points: i64,
+}
+
 /// Extra markup around high-impact calendar events.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -708,6 +721,7 @@ impl GroupConfig {
             min_spread_points: None,
             max_spread_points: None,
             skew: None,
+            last_look: None,
         }
     }
 

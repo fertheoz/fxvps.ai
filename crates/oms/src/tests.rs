@@ -3275,3 +3275,60 @@ fn burst_cap_sends_the_overflow_of_a_window_to_the_a_book() {
     h.market(1, "a4", Side::Buy, "0.9");
     assert!(h.router.take().is_empty());
 }
+
+#[test]
+fn last_look_holds_api_orders_and_rejects_stale_price_picking() {
+    use risk::Platform;
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("b", USD, Routing::BBook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 0;
+    g.last_look = Some(risk::LastLook {
+        hold_ms: 500,
+        max_move_points: 5,
+    });
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "b", "100000");
+    // terminal flow is never held
+    let mut o = NewOrder::market(1, "t", "EURUSD", Side::Buy, qty("0.1"));
+    o.platform = Platform::Terminal;
+    let (_, tid) = h.order(o);
+    assert_eq!(h.e.order(tid).unwrap().status, OrderStatus::Filled);
+    // API buy at ask 1.10010: held
+    let mut o = NewOrder::market(1, "a1", "EURUSD", Side::Buy, qty("0.1"));
+    o.platform = Platform::Api;
+    let (ev, id) = h.order(o);
+    assert!(ev.iter().any(|e| matches!(e, Event::OrderHeld { .. })));
+    assert_eq!(h.e.order(id).unwrap().status, OrderStatus::Accepted);
+    h.quote("EURUSD", "1.10000", "1.10010"); // 1 µs later: still held
+    assert_eq!(h.e.order(id).unwrap().status, OrderStatus::Accepted);
+    // the hold ends, the price barely moved (2 points): fills at the current price
+    h.ts += 600_000_000;
+    h.quote("EURUSD", "1.09998", "1.10008");
+    let o = h.e.order(id).unwrap();
+    assert_eq!(o.status, OrderStatus::Filled);
+    assert_eq!(o.avg_price, px("1.10008"));
+    // a second API buy, then the ask drops 20 points during the hold: rejected
+    let mut o = NewOrder::market(1, "a2", "EURUSD", Side::Buy, qty("0.1"));
+    o.platform = Platform::Api;
+    let (_, id2) = h.order(o);
+    h.ts += 600_000_000;
+    h.quote("EURUSD", "1.09978", "1.09988");
+    let o = h.e.order(id2).unwrap();
+    assert_eq!(o.status, OrderStatus::Rejected);
+    assert!(o
+        .reject_reason
+        .as_deref()
+        .unwrap_or("")
+        .starts_with("last look"));
+    // a held order can be cancelled by the client
+    let mut o = NewOrder::market(1, "a3", "EURUSD", Side::Sell, qty("0.1"));
+    o.platform = Platform::Api;
+    let (_, id3) = h.order(o);
+    h.cmd(Command::CancelOrder {
+        account: 1,
+        order_id: id3,
+    });
+    assert_eq!(h.e.order(id3).unwrap().status, OrderStatus::Cancelled);
+}

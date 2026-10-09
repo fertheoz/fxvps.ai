@@ -36,6 +36,9 @@ pub struct EngineConfig {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
 struct State {
+    /// Orders inside their last-look hold.
+    #[serde(default)]
+    held_ids: BTreeSet<OrderId>,
     /// Per-symbol EWMA volatility for the VaR cap.
     #[serde(default)]
     vol: BTreeMap<String, VolState>,
@@ -761,9 +764,11 @@ impl Engine {
                 if o.req.account != *account {
                     return Err("not your order".into());
                 }
-                if !o.is_pending() {
+                let held = o.held_until.is_some() && o.status == OrderStatus::Accepted;
+                if !o.is_pending() && !held {
                     return Err("order not cancellable".into());
                 }
+                self.st.held_ids.remove(order_id);
                 self.finish_order(*order_id, OrderStatus::Cancelled);
             }
             Command::ModifyPosition {
@@ -1081,6 +1086,7 @@ impl Engine {
             copy_from: self.st.pending_copy.take(),
             lp_resting: None,
             chain_fills: Vec::new(),
+            held_until: None,
         };
         self.st.orders.insert(id, order);
         if let Err(reason) = self.validate_order(id, &g) {
@@ -1100,6 +1106,29 @@ impl Engine {
         }
         let o = &self.st.orders[&id];
         if o.req.order_type == OrderType::Market {
+            // last look: API / bridge flow waits the hold, then is judged on quotes
+            let api = matches!(o.req.platform, risk::Platform::Api | risk::Platform::Bridge);
+            if let Some(ll) = g
+                .last_look
+                .filter(|ll| api && ll.hold_ms > 0 && close.is_none())
+            {
+                let until = self.st.now + u64::from(ll.hold_ms) * 1_000_000;
+                let px = self
+                    .client_quote(&g, &o.req.symbol)
+                    .ok()
+                    .map(|q| q.for_side(o.req.side));
+                let o = self.st.orders.get_mut(&id).expect("order");
+                o.held_until = Some(until);
+                if o.req.requested_price.is_none() {
+                    o.req.requested_price = px;
+                }
+                self.st.held_ids.insert(id);
+                self.events.push(Event::OrderHeld {
+                    order_id: id,
+                    until,
+                });
+                return Ok(());
+            }
             self.execute(id);
         } else {
             let sym = o.req.symbol.clone();
@@ -2599,6 +2628,7 @@ impl Engine {
     // ------------------------------------------------------------------
 
     fn on_quote(&mut self, symbol: &str) {
+        self.check_last_look(symbol);
         self.check_pending(symbol);
         self.check_sl_tp(symbol);
         self.check_margin();
@@ -2756,6 +2786,64 @@ impl Engine {
                 .news_times
                 .iter()
                 .any(|t| t.abs_diff(self.st.now) <= w)
+    }
+
+    /// Last look: orders of `symbol` whose hold ended are judged — a price
+    /// that moved in the client's favour past the tolerance is rejected,
+    /// the rest execute now at the current price.
+    fn check_last_look(&mut self, symbol: &str) {
+        let now = self.st.now;
+        let due: Vec<OrderId> = self
+            .st
+            .held_ids
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.st.orders.get(id).is_some_and(|o| {
+                    o.req.symbol == symbol && o.held_until.is_some_and(|u| u <= now)
+                })
+            })
+            .collect();
+        for id in due {
+            self.st.held_ids.remove(&id);
+            let o = &self.st.orders[&id];
+            if o.status != OrderStatus::Accepted {
+                continue;
+            }
+            let g = self.st.groups[&self.st.accounts[&o.req.account].group].clone();
+            let Some(ll) = g.last_look else {
+                self.execute(id);
+                continue;
+            };
+            let point = self
+                .st
+                .symbols
+                .get(symbol)
+                .map_or(1, |s| s.point().raw())
+                .max(1);
+            let moved = match (o.req.requested_price, self.client_quote(&g, symbol)) {
+                (Some(req), Ok(q)) => {
+                    // + = the client would now get a better price than requested
+                    (req.raw() - q.for_side(o.req.side).raw()) * o.req.side.sign() / point
+                }
+                _ => 0,
+            };
+            if moved > ll.max_move_points {
+                self.reject(
+                    id,
+                    format!("last look: price moved {moved} points in the client's favour"),
+                );
+                continue;
+            }
+            // judged: the order is now a plain market order at the current price
+            self.st
+                .orders
+                .get_mut(&id)
+                .expect("order")
+                .req
+                .requested_price = None;
+            self.execute(id);
+        }
     }
 
     /// Daily volatility (fraction) of a symbol from its EWMA state.

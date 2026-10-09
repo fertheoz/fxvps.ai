@@ -2411,6 +2411,13 @@ struct SkewDto {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct LastLookDto {
+    hold_ms: u32,
+    max_move_points: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct NewsMarkupDto {
     window_min: u32,
     add_points: i64,
@@ -2477,6 +2484,9 @@ struct GroupDto {
     /// Inventory skew; `Some(None)` clears it.
     #[serde(default)]
     skew: Option<Option<SkewDto>>,
+    /// Last look on API / bridge market orders; `Some(None)` clears it.
+    #[serde(default)]
+    last_look: Option<Option<LastLookDto>>,
     /// A-book TP / pending limit entries rest at the LP as GTC limit orders.
     #[serde(default)]
     lp_resting: Option<bool>,
@@ -2732,6 +2742,20 @@ async fn save_group(
             return Err(ApiError::bad("maxSpreadPoints must be 0..100000"));
         }
         cfg.max_spread_points = (p > 0).then_some(p);
+    }
+    if let Some(ll) = g.last_look {
+        cfg.last_look = match ll {
+            Some(l) if l.hold_ms > 10_000 || !(0..=100_000).contains(&l.max_move_points) => {
+                return Err(ApiError::bad(
+                    "lastLook: holdMs 0..10000, maxMovePoints 0..100000",
+                ))
+            }
+            Some(l) if l.hold_ms > 0 => Some(risk::LastLook {
+                hold_ms: l.hold_ms,
+                max_move_points: l.max_move_points,
+            }),
+            _ => None,
+        };
     }
     if let Some(sk) = g.skew {
         cfg.skew = match sk {

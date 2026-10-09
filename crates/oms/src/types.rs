@@ -173,6 +173,9 @@ pub struct Order {
     /// over: the client then gets one fill at their VWAP (tek kalem).
     #[serde(default)]
     pub chain_fills: Vec<LpExec>,
+    /// Last look: held until this instant (ns), then judged and executed.
+    #[serde(default)]
+    pub held_until: Option<u64>,
 }
 
 /// Origin of an order (deal reason in the history).
@@ -479,6 +482,7 @@ pub struct LpExec {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[allow(clippy::large_enum_variant)] // SetGroup carries the whole group config; replayed, not hot
 pub enum Command {
     AddSymbol(SymbolSpec),
     SetGroup(GroupConfig),
@@ -619,6 +623,11 @@ pub enum Event {
     },
     OrderTriggered {
         order_id: OrderId,
+    },
+    /// Last look: the order is held until `until` (ns), then judged.
+    OrderHeld {
+        order_id: OrderId,
+        until: u64,
     },
     /// An LP-resting order was placed (`active`) or cancelled/rejected/
     /// filled away (`!active`).
