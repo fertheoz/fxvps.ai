@@ -127,8 +127,15 @@ pub struct Logout {
 pub struct InstrumentRef {
     pub security_id: String,
     /// LMAX assumption: `8` (exchange symbol). Unverified, see docs/02.
+    /// [`SYMBOL_SOURCE`]: the venue identifies instruments by Symbol(55)
+    /// only (Solid FX / MAS Markets); `security_id` then holds the symbol
+    /// text and 48/22 are neither written nor required.
     pub security_id_source: String,
 }
+
+/// `security_id_source` value for venues that use Symbol(55) instead of
+/// SecurityID(48)/SecurityIDSource(22).
+pub const SYMBOL_SOURCE: &str = "SYMBOL";
 
 /// MarketDataRequest (V).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -552,6 +559,10 @@ impl Body {
             }
             Body::NewOrderSingle(m) => {
                 e.str(11, &m.cl_ord_id);
+                if m.instrument.security_id_source == SYMBOL_SOURCE {
+                    // FIX 4.2 venues require HandlInst(21); value is ignored
+                    e.char(21, b'1');
+                }
                 put_instrument(e, &m.instrument);
                 e.char(54, m.side.to_fix())
                     .str(60, &m.transact_time)
@@ -625,14 +636,25 @@ pub fn is_admin_msg_type(mt: &str) -> bool {
 }
 
 fn instrument(v: &FieldView<'_, '_>) -> Result<InstrumentRef, DecodeError> {
-    Ok(InstrumentRef {
-        security_id: v.string(48)?,
-        security_id_source: v.opt_string(22)?.unwrap_or_else(|| "8".to_owned()),
-    })
+    match v.opt_string(48)? {
+        Some(id) => Ok(InstrumentRef {
+            security_id: id,
+            security_id_source: v.opt_string(22)?.unwrap_or_else(|| "8".to_owned()),
+        }),
+        // Symbol-only venue (FIX 4.2 style): 55 carries the instrument
+        None => Ok(InstrumentRef {
+            security_id: v.string(55)?,
+            security_id_source: SYMBOL_SOURCE.to_owned(),
+        }),
+    }
 }
 
 fn put_instrument(e: &mut Encoder, i: &InstrumentRef) {
-    e.str(48, &i.security_id).str(22, &i.security_id_source);
+    if i.security_id_source == SYMBOL_SOURCE {
+        e.str(55, &i.security_id);
+    } else {
+        e.str(48, &i.security_id).str(22, &i.security_id_source);
+    }
 }
 
 /// Encodes a full message.

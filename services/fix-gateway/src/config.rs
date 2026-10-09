@@ -25,9 +25,18 @@ pub struct GatewayConfig {
     /// false: configured but paused, no connection attempts at all.
     #[serde(default = "yes")]
     pub enabled: bool,
-    /// SecurityIDSource(22). Assumption for LMAX: `8`.
+    /// SecurityIDSource(22). Assumption for LMAX: `8`. `SYMBOL`: the venue
+    /// uses Symbol(55) only (Solid FX / MAS Markets); instruments then carry
+    /// the venue symbol text as `security_id`.
     #[serde(default = "default_source")]
     pub security_id_source: String,
+    /// BeginString(8) of both sessions: `FIX.4.4` (LMAX, default) or `FIX.4.2` (Solid FX).
+    #[serde(default = "default_begin_string")]
+    pub begin_string: String,
+    /// Venue session hours; outside them the gateway waits instead of
+    /// reconnecting and reports the down as `scheduled` (no alert).
+    #[serde(default)]
+    pub session_hours: Option<crate::hours::SessionHours>,
     /// Directory for persistent FIX stores (`<dir>/md`, `<dir>/trade`); memory if absent.
     pub store_dir: Option<PathBuf>,
     pub md: SessionEndpoint,
@@ -85,6 +94,10 @@ fn default_reconnect() -> u64 {
 }
 fn default_source() -> String {
     "8".into()
+}
+
+fn default_begin_string() -> String {
+    fix_codec::FIX44.into()
 }
 fn default_max_orders_per_sec() -> u32 {
     80

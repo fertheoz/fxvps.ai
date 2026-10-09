@@ -325,6 +325,13 @@ pub fn infra_conditions(
         .and_then(|s| s.read().ok().map(|t| t.clone()))
     {
         for r in rows {
+            // a venue outside its session hours is not down (Solid FX 17:00–17:05 ET)
+            if r.last_down_reason
+                .as_deref()
+                .is_some_and(|x| x.starts_with("scheduled"))
+            {
+                continue;
+            }
             if r.logged_on {
                 // feed QoS: a logged-on market-data session whose smoothed
                 // latency sits above the threshold

@@ -15,8 +15,10 @@ pub mod tls;
 #[cfg(feature = "nats")]
 pub mod nats;
 
+pub mod hours;
 pub use config::{GatewayConfig, NatsConfig, SessionEndpoint, TlsEndpoint};
 pub use gateway::{
     apply_status, start, GatewayError, GatewayEvent, GatewayHandle, OrderCommand, SessionKind,
     SessionStatus,
 };
+pub use hours::SessionHours;
