@@ -166,6 +166,7 @@ trading süreci kapalıyken gelen icra Denetçi farkı olarak görünür.
 | 2026-10-09 | 0 | ✅ | #189 #186 #185 #188 #190 | LP'de yatan emirler v0: motor (TP + limit giriş, replace/cancel, fazlalık düzleştirme), köprü (GTC, revizyonlu ClOrdID), Denetçi (GTC ack), konsol grup seçeneği; canlı. Kurucu tıkı: grupta "lp" seç, LP sayfasında SIM "Emir alır" kapat. v1: Stop OrdType (SL LP'de), netleştirme, terminal rozeti + "neden dolmadı" |
 | 2026-10-09 | 0 v1 | ✅ | #193 | SL ve stop girişleri LMAX'ta GTC **stop** (Stop OrdType 40=3/StopPx 99 codec→geçit→köprü→motor); trailing replace 1 sn kısıtlı; kaymaya açık kalan yalnız piyasa emirleri. Stop-limit girişi tetik kipinde (v2) |
 | 2026-10-09 | 0 v1b | ✅ | #194 | Tek kalem: retry politikalı piyasa emrinde LP kısmi dolumları zincir bitene kadar tutulur, müşteriye tek dolum (VWAP+markup), tek deal/pozisyon; iç hamleler görünmez |
+| 2026-10-09 | 0 v2a | 🔧 | #195 | Terminalde "LP" rozeti (pozisyon SL/TP ve bekleyen emirde; proto v1.3 `lp_tp/lp_sl/lp_resting`, REST aynı); ask çizgisi varsayılan açık (eski kayıtlar bir kez açılır) |
 
 ## Kaynaklar
 PrimeXM: https://primexm.com/xcore/solutions/ · https://primexm.com/xcore-aggregation/ ·

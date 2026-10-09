@@ -300,6 +300,8 @@ export const en = {
   'tb.price': 'Price',
   'tb.current': 'Current',
   'tb.sl': 'S/L',
+  'tb.atLp': 'LP',
+  'tb.atLpHint': 'Resting at the liquidity provider as a real order: filled by the LP at its price, never triggered on our chart line.',
   'tb.tp': 'T/P',
   'tb.commission': 'Comm.',
   'tb.profit': 'Profit',

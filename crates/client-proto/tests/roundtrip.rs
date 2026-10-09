@@ -99,6 +99,8 @@ fn samples() -> Vec<Envelope> {
                 tp: d("1.08"),
                 trailing_distance: d("0.002"),
                 open_time_ns: 5,
+                lp_tp: true,
+                lp_sl: false,
             }],
             free_margin: d("99000"),
             margin_level: d("2500"),
@@ -136,6 +138,7 @@ fn samples() -> Vec<Envelope> {
             stop_triggered: true,
             close_position_id: String::new(),
             created_ns: 6,
+            lp_resting: true,
         }),
         Body::PlaceOrder(PlaceOrder {
             request_id: "o1".into(),

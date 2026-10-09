@@ -265,6 +265,10 @@ message Position {
   // Server-side trailing stop distance in price units (absent = off).
   Decimal trailing_distance = 10;
   uint64 open_time_ns = 11;
+  // Added in v1.3: the TP / SL rests at the liquidity provider as a real
+  // order (filled by the LP, not triggered on the broker's price).
+  bool lp_tp = 12;
+  bool lp_sl = 13;
 }
 
 message AccountSnapshot {
@@ -319,6 +323,8 @@ message OrderUpdate {
   // Order closes (part of) this position (ClosePosition, SL/TP, stop-out).
   string close_position_id = 25;
   uint64 created_ns = 26;
+  // Added in v1.3: a pending entry resting at the liquidity provider.
+  bool lp_resting = 27;
 }
 
 message PlaceOrder {

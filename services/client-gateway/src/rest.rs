@@ -602,6 +602,9 @@ pub struct ApiPosition {
     pub tp: Option<String>,
     pub trailing_distance: Option<String>,
     pub open_time_ns: u64,
+    /// The TP / SL rests at the liquidity provider as a real order.
+    pub lp_tp: bool,
+    pub lp_sl: bool,
 }
 
 impl ApiPosition {
@@ -619,6 +622,8 @@ impl ApiPosition {
             tp: dec(p.tp),
             trailing_distance: dec(p.trailing_distance),
             open_time_ns: p.open_time_ns,
+            lp_tp: p.lp_tp,
+            lp_sl: p.lp_sl,
         }
     }
 }
@@ -649,6 +654,8 @@ pub struct ApiOrder {
     /// Position the order closes.
     pub close_position_id: Option<String>,
     pub stop_triggered: bool,
+    /// Pending entry resting at the liquidity provider.
+    pub lp_resting: bool,
     /// Reject / cancel reason.
     pub text: Option<String>,
     pub created_ns: u64,
@@ -679,6 +686,7 @@ impl ApiOrder {
             position_id: opt_id(&o.position_id),
             close_position_id: opt_id(&o.close_position_id),
             stop_triggered: o.stop_triggered,
+            lp_resting: o.lp_resting,
             text: opt_id(&o.text),
             created_ns: o.created_ns,
             updated_ns: o.ts_ns,

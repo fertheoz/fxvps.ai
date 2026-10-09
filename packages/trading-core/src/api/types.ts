@@ -117,6 +117,9 @@ export interface Position {
   tp?: number;
   /** Server-side trailing stop distance in price units. */
   trailing?: number;
+  /** The TP / SL rests at the liquidity provider as a real order. */
+  lpTp?: boolean;
+  lpSl?: boolean;
   /** Minor units, negative = cost. */
   commission: number;
   swap: number;
@@ -144,6 +147,8 @@ export interface PendingOrder {
   createdAt: number;
   /** Stop-limit becomes a limit after trigger. */
   triggered?: boolean;
+  /** The entry rests at the liquidity provider as a real order. */
+  lpResting?: boolean;
 }
 
 export interface Deal {
