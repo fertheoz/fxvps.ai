@@ -3588,27 +3588,59 @@ async fn lp_report(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
 // reports / audit
 // ---------------------------------------------------------------------------
 
-async fn trades(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+/// `[from, to)` of a report: without a range the newest `default_limit` rows;
+/// with one, everything inside it up to `max_limit`.
+fn report_window(q: &ReportRange, default_limit: usize, max_limit: usize) -> (u64, u64, usize) {
+    const DAY: u64 = 86_400_000_000_000;
+    let from = q.from.as_deref().and_then(parse_iso_ns);
+    let to = q.to.as_deref().and_then(parse_iso_ns).map(|t| t + DAY);
+    if from.is_none() && to.is_none() {
+        (0, u64::MAX, default_limit)
+    } else {
+        (from.unwrap_or(0), to.unwrap_or(u64::MAX), max_limit)
+    }
+}
+
+async fn trades(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<ReportRange>,
+) -> ApiResult {
     need(&actor, "reports.view")?;
     let __allowed = tenant_logins(&ctx, &actor).await?;
+    let (from, to, limit) = report_window(&q, 500, 5_000);
     Ok(Json(tenant_filter(
-        ctx.qr(views::trades).await?,
+        ctx.qr(move |e| views::trades(e, from, to, limit)).await?,
         &__allowed,
     )))
 }
 
-async fn reconciliation(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+async fn reconciliation(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<ReportRange>,
+) -> ApiResult {
     need(&actor, "reports.view")?;
     let __allowed = tenant_logins(&ctx, &actor).await?;
+    let (from, to, limit) = report_window(&q, 100, 5_000);
     Ok(Json(tenant_filter(
-        ctx.qr(views::reconciliation).await?,
+        ctx.qr(move |e| views::reconciliation(e, from, to, limit))
+            .await?,
         &__allowed,
     )))
 }
 
-async fn lp_executions(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+async fn lp_executions(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<ReportRange>,
+) -> ApiResult {
     need(&actor, "reports.view")?;
-    Ok(Json(ctx.qr(views::lp_executions).await?))
+    let (from, to, limit) = report_window(&q, 500, 5_000);
+    Ok(Json(
+        ctx.qr(move |e| views::lp_executions(e, from, to, limit))
+            .await?,
+    ))
 }
 
 async fn execution(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

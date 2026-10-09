@@ -264,6 +264,22 @@ export interface LpExecution {
   clients: { orderId: string; login: number; lots: number; price: number; detail?: ClientOrderDetail }[];
   /** Full LP-side detail (absent on older servers / the mock). */
   detail?: LpOrderDetail;
+  /** Optional columns (hidden by default). */
+  clOrdId?: string;
+  kind?: string;
+  attempt?: number;
+  attempts?: number;
+  firstFillMs?: number | null;
+  lastFillMs?: number | null;
+  lpSlipPts?: number | null;
+  sentBid?: number | null;
+  sentAsk?: number | null;
+  limit?: number | null;
+  stop?: number | null;
+  revision?: number;
+  login?: number | null;
+  orderIds?: string;
+  fillCount?: number;
 }
 
 /** One raw FIX frame of the trading session, SOH shown as `|`. */
@@ -626,6 +642,20 @@ export interface ReconciliationRow {
   broker: number;
   /** client P&L + markup = LP P&L (A-book) held for this deal. */
   ok: boolean;
+  /** Optional columns (hidden by default). */
+  openAt?: string | null;
+  holdSecs?: number | null;
+  orderId?: string;
+  platform?: string | null;
+  origin?: string | null;
+  rule?: string | null;
+  clientSlipPts?: number | null;
+  attempts?: number;
+  latencyMs?: number | null;
+  lpSlipPts?: number | null;
+  lpKind?: string | null;
+  lpOrderIds?: string;
+  swap?: number;
   /** Everything behind the deal (absent on the mock). */
   detail?: {
     deals: { dealId: string; orderId: string; at: string; entry: string; side: "buy" | "sell"; lots: number; price: number; lpPrice: number | null; reason: string; pnl: number; lpPnl: number; markup: number; commission: number; swap: number; swapFee: number }[];
@@ -751,15 +781,16 @@ export interface AdminApi {
   /** Empty/absent password keeps the stored one. Restarts the FIX sessions. */
   saveLpConfig(c: LpConfig, actor: Actor): Promise<LpConfig>;
 
-  listTrades(): Promise<Trade[]>;
+  /** Without a range: the newest rows; with one: everything inside it (server-capped). */
+  listTrades(from?: string, to?: string): Promise<Trade[]>;
   statements(): Promise<Statement[]>;
   /** Orders routed to the LP with their fills, newest first. */
-  listLpExecutions(): Promise<LpExecution[]>;
+  listLpExecutions(from?: string, to?: string): Promise<LpExecution[]>;
   /** Execution quality: client slippage, LP leg, latency, per-symbol summary. */
   execution(): Promise<ExecutionReport>;
   /** Realized broker revenue from the ledger (markup, B-book, commission). */
   revenue(): Promise<RevenueReport>;
-  reconciliation(): Promise<ReconciliationRow[]>;
+  reconciliation(from?: string, to?: string): Promise<ReconciliationRow[]>;
 
   listAudit(): Promise<AuditEntry[]>;
 
