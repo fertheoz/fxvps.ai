@@ -1054,6 +1054,8 @@ export class WsTradingApi implements TradingApi {
       sl: this.price(p.symbol, p.sl),
       tp: this.price(p.symbol, p.tp),
       trailing: decimalToBig(p.trailingDistance)?.toNumber(),
+      lpTp: p.lpTp || undefined,
+      lpSl: p.lpSl || undefined,
       commission: 0,
       swap: 0,
     });
@@ -1089,6 +1091,7 @@ export class WsTradingApi implements TradingApi {
       expiry: u.expireAtNs ? nsToMs(u.expireAtNs) : undefined,
       createdAt: u.createdNs ? nsToMs(u.createdNs) : (prev?.createdAt ?? Date.now()),
       triggered: u.stopTriggered || undefined,
+      lpResting: u.lpResting || undefined,
     };
   }
 

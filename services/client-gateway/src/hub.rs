@@ -270,6 +270,7 @@ pub fn order_update(o: &OrderView) -> OrderUpdate {
         stop_triggered: o.stop_triggered,
         close_position_id: id_str(o.close_position_id),
         created_ns: o.created_ns,
+        lp_resting: o.lp_resting,
     }
 }
 
@@ -291,6 +292,8 @@ pub fn position(p: &PositionView) -> Position {
         tp: dec(p.tp),
         trailing_distance: dec(p.trailing_distance),
         open_time_ns: p.open_ts_ns,
+        lp_tp: p.lp_tp,
+        lp_sl: p.lp_sl,
     }
 }
 

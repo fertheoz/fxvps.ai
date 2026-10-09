@@ -243,6 +243,8 @@ pub struct OrderView {
     pub close_position_id: Option<u64>,
     pub stop_triggered: bool,
     pub created_ns: u64,
+    /// Pending entry resting at the LP.
+    pub lp_resting: bool,
 }
 
 /// One open position (hedging accounts can hold several per symbol).
@@ -261,6 +263,9 @@ pub struct PositionView {
     pub tp: Option<Fixed>,
     pub trailing_distance: Option<Fixed>,
     pub open_ts_ns: u64,
+    /// The TP / SL rests at the LP as a real order.
+    pub lp_tp: bool,
+    pub lp_sl: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

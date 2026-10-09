@@ -9,6 +9,16 @@ import { VirtualTable } from './VirtualTable';
 import { Modal } from './Dialogs';
 import { CalendarTab } from './CalendarTab';
 
+/** The order rests at the liquidity provider: filled by the LP, not triggered on our price. */
+function LpBadge() {
+  const t = useT();
+  return (
+    <span className="px-1 rounded text-[9px] leading-4 bg-accent/15 text-accent border border-accent/30" title={t('tb.atLpHint')} data-testid="lp-badge">
+      {t('tb.atLp')}
+    </span>
+  );
+}
+
 const TABS: ToolboxTab[] = ['positions', 'orders', 'history', 'journal', 'calendar'];
 const POS_COLS = '48px 104px 60px 36px 44px 68px 68px 68px 40px 68px 48px 72px minmax(250px,1fr)';
 const ORD_COLS = '48px 104px 60px 104px 44px 140px 68px 68px 68px 104px minmax(110px,1fr)';
@@ -121,8 +131,8 @@ const PositionRow = memo(function PositionRow({ p }: { p: Position }) {
         </>
       ) : (
         <>
-          {cell('sl', p.sl !== undefined ? formatPrice(p.sl, spec.digits) : '—', p.sl !== undefined ? String(p.sl) : '', 'sl')}
-          {cell('tp', p.tp !== undefined ? formatPrice(p.tp, spec.digits) : '—', p.tp !== undefined ? String(p.tp) : '', 'tp')}
+          <span className="flex items-center gap-1">{cell('sl', p.sl !== undefined ? formatPrice(p.sl, spec.digits) : '—', p.sl !== undefined ? String(p.sl) : '', 'sl')}{p.lpSl && <LpBadge />}</span>
+          <span className="flex items-center gap-1">{cell('tp', p.tp !== undefined ? formatPrice(p.tp, spec.digits) : '—', p.tp !== undefined ? String(p.tp) : '', 'tp')}{p.lpTp && <LpBadge />}</span>
           {cell('trail', p.trailing !== undefined ? String(distanceToPips(p.trailing, spec)) : '—', p.trailing !== undefined ? String(distanceToPips(p.trailing, spec)) : '', 'trail', true)}
         </>
       )}
@@ -331,7 +341,7 @@ function OrderRow({ o }: { o: PendingOrder }) {
       <span className="num">{o.id}</span>
       <span className="num text-muted">{formatTime(o.createdAt)}</span>
       <span className="font-medium">{o.symbol}</span>
-      <span className={sideCls(o.side)}>{o.side} {o.type.replace('_', ' ')}{o.triggered ? ' ✓' : ''}</span>
+      <span className={`${sideCls(o.side)} flex items-center gap-1`}>{o.side} {o.type.replace('_', ' ')}{o.triggered ? ' ✓' : ''}{o.lpResting && <LpBadge />}</span>
       {edit ? (
         <>
           <input className={inp} value={lots} onChange={(e) => setLots(e.target.value)} aria-label={t('tb.volume')} data-testid={`order-volume-${o.id}`} />

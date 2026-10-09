@@ -71,6 +71,7 @@ pub fn order_view(
         last_price: last.map(|(_, p)| p.into()),
         reason: o.reject_reason.clone(),
         ts_ns,
+        lp_resting: o.lp_resting.is_some(),
     })
 }
 
@@ -101,6 +102,8 @@ pub fn position_view(e: &Engine, id: PositionId, names: &AccountNames) -> Option
         tp: p.tp.map(Into::into),
         trailing_distance: p.trailing_points.map(|t| distance(spec.point(), t)),
         open_ts_ns: p.opened_ts,
+        lp_tp: p.lp_tp.is_some(),
+        lp_sl: p.lp_sl.is_some(),
     })
 }
 
@@ -119,6 +122,8 @@ fn closed_view(e: &Engine, id: PositionId, names: &AccountNames) -> Option<Posit
         tp: None,
         trailing_distance: None,
         open_ts_ns: 0,
+        lp_tp: false,
+        lp_sl: false,
     })
 }
 

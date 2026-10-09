@@ -302,6 +302,8 @@ export const tr: Record<MessageKey, string> = {
   'tb.price': 'Fiyat',
   'tb.current': 'Güncel',
   'tb.sl': 'Z/D',
+  'tb.atLp': 'LP',
+  'tb.atLpHint': 'Likidite sağlayıcıda gerçek emir olarak bekliyor: LP kendi fiyatından doldurur, bizim grafik çizgimizde tetiklenmez.',
   'tb.tp': 'K/A',
   'tb.commission': 'Kom.',
   'tb.profit': 'Kâr',

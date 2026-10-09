@@ -250,7 +250,7 @@ export const useTerminal = create<TerminalState>()(
       showGrid: true,
       indicators: { sma: false, ema: true, bollinger: false, rsi: false, volume: true },
       indicatorSettings: DEFAULT_INDICATOR_SETTINGS,
-      showAskLine: false,
+      showAskLine: true,
       showEventPins: true,
       oneClickVolume: 10,
       reconnectEveryMs: 3000,
@@ -550,7 +550,13 @@ export const useTerminal = create<TerminalState>()(
     }),
     {
       name: 'fxvps-terminal',
-      version: 1,
+      version: 2,
+      // v2: the ask line is on by default (a short's SL/TP trigger on the ask;
+      // clients read "the price never got there" off the bid-only chart)
+      migrate: (persisted, version) => {
+        const p = (persisted ?? {}) as Partial<TerminalState>;
+        return version < 2 ? { ...p, showAskLine: true } : p;
+      },
       // Older saves hold four chart slots; the six-chart layout needs the rest.
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<TerminalState>;

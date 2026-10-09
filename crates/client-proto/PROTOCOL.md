@@ -162,3 +162,7 @@ PEM, or a JWKS (selected by `kid`). The built-in HS256 key is for local developm
 
 Field numbers are frozen. New fields and messages may be added in v1; clients must ignore
 unknown fields and unknown `body` variants. Breaking changes bump the protocol version.
+
+### v1.3
+
+- `Position.lp_tp` / `Position.lp_sl` (12, 13) and `OrderUpdate.lp_resting` (27): the level / entry rests at the liquidity provider as a real order (filled by the LP, never triggered on the broker quote). Absent = false on older servers.
