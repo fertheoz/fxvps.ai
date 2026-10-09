@@ -381,6 +381,7 @@ pub fn hedge_policy(e: &Engine) -> Value {
         "sliceIntervalS": h.slice_interval_s,
         "varLimitUsd": h.var_limit_usd,
         "varTotalUsd": e.var_total_usd().minor as f64 / 100.0,
+        "volSource": "warehouse-or-ewma",
         "currencyLimitsUsd": h.currency_limits_usd,
         "newsWindowMin": h.news_window_min,
         "newsAction": h.news_action,
@@ -1708,12 +1709,16 @@ pub fn account_activity(e: &Engine, account: u64, since_ns: u64) -> Value {
 pub fn liquidity(e: &Engine, dir: &std::path::Path, symbol: &str, day: &str) -> Value {
     let point = e.symbol_spec(symbol).map_or(1, |s| s.point().raw().max(1)) as f64;
     let ticks = crate::ticks::read(dir, symbol, day);
+    let depth = crate::ticks::hourly_depth(&crate::ticks::read_depth(dir, symbol, day));
     let hours: Vec<Value> = crate::ticks::hourly(&ticks)
         .iter()
         .map(|h| {
+            let (db, da) = depth.get(usize::from(h.hour)).copied().unwrap_or((0.0, 0.0));
             json!({
                 "hour": h.hour,
                 "ticks": h.ticks,
+                "depthBidLots": db / 1e8,
+                "depthAskLots": da / 1e8,
                 "avgSpreadPoints": if h.ticks > 0 { h.avg_spread / point } else { Value::Null.as_f64().unwrap_or(0.0) },
                 "minSpreadPoints": h.min_spread as f64 / point,
                 "maxSpreadPoints": h.max_spread as f64 / point,

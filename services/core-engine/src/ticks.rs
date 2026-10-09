@@ -67,16 +67,86 @@ pub fn day_of(ts_ns: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-struct Sample {
-    symbol: String,
-    tick: Tick,
+enum Sample {
+    Tick { symbol: String, tick: Tick },
+    Depth { symbol: String, rec: DepthRec },
+}
+
+pub const DEPTH_LEVELS: usize = 5;
+pub const DEPTH_BYTES: usize = 8 + DEPTH_LEVELS * 2 * 16;
+
+/// Top-5 book sample (`<SYMBOL>/<day>.depth`, 168 bytes): ts, then 5 bids
+/// and 5 asks as (price, lots) raw 1e8; missing levels are zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepthRec {
+    pub ts_ns: u64,
+    pub bids: [(i64, i64); DEPTH_LEVELS],
+    pub asks: [(i64, i64); DEPTH_LEVELS],
+}
+
+impl DepthRec {
+    pub fn from_levels(ts_ns: u64, bids: &[(i64, i64)], asks: &[(i64, i64)]) -> DepthRec {
+        let mut r = DepthRec {
+            ts_ns,
+            bids: [(0, 0); DEPTH_LEVELS],
+            asks: [(0, 0); DEPTH_LEVELS],
+        };
+        for (i, l) in bids.iter().take(DEPTH_LEVELS).enumerate() {
+            r.bids[i] = *l;
+        }
+        for (i, l) in asks.iter().take(DEPTH_LEVELS).enumerate() {
+            r.asks[i] = *l;
+        }
+        r
+    }
+
+    fn to_bytes(self) -> [u8; DEPTH_BYTES] {
+        let mut b = [0u8; DEPTH_BYTES];
+        b[0..8].copy_from_slice(&self.ts_ns.to_le_bytes());
+        let mut o = 8;
+        for (p, q) in self.bids.iter().chain(self.asks.iter()) {
+            b[o..o + 8].copy_from_slice(&p.to_le_bytes());
+            b[o + 8..o + 16].copy_from_slice(&q.to_le_bytes());
+            o += 16;
+        }
+        b
+    }
+
+    fn from_bytes(b: &[u8]) -> DepthRec {
+        let n = |o: usize| i64::from_le_bytes(b[o..o + 8].try_into().unwrap_or([0; 8]));
+        let mut r = DepthRec {
+            ts_ns: u64::from_le_bytes(b[0..8].try_into().unwrap_or([0; 8])),
+            bids: [(0, 0); DEPTH_LEVELS],
+            asks: [(0, 0); DEPTH_LEVELS],
+        };
+        let mut o = 8;
+        for i in 0..DEPTH_LEVELS {
+            r.bids[i] = (n(o), n(o + 8));
+            o += 16;
+        }
+        for i in 0..DEPTH_LEVELS {
+            r.asks[i] = (n(o), n(o + 8));
+            o += 16;
+        }
+        r
+    }
+
+    /// Total lots on each side (raw).
+    pub fn totals(&self) -> (i64, i64) {
+        (
+            self.bids.iter().map(|l| l.1).sum(),
+            self.asks.iter().map(|l| l.1).sum(),
+        )
+    }
 }
 
 /// Writer handle: `record` never blocks the quote path.
 pub struct TickStore {
     tx: mpsc::SyncSender<Sample>,
     sample_ns: u64,
+    depth_ns: u64,
     last: std::sync::Mutex<BTreeMap<String, u64>>,
+    last_depth: std::sync::Mutex<BTreeMap<String, u64>>,
 }
 
 impl std::fmt::Debug for TickStore {
@@ -98,6 +168,10 @@ impl TickStore {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(30);
+        let depth_ms = std::env::var("CORE_DEPTH_SAMPLE_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(5000);
         let (tx, rx) = mpsc::sync_channel::<Sample>(8192);
         std::thread::Builder::new()
             .name("tick-store".into())
@@ -106,7 +180,9 @@ impl TickStore {
         Arc::new(TickStore {
             tx,
             sample_ns: sample_ms.max(1) * 1_000_000,
+            depth_ns: depth_ms.max(1) * 1_000_000,
             last: std::sync::Mutex::new(BTreeMap::new()),
+            last_depth: std::sync::Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -129,7 +205,7 @@ impl TickStore {
             }
             last.insert(symbol.to_string(), ts_ns);
         }
-        let _ = self.tx.try_send(Sample {
+        let _ = self.tx.try_send(Sample::Tick {
             symbol: symbol.to_string(),
             tick: Tick {
                 ts_ns,
@@ -140,6 +216,26 @@ impl TickStore {
             },
         });
     }
+
+    /// Is a depth sample of `symbol` due (one per `depth_ms`)? Cheap check
+    /// so the caller builds the merged book only when needed.
+    pub fn depth_due(&self, symbol: &str, ts_ns: u64) -> bool {
+        let mut last = self.last_depth.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = last.get(symbol).copied().unwrap_or(0);
+        if ts_ns < prev.saturating_add(self.depth_ns) {
+            return false;
+        }
+        last.insert(symbol.to_string(), ts_ns);
+        true
+    }
+
+    /// Samples the top 5 levels of each side ((price, lots) raw, best first).
+    pub fn record_depth(&self, symbol: &str, ts_ns: u64, bids: &[(i64, i64)], asks: &[(i64, i64)]) {
+        let _ = self.tx.try_send(Sample::Depth {
+            symbol: symbol.to_string(),
+            rec: DepthRec::from_levels(ts_ns, bids, asks),
+        });
+    }
 }
 
 fn writer(dir: PathBuf, rx: mpsc::Receiver<Sample>, keep_days: u64) {
@@ -148,24 +244,32 @@ fn writer(dir: PathBuf, rx: mpsc::Receiver<Sample>, keep_days: u64) {
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(s) => {
-                let day = day_of(s.tick.ts_ns);
+                let (symbol, ts, ext, bytes): (String, u64, &str, Vec<u8>) = match s {
+                    Sample::Tick { symbol, tick } => {
+                        (symbol, tick.ts_ns, "tick", tick.to_bytes().to_vec())
+                    }
+                    Sample::Depth { symbol, rec } => {
+                        (symbol, rec.ts_ns, "depth", rec.to_bytes().to_vec())
+                    }
+                };
+                let day = day_of(ts);
                 if day != today {
                     today = day.clone();
                     files.clear();
-                    prune(&dir, keep_days, s.tick.ts_ns);
+                    prune(&dir, keep_days, ts);
                 }
-                let key = (s.symbol.clone(), day.clone());
+                let key = (format!("{symbol}/{ext}"), day.clone());
                 let w = match files.get_mut(&key) {
                     Some(w) => w,
                     None => {
-                        let d = dir.join(&s.symbol);
+                        let d = dir.join(&symbol);
                         if fs::create_dir_all(&d).is_err() {
                             continue;
                         }
                         let Ok(f) = OpenOptions::new()
                             .create(true)
                             .append(true)
-                            .open(d.join(format!("{day}.tick")))
+                            .open(d.join(format!("{day}.{ext}")))
                         else {
                             continue;
                         };
@@ -174,7 +278,7 @@ fn writer(dir: PathBuf, rx: mpsc::Receiver<Sample>, keep_days: u64) {
                             .or_insert_with(|| BufWriter::with_capacity(16 * 1024, f))
                     }
                 };
-                let _ = w.write_all(&s.tick.to_bytes());
+                let _ = w.write_all(&bytes);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 for w in files.values_mut() {
@@ -257,6 +361,85 @@ pub fn read(dir: &Path, symbol: &str, day: &str) -> Vec<Tick> {
         .collect()
 }
 
+/// All depth samples of `symbol` on `day`, in time order.
+pub fn read_depth(dir: &Path, symbol: &str, day: &str) -> Vec<DepthRec> {
+    let Ok(mut f) = File::open(dir.join(symbol).join(format!("{day}.depth"))) else {
+        return Vec::new();
+    };
+    let mut buf = Vec::new();
+    if f.read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+    buf.as_chunks::<DEPTH_BYTES>()
+        .0
+        .iter()
+        .map(|c| DepthRec::from_bytes(c))
+        .collect()
+}
+
+/// Average top-5 lots per side per hour from the depth samples (raw).
+pub fn hourly_depth(recs: &[DepthRec]) -> Vec<(f64, f64)> {
+    let mut sum = vec![(0f64, 0f64, 0u32); 24];
+    for r in recs {
+        let h = ((r.ts_ns / 1_000_000_000) % 86_400 / 3_600) as usize;
+        let (b, a) = r.totals();
+        sum[h].0 += b as f64;
+        sum[h].1 += a as f64;
+        sum[h].2 += 1;
+    }
+    sum.into_iter()
+        .map(|(b, a, n)| {
+            if n > 0 {
+                (b / f64::from(n), a / f64::from(n))
+            } else {
+                (0.0, 0.0)
+            }
+        })
+        .collect()
+}
+
+/// Realised daily volatility of `symbol` (fraction) from the last `days`
+/// day files: one mid per minute, relative returns, σ_min × √1440. `None`
+/// when fewer than `min_samples` minute returns exist.
+pub fn realised_daily_sigma(
+    dir: &Path,
+    symbol: &str,
+    days: usize,
+    min_samples: usize,
+) -> Option<(f64, usize)> {
+    let mut mids: Vec<(u64, f64)> = Vec::new();
+    for day in days_list(dir, symbol).into_iter().take(days).rev() {
+        let mut last_minute = u64::MAX;
+        for t in read(dir, symbol, &day) {
+            let minute = t.ts_ns / 60_000_000_000;
+            if minute == last_minute || t.bid <= 0 || t.ask <= 0 {
+                continue;
+            }
+            last_minute = minute;
+            mids.push((minute, (t.bid + t.ask) as f64 / 2.0));
+        }
+    }
+    if mids.len() < min_samples + 1 {
+        return None;
+    }
+    let rets: Vec<f64> = mids
+        .windows(2)
+        .filter(|w| w[1].0 > w[0].0 && w[1].0 - w[0].0 <= 5) // skip gaps (closed market)
+        .map(|w| (w[1].1 - w[0].1) / w[0].1)
+        .collect();
+    if rets.len() < min_samples {
+        return None;
+    }
+    let n = rets.len() as f64;
+    let mean = rets.iter().sum::<f64>() / n;
+    let var = rets.iter().map(|r| (r - mean) * (r - mean)).sum::<f64>() / (n - 1.0);
+    Some(((var * 1440.0).sqrt(), rets.len()))
+}
+
+fn days_list(dir: &Path, symbol: &str) -> Vec<String> {
+    days(dir, symbol)
+}
+
 /// Last tick at or before `ts_ns` (ticks in time order).
 pub fn price_at(ticks: &[Tick], ts_ns: u64) -> Option<Tick> {
     let i = ticks.partition_point(|t| t.ts_ns <= ts_ns);
@@ -318,6 +501,52 @@ mod tests {
         assert_eq!(day_of(0), "1970-01-01");
         assert_eq!(day_of(1_709_294_400 * 1_000_000_000), "2024-03-01");
         assert_eq!(day_of(1_791_531_015 * 1_000_000_000), "2026-10-09");
+    }
+
+    #[test]
+    fn depth_round_trip_and_realised_volatility() {
+        let dir = std::env::temp_dir().join(format!("depth-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = TickStore::open(&dir);
+        let base = 1_791_504_000u64 * 1_000_000_000;
+        assert!(store.depth_due("EURUSD", base + 1));
+        assert!(
+            !store.depth_due("EURUSD", base + 2_000_000_000),
+            "5 s sampling"
+        );
+        store.record_depth(
+            "EURUSD",
+            base + 1,
+            &[(110_000_000, 100_000_000), (109_999_000, 200_000_000)],
+            &[(110_010_000, 50_000_000)],
+        );
+        // 120 one-minute mids with a steady ±0.1 % wobble
+        for i in 0..120u64 {
+            let mid = 110_000_000i64 + if i % 2 == 0 { 110_000 } else { -110_000 };
+            store.record(
+                "EURUSD",
+                base + i * 60_000_000_000 + 10,
+                mid - 5_000,
+                mid + 5_000,
+                1,
+                1,
+            );
+        }
+        drop(store);
+        std::thread::sleep(Duration::from_millis(300));
+        let d = read_depth(&dir, "EURUSD", "2026-10-09");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].bids[1], (109_999_000, 200_000_000));
+        assert_eq!(d[0].asks[1], (0, 0));
+        assert_eq!(d[0].totals(), (300_000_000, 50_000_000));
+        let h = hourly_depth(&d);
+        assert_eq!(h[0], (300_000_000.0, 50_000_000.0));
+        let (sigma, n) = realised_daily_sigma(&dir, "EURUSD", 5, 50).unwrap();
+        assert_eq!(n, 119);
+        // per-minute moves of ~0.2 % → daily ≈ 0.2 % × √1440 ≈ 7.6 %
+        assert!((0.06..0.09).contains(&sigma), "{sigma}");
+        assert!(realised_daily_sigma(&dir, "EURUSD", 5, 500).is_none());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

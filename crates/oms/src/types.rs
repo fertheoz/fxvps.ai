@@ -592,6 +592,12 @@ pub enum Command {
     SetCalendar(TradingCalendar),
     /// High-impact calendar events (ns) for the rules' news window.
     SetNewsTimes(Vec<u64>),
+    /// Realised daily volatility of a symbol from the tick warehouse
+    /// (fraction × 1e8), replacing the in-engine EWMA for VaR while fresh.
+    SetVolatility {
+        symbol: String,
+        daily_sigma_e8: u64,
+    },
     /// Sends aggregated A-book orders (when aggregation is enabled).
     FlushLp,
     /// Daily rollover: charge/credit swaps.

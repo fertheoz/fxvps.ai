@@ -502,6 +502,13 @@ pub async fn run_bridge(
             if let Some((bid, ask)) = agg.update(&lp, sym, book) {
                 if let Some(t) = &ticks {
                     t.record(sym, q.ts_recv_ns, bid.raw(), ask.raw(), top.0, top.1);
+                    if t.depth_due(sym, q.ts_recv_ns) {
+                        let m = agg.merged(sym);
+                        let lv = |v: &[(Price, Qty)]| -> Vec<(i64, i64)> {
+                            v.iter().take(5).map(|(p, q)| (p.raw(), q.raw())).collect()
+                        };
+                        t.record_depth(sym, q.ts_recv_ns, &lv(&m.bids), &lv(&m.asks));
+                    }
                 }
                 let cmd = Command::Quote {
                     symbol: sym.to_string(),

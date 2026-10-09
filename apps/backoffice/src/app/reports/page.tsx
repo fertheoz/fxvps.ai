@@ -424,7 +424,7 @@ function AnalyticsTab() {
         {liq.data && liq.data.ticks > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-xs tabular-nums">
-              <thead><tr>{[t("reports.hourUtc"), t("reports.ticks"), t("reports.spreadAvg"), t("reports.spreadMin"), t("reports.spreadMax"), t("reports.topBid"), t("reports.topAsk")].map((h, i) => <th key={i} className="px-2 py-1 text-left font-medium text-muted-foreground">{h}</th>)}</tr></thead>
+              <thead><tr>{[t("reports.hourUtc"), t("reports.ticks"), t("reports.spreadAvg"), t("reports.spreadMin"), t("reports.spreadMax"), t("reports.topBid"), t("reports.topAsk"), t("reports.depthBid"), t("reports.depthAsk")].map((h, i) => <th key={i} className="px-2 py-1 text-left font-medium text-muted-foreground">{h}</th>)}</tr></thead>
               <tbody>
                 {liq.data.hours.map((h) => (
                   <tr key={h.hour} className="border-t border-border/60">
@@ -435,6 +435,8 @@ function AnalyticsTab() {
                     <td className="px-2 py-0.5">{h.ticks ? f.num(h.maxSpreadPoints, 1) : "—"}</td>
                     <td className="px-2 py-0.5">{h.ticks ? f.num(h.avgBidLots, 1) : "—"}</td>
                     <td className="px-2 py-0.5">{h.ticks ? f.num(h.avgAskLots, 1) : "—"}</td>
+                    <td className="px-2 py-0.5">{h.depthBidLots ? f.num(h.depthBidLots, 1) : "—"}</td>
+                    <td className="px-2 py-0.5">{h.depthAskLots ? f.num(h.depthAskLots, 1) : "—"}</td>
                   </tr>
                 ))}
               </tbody>
