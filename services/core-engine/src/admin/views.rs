@@ -765,6 +765,7 @@ pub fn group(g: &GroupConfig, all_symbols: &[String]) -> Value {
         "minSpreadPoints": g.min_spread_points,
         "maxSpreadPoints": g.max_spread_points,
         "skew": g.skew.map(|s| json!({ "pointsPerLot": s.centipoints_per_lot as f64 / 100.0, "maxPoints": s.max_points })),
+        "lastLook": g.last_look.map(|l| json!({ "holdMs": l.hold_ms, "maxMovePoints": l.max_move_points })),
         "swapMultiplier": g.swap_multiplier_pct as f64 / 100.0,
         "leverageTiers": g.leverage_tiers.iter().map(|t| json!({"from": t.from, "leverage": t.leverage})).collect::<Vec<_>>(),
         "swapFreeFee": g.swap_free_fee_per_lot as f64 / 100.0,
