@@ -2087,6 +2087,13 @@ async fn save_rules(
                 "windowMinutes / newsWindowMin must be 1..1440",
             ));
         }
+        if r.minutes_utc.is_some_and(|(a, b)| a >= 1440 || b > 1440)
+            || r.weekdays.iter().any(|d| *d > 6)
+        {
+            return Err(ApiError::bad(
+                "minutesUtc must be within 0..1440, weekdays 0..6",
+            ));
+        }
     }
     let n = rules.len();
     let mut store = ctx.store.lock().await;
@@ -2372,6 +2379,23 @@ struct LeverageWindowDto {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct MarkupWindowDto {
+    #[serde(default)]
+    weekdays: Vec<u8>,
+    from_min: u16,
+    to_min: u16,
+    add_points: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NewsMarkupDto {
+    window_min: u32,
+    add_points: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GroupDto {
     currency: String,
     leverage: u32,
@@ -2416,6 +2440,11 @@ struct GroupDto {
     swap_free_grace_days: Option<u32>,
     #[serde(default)]
     pass_price_improvement: Option<bool>,
+    /// Scheduled extra markup windows and news markup.
+    #[serde(default)]
+    markup_windows: Option<Vec<MarkupWindowDto>>,
+    #[serde(default)]
+    news_markup: Option<Option<NewsMarkupDto>>,
     /// A-book TP / pending limit entries rest at the LP as GTC limit orders.
     #[serde(default)]
     lp_resting: Option<bool>,
@@ -2616,6 +2645,48 @@ async fn save_group(
     }
     if let Some(r) = g.lp_resting {
         cfg.lp_resting = r;
+    }
+    if let Some(ws) = g.markup_windows {
+        if ws.len() > 50 {
+            return Err(ApiError::bad("at most 50 markup windows"));
+        }
+        let mut out = Vec::new();
+        for w in ws {
+            if w.from_min >= 1440
+                || w.to_min > 1440
+                || !(-1000..=1000).contains(&w.add_points)
+                || w.weekdays.iter().any(|d| *d > 6)
+            {
+                return Err(ApiError::bad(
+                    "markupWindows: minutes 0..1440, addPoints -1000..1000, weekdays 0..6",
+                ));
+            }
+            out.push(risk::MarkupWindow {
+                weekdays: w.weekdays,
+                from_min: w.from_min,
+                to_min: w.to_min,
+                add_points: w.add_points,
+            });
+        }
+        cfg.markup_windows = out;
+    }
+    if let Some(n) = g.news_markup {
+        cfg.news_markup = match n {
+            Some(n)
+                if n.window_min == 0
+                    || n.window_min > 1440
+                    || !(-1000..=1000).contains(&n.add_points) =>
+            {
+                return Err(ApiError::bad(
+                    "newsMarkup: windowMin 1..1440, addPoints -1000..1000",
+                ))
+            }
+            Some(n) => Some(risk::NewsMarkup {
+                window_min: n.window_min,
+                add_points: n.add_points,
+            }),
+            None => None,
+        };
     }
     let value = g.commission_value.unwrap_or(0);
     if !(0..=10_000_000).contains(&value) {

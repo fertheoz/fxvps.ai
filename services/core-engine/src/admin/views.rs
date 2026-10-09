@@ -700,6 +700,10 @@ pub fn group(g: &GroupConfig, all_symbols: &[String]) -> Value {
         })).collect::<Vec<_>>(),
         "passPriceImprovement": g.pass_price_improvement,
         "lpResting": g.lp_resting,
+        "markupWindows": g.markup_windows.iter().map(|w| json!({
+            "weekdays": w.weekdays, "fromMin": w.from_min, "toMin": w.to_min, "addPoints": w.add_points,
+        })).collect::<Vec<_>>(),
+        "newsMarkup": g.news_markup.map(|n| json!({ "windowMin": n.window_min, "addPoints": n.add_points })),
         "swapMultiplier": g.swap_multiplier_pct as f64 / 100.0,
         "leverageTiers": g.leverage_tiers.iter().map(|t| json!({"from": t.from, "leverage": t.leverage})).collect::<Vec<_>>(),
         "swapFreeFee": g.swap_free_fee_per_lot as f64 / 100.0,

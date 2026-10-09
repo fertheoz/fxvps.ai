@@ -6,6 +6,9 @@ import { BookBadge } from "@/components/badges";
 import { NumField, SelectField, TextField } from "@/components/form";
 import { useToast } from "@/components/shell/providers";
 import { RULE_PLATFORMS, type RulePlatform } from "@/lib/api";
+
+const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 import { api, useApiMutation, useApiQuery } from "@/lib/queries";
 import { useActor, useT } from "@/lib/hooks";
 import type { RoutingRule } from "@/lib/api";
@@ -18,7 +21,7 @@ const list = (v: string) => v.split(/[,\s]+/).map((x) => x.trim()).filter(Boolea
 const uid = () => Math.random().toString(36).slice(2, 8);
 
 function blank(): RoutingRule {
-  return { id: uid(), name: "", enabled: true, groups: [], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: null, aBookPct: null, markupPoints: null, maxSlippagePoints: null, partialFill: null, minToxicity: null, maxToxicity: null, platforms: [], ipPrefixes: [], minNopLots: null, maxNopLots: null, windowMinutes: null, minWindowLots: null, scalper: null, newsWindowMin: null };
+  return { id: uid(), name: "", enabled: true, groups: [], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: null, aBookPct: null, markupPoints: null, maxSlippagePoints: null, partialFill: null, minToxicity: null, maxToxicity: null, platforms: [], ipPrefixes: [], minNopLots: null, maxNopLots: null, windowMinutes: null, minWindowLots: null, scalper: null, newsWindowMin: null, minutesUtc: null, weekdays: [], minSpreadPoints: null };
 }
 
 /** Partial-fill override as a select value (+ attempts). */
@@ -70,6 +73,9 @@ export default function RulesPage() {
     if (r.windowMinutes !== null && r.minWindowLots !== null) parts.push(`≥ ${r.minWindowLots} lot / ${r.windowMinutes} min`);
     if (r.scalper !== null) parts.push(r.scalper ? t("rules.scalperYes") : t("rules.scalperNo"));
     if (r.newsWindowMin !== null) parts.push(`${t("rules.news")} ±${r.newsWindowMin} min`);
+    if (r.minutesUtc) parts.push(`${hhmm(r.minutesUtc[0])}–${hhmm(r.minutesUtc[1])} UTC`);
+    if (r.weekdays?.length) parts.push(r.weekdays.map((d) => DAY_KEYS[d]).join(","));
+    if (r.minSpreadPoints !== null) parts.push(`${t("rules.spread")} ≥ ${r.minSpreadPoints}`);
     return parts.length ? parts.join(" · ") : t("rules.matchAll");
   };
   const action = (r: RoutingRule) => {
@@ -225,6 +231,9 @@ function RuleDialog({ rule, onClose, onSave }: { rule: RoutingRule; onClose: () 
         <NumField label={t("rules.minWindowLots")} value={r.minWindowLots ?? 0} onChange={(v) => set("minWindowLots", v > 0 ? v : null)} step={0.1} />
         <SelectField label={t("rules.scalper")} value={r.scalper === null ? "any" : r.scalper ? "yes" : "no"} options={["any", "yes", "no"] as const} onChange={(v) => set("scalper", v === "any" ? null : v === "yes")} />
         <NumField label={t("rules.newsWindow")} value={r.newsWindowMin ?? 0} onChange={(v) => set("newsWindowMin", v > 0 ? Math.min(1440, v) : null)} step={5} />
+        <TextField label={t("rules.minutesUtc")} value={r.minutesUtc ? `${hhmm(r.minutesUtc[0])}-${hhmm(r.minutesUtc[1])}` : ""} onChange={(v) => { const m = v.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/); set("minutesUtc", m ? [Math.min(1439, Number(m[1]) * 60 + Number(m[2])), Math.min(1440, Number(m[3]) * 60 + Number(m[4]))] : null); }} />
+        <TextField label={`${t("rules.weekdays")} (${t("groups.weekdaysHint")})`} value={(r.weekdays ?? []).map((d) => DAY_KEYS[d]).join(", ")} onChange={(v) => set("weekdays", list(v).map((x) => DAY_KEYS.indexOf(x.toLowerCase())).filter((d) => d >= 0))} />
+        <NumField label={t("rules.minSpread")} value={r.minSpreadPoints ?? 0} onChange={(v) => set("minSpreadPoints", v > 0 ? v : null)} step={1} />
         <SelectField label={t("groups.partialFillShort")} value={p.kind} options={PARTIALS} onChange={(v) => setPartial(v)} />
         <NumField label={t("groups.maxAttempts")} value={p.attempts} onChange={(v) => setPartial("retry", Math.min(10, Math.max(1, v)))} step={1} disabled={p.kind !== "retry"} />
       </div>

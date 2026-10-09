@@ -174,6 +174,12 @@ export interface RoutingRule {
   scalper: boolean | null;
   /** Within ± minutes of a high-impact calendar event; null = any. */
   newsWindowMin: number | null;
+  /** Daily window in minutes of the UTC day [from, to), wraps past midnight; null = any. */
+  minutesUtc: [number, number] | null;
+  /** 0 = Monday .. 6 = Sunday; empty = every day. */
+  weekdays: number[];
+  /** Volatility: raw LP spread at least this many points; null = any. */
+  minSpreadPoints: number | null;
 }
 
 export type RulePlatform = "unknown" | "terminal" | "mobile" | "api" | "bridge" | "copy";

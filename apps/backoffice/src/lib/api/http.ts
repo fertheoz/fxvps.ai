@@ -20,6 +20,7 @@ const fromWireRule = (w: WireRule): RoutingRule => {
   return {
     ...r2,
     platforms: r2.platforms ?? [], ipPrefixes: r2.ipPrefixes ?? [], windowMinutes: r2.windowMinutes ?? null, scalper: r2.scalper ?? null, newsWindowMin: r2.newsWindowMin ?? null,
+    minutesUtc: r2.minutesUtc ?? null, weekdays: r2.weekdays ?? [], minSpreadPoints: r2.minSpreadPoints ?? null,
     minLots: lots(minCentilots), maxLots: lots(maxCentilots), minNopLots: lots(minNopCentilots), maxNopLots: lots(maxNopCentilots), minWindowLots: lots(minWindowCentilots),
   };
 };

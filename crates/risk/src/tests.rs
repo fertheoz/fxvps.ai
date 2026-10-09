@@ -448,3 +448,42 @@ fn markout_never_lowers_the_score() {
     }
     assert_eq!(g.toxicity(), 82);
 }
+
+#[test]
+fn daily_window_wraps_midnight_and_honours_weekdays() {
+    use crate::{daily_window_active, minute_of_day_utc, weekday_mon0};
+    const H: u64 = 3_600_000_000_000;
+    // 2026-10-09 (a Friday) 21:50 UTC
+    let fri_2150 = 1_791_582_600 * 1_000_000_000u64;
+    assert_eq!(weekday_mon0(fri_2150), 4);
+    assert_eq!(minute_of_day_utc(fri_2150), 21 * 60 + 50);
+    // rollover window 21:55 .. 22:10 every day
+    assert!(!daily_window_active(
+        &[],
+        21 * 60 + 55,
+        22 * 60 + 10,
+        fri_2150
+    ));
+    assert!(daily_window_active(
+        &[],
+        21 * 60 + 55,
+        22 * 60 + 10,
+        fri_2150 + 10 * 60_000_000_000
+    ));
+    // wrapping window 23:00 .. 01:00: Friday 23:30 and Saturday 00:30 (counts as Friday's window)
+    assert!(daily_window_active(
+        &[4],
+        23 * 60,
+        60,
+        fri_2150 + 100 * 60_000_000_000
+    ));
+    assert!(daily_window_active(
+        &[4],
+        23 * 60,
+        60,
+        fri_2150 + 160 * 60_000_000_000
+    ));
+    assert!(!daily_window_active(&[4], 23 * 60, 60, fri_2150 + 5 * H));
+    // weekday filter: Monday only
+    assert!(!daily_window_active(&[0], 0, 1440, fri_2150));
+}
