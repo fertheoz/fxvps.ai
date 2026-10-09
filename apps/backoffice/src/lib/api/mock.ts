@@ -584,6 +584,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     },
 
     async listFixSessions() { tick(); return delay(s.fix); },
+    async fixMessages(clOrdId: string) { return delay({ clOrdId, messages: [] }); },
     async getCopyOverview() { return delay({ strategies: copyStrategies, subscriptions: [], groups: ["demo-retail", "demo-hedge"] }); },
     async saveCopyStrategy(account, s) {
       const rec = { account, ...s, pnl30d: 0, return30dPct: null, deals30d: 0, winRate: null, followers: 0, maxDrawdown: 0, maxDrawdownPct: null, equityCurve: [], returnCurvePct: [] };

@@ -167,6 +167,7 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     esmaPresets: () => call("GET", "/v1/risk/presets"),
     applyPreset: (presetId, groupId, actor) => call("POST", `/v1/groups/${enc(groupId)}/apply-preset`, { presetId }, actor),
     listFixSessions: () => call("GET", "/v1/lp/sessions"),
+    fixMessages: (clOrdId) => call("GET", `/v1/lp/fix-messages?clOrdId=${enc(clOrdId)}`),
     listInstitutions: () => call("GET", "/v1/bridge/institutions"),
     getAudit: () => call("GET", "/v1/denetim"),
     getPartnerOverview: () => call("GET", "/v1/partner/overview"),

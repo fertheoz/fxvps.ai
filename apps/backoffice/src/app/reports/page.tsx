@@ -401,6 +401,53 @@ const Kv = ({ k, v, tone }: { k: string; v: React.ReactNode; tone?: "good" | "ba
 );
 const slipTone2 = (v: number | null | undefined): "good" | "bad" | undefined => (v === null || v === undefined || v === 0 ? undefined : v < 0 ? "good" : "bad");
 
+const FIX_TYPES: Record<string, string> = { D: "NewOrderSingle", "8": "ExecutionReport", F: "OrderCancelRequest", G: "OrderCancelReplaceRequest", "9": "OrderCancelReject", "3": "Reject", j: "BusinessMessageReject", AN: "RequestForPositions", AP: "PositionReport", AD: "TradeCaptureReportRequest", AE: "TradeCaptureReport", AQ: "TradeCaptureReportRequestAck" };
+
+/** The raw FIX frames behind one LP order, with a copy button. Read-only:
+ * the treasurer pastes them into their own correspondence with the LP. */
+function FixMessages({ clOrdId }: { clOrdId: string }) {
+  const t = useT();
+  const f = useFormat();
+  const toast = useToast();
+  const [open, setOpen] = React.useState(false);
+  const q = useApiQuery("fixMessages", [clOrdId], { enabled: open });
+  const msgs = q.data?.messages ?? [];
+  const copy = async () => {
+    const text = msgs.map((m) => `${m.at} ${m.dir === "out" ? "→ LP" : "← LP"} ${m.msgType} ${FIX_TYPES[m.msgType] ?? ""}\n${m.raw}`).join("\n\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(t("detail.fixCopied"));
+    } catch {
+      toast(t("detail.fixCopyFailed"));
+    }
+  };
+  return (
+    <div className="sm:col-span-2">
+      <div className="flex items-center gap-2">
+        <button className="text-xs text-primary hover:underline" onClick={() => setOpen((o) => !o)} data-testid="fix-messages-toggle">{open ? "▾" : "▸"} {t("detail.fixMessages")} · {clOrdId}</button>
+        {open && msgs.length > 0 && <Button size="sm" variant="outline" onClick={() => void copy()} data-testid="fix-messages-copy">{t("detail.fixCopy")}</Button>}
+      </div>
+      {open && (
+        <div className="mt-1 grid gap-1">
+          {q.isLoading && <div className="text-xs text-muted-foreground">{t("common.loading")}</div>}
+          {!q.isLoading && msgs.length === 0 && <div className="text-xs text-muted-foreground">{t("detail.fixNone")}</div>}
+          {msgs.map((m, i) => (
+            <div key={i} className="rounded border border-border/70 bg-background p-1.5">
+              <div className="mb-0.5 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                <span>{f.date(m.at)}</span>
+                <span className={m.dir === "out" ? "text-primary" : "text-emerald-600 dark:text-emerald-400"}>{m.dir === "out" ? "→ LP" : "← LP"}</span>
+                <span>35={m.msgType} {FIX_TYPES[m.msgType] ?? ""}</span>
+                {m.clOrdId && <span>11={m.clOrdId}</span>}{m.origClOrdId && <span>41={m.origClOrdId}</span>}{m.orderId && <span>37={m.orderId}</span>}{m.execId && <span>17={m.execId}</span>}
+              </div>
+              <pre className="whitespace-pre-wrap break-all font-mono text-[11px]">{m.raw}</pre>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** LP-side timeline of one LP order: sent → reports, each with its latency. */
 function LpTimeline({ d, f }: { d: LpOrderDetail; f: ReturnType<typeof useFormat> }) {
   const t = useT();
@@ -427,6 +474,7 @@ function LpTimeline({ d, f }: { d: LpOrderDetail; f: ReturnType<typeof useFormat
           </div>
         ))}
       </div>
+      {d.clOrdId && <FixMessages clOrdId={d.clOrdId} />}
     </div>
   );
 }
