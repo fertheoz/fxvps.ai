@@ -10,7 +10,7 @@ use super::store::{
 use super::{need, views, AdminCtx, ApiError, ApiResult, ClientActor};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use money::{Currency, Money, Price, Qty};
 use oms::{Command, Engine, Event};
@@ -133,6 +133,8 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/risk/presets", get(presets))
         .route("/v1/risk/hedge", get(hedge_get).put(hedge_put))
         .route("/v1/risk/hedge/manual", post(hedge_manual))
+        .route("/v1/pricing/markup", get(markup_list).put(markup_put))
+        .route("/v1/pricing/markup/{id}", delete(markup_delete))
         .route("/v1/risk/hedge/preview", post(hedge_preview))
         .route(
             "/v1/alerts/rules",
@@ -3202,6 +3204,115 @@ async fn hedge_put(
     drop(store);
     ctx.notify(&["hedgePolicy", "exposure", "listAudit"]);
     Ok(Json(ctx.q(views::hedge_policy).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TempMarkupReq {
+    #[serde(default)]
+    group: String,
+    #[serde(default)]
+    symbol: Option<String>,
+    points: i64,
+    /// Seconds from now; 1..=86400.
+    ttl_s: u64,
+    #[serde(default)]
+    reason: String,
+}
+
+/// Active and pending temporary markups.
+async fn markup_list(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "groups.view")?;
+    Ok(Json(ctx.q(views::temp_markups).await?))
+}
+
+/// Real-time markup API (parça 12): extra points for a group / symbol for a
+/// while. Needs MFA (API keys included).
+async fn markup_put(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(req): Json<TempMarkupReq>,
+) -> ApiResult {
+    need(&actor, "groups.edit")?;
+    if !actor.mfa_ok {
+        return Err(ApiError::forbidden("mfa"));
+    }
+    if !(1..=86_400).contains(&req.ttl_s) {
+        return Err(ApiError::bad("ttlS must be 1..86400"));
+    }
+    if !(-1000..=1000).contains(&req.points) || req.points == 0 {
+        return Err(ApiError::bad("points must be -1000..1000, not 0"));
+    }
+    if req.reason.len() > 120 || req.group.len() > 64 {
+        return Err(ApiError::bad("reason ≤ 120, group ≤ 64 chars"));
+    }
+    let group = req.group.trim().to_string();
+    let symbol = req
+        .symbol
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty());
+    let (g, s) = (group.clone(), symbol.clone());
+    let known = ctx
+        .q(move |e| {
+            (g.is_empty() || e.groups().any(|x| x.name == g))
+                && s.as_deref().is_none_or(|s| e.symbol_spec(s).is_some())
+        })
+        .await?;
+    if !known {
+        return Err(ApiError::bad("unknown group or symbol"));
+    }
+    let now = domain::now_ns();
+    let details = format!(
+        "{:+} points {} {} for {} s{}",
+        req.points,
+        if group.is_empty() {
+            "all groups"
+        } else {
+            &group
+        },
+        symbol.as_deref().unwrap_or("all symbols"),
+        req.ttl_s,
+        if req.reason.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", req.reason)
+        }
+    );
+    let mut store = ctx.store.lock().await;
+    ctx.cmd(Command::SetTempMarkup(oms::TempMarkup {
+        id: 0,
+        group,
+        symbol,
+        points: req.points,
+        from: now,
+        until: now + req.ttl_s * 1_000_000_000,
+        reason: req.reason,
+    }))
+    .await?;
+    store.append(&actor, AdminCmd::TempMarkup { details })?;
+    drop(store);
+    ctx.notify(&["tempMarkups", "listAudit"]);
+    Ok(Json(ctx.q(views::temp_markups).await?))
+}
+
+async fn markup_delete(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Path(id): Path<String>,
+) -> ApiResult {
+    need(&actor, "groups.edit")?;
+    let id: u64 = id.parse().map_err(|_| ApiError::bad("bad id"))?;
+    let mut store = ctx.store.lock().await;
+    ctx.cmd(Command::ClearTempMarkup { id }).await?;
+    store.append(
+        &actor,
+        AdminCmd::TempMarkup {
+            details: format!("cleared #{id}"),
+        },
+    )?;
+    drop(store);
+    ctx.notify(&["tempMarkups", "listAudit"]);
+    Ok(Json(ctx.q(views::temp_markups).await?))
 }
 
 #[derive(Deserialize)]

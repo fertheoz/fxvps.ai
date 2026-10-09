@@ -503,6 +503,9 @@ export interface AlertRulesView { rules: AlertRule[]; metrics: string[]; evals: 
 export interface HedgePreviewRow { symbol: string; bBookNetLots: number; hedgeLots: number; targetLots: number; deltaLots: number; firstOrder: { side: "buy" | "sell"; lots: number } | null; limitLots: number | null; varUsd: number | null }
 export interface HedgePreview { symbols: HedgePreviewRow[]; varTotalUsd: number; varLimitUsd: number | null; varOver: boolean; currency: { currency: string; usd: number; limitUsd: number | null; over: boolean }[] }
 
+/** Temporary markup set through the pricing API (parça 12). */
+export interface TempMarkup { id: string; group: string; symbol: string | null; points: number; from: string; until: string; reason: string; active: boolean }
+
 export type BehaviorFlag = "scalper" | "burst" | "churn" | "brute_force" | "ip_hopping" | "flood";
 export interface AccountActivity {
   login: number;
@@ -796,6 +799,10 @@ export interface AdminApi {
   saveHedgePolicy(p: HedgePolicy, actor: Actor): Promise<HedgePolicy>;
   /** Parça 10b: manual hedge, policy change preview, dealer-defined alert rules. */
   manualHedge(req: { symbol: string; side: "buy" | "sell"; lots: number }, actor: Actor): Promise<{ ok: boolean }>;
+  /** Parça 12: temporary markup (real-time pricing API). */
+  tempMarkups(): Promise<TempMarkup[]>;
+  setTempMarkup(req: { group: string; symbol: string | null; points: number; ttlS: number; reason: string }, actor: Actor): Promise<TempMarkup[]>;
+  clearTempMarkup(id: string, actor: Actor): Promise<TempMarkup[]>;
   previewHedgePolicy(p: HedgePolicy, actor: Actor): Promise<HedgePreview>;
   alertRules(): Promise<AlertRulesView>;
   saveAlertRules(rules: AlertRule[], actor: Actor): Promise<AlertRulesView>;

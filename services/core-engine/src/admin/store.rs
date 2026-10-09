@@ -692,6 +692,10 @@ pub enum AdminCmd {
     ManualHedge {
         details: String,
     },
+    /// Temporary markup set / cleared through the pricing API (engine journal has it).
+    TempMarkup {
+        details: String,
+    },
     /// Dealer-defined alert rules, full replacement.
     AlertRulesSaved {
         rules: Vec<AlertRule>,
@@ -1332,6 +1336,9 @@ impl AdminState {
             }
             AdminCmd::ManualHedge { details } => {
                 self.audit(r, "risk.manualHedge".into(), "lp".into(), details.clone())
+            }
+            AdminCmd::TempMarkup { details } => {
+                self.audit(r, "pricing.markup".into(), "engine".into(), details.clone())
             }
             AdminCmd::AlertRulesSaved { rules } => {
                 self.alert_rules = rules.clone();

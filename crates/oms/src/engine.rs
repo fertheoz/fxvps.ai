@@ -48,6 +48,9 @@ struct State {
     /// High-impact calendar events (ns, sorted) for the rules' news window.
     #[serde(default)]
     news_times: Vec<u64>,
+    /// Temporary markups (parça 12), expired ones pruned as commands arrive.
+    #[serde(default)]
+    temp_markups: Vec<TempMarkup>,
     config: EngineConfig,
     symbols: BTreeMap<String, SymbolSpec>,
     groups: BTreeMap<String, GroupConfig>,
@@ -415,13 +418,39 @@ impl Engine {
     /// Markup on `side` of `symbol` for group `g` (ask for Buy, bid for Sell).
     fn markup(&self, g: &GroupConfig, symbol: &str, side: Side) -> Price {
         let point = self.st.symbols.get(symbol).map_or(0, |s| s.point().raw());
-        let pts = g.markup_points_for(symbol, side) + self.markup_extra(g);
+        let pts = g.markup_points_for(symbol, side) + self.markup_extra(g, symbol);
         Price::from_raw(point * pts.max(0))
     }
 
-    /// Scheduled / news extra markup points of the group right now.
-    fn markup_extra(&self, g: &GroupConfig) -> i64 {
+    /// Scheduled / news / temporary extra markup points of the group on
+    /// `symbol` right now.
+    fn markup_extra(&self, g: &GroupConfig, symbol: &str) -> i64 {
         g.markup_extra_points(self.st.now, &self.st.news_times)
+            + self.temp_markup_points(&g.name, symbol)
+    }
+
+    /// Active temporary markups for `group` / `symbol`, summed (parça 12).
+    pub fn temp_markup_points(&self, group: &str, symbol: &str) -> i64 {
+        let now = self.st.now;
+        self.st
+            .temp_markups
+            .iter()
+            .filter(|m| m.from <= now && now < m.until)
+            .filter(|m| m.group.is_empty() || m.group == group)
+            .filter(|m| m.symbol.as_deref().is_none_or(|s| s == symbol))
+            .map(|m| m.points)
+            .sum()
+    }
+
+    /// Temporary markups still active or pending (parça 12).
+    pub fn temp_markups(&self) -> Vec<TempMarkup> {
+        let now = self.st.now;
+        self.st
+            .temp_markups
+            .iter()
+            .filter(|m| now < m.until)
+            .cloned()
+            .collect()
     }
 
     /// Markup for one order: a routing-rule override, else the group's.
@@ -435,7 +464,9 @@ impl Engine {
         let band = point * g.band_points(o.req.volume.raw() / 1_000_000);
         match o.markup_override {
             // a rule's markup replaces the group's base; the schedule still adds
-            Some(pts) => Price::from_raw((point * (pts + self.markup_extra(g)) + band).max(0)),
+            Some(pts) => {
+                Price::from_raw((point * (pts + self.markup_extra(g, &o.req.symbol)) + band).max(0))
+            }
             None => Price::from_raw((self.markup(g, &o.req.symbol, side).raw() + band).max(0)),
         }
     }
@@ -698,6 +729,25 @@ impl Engine {
                 t.sort_unstable();
                 t.dedup();
                 self.st.news_times = t;
+            }
+            Command::SetTempMarkup(m) => {
+                let now = self.st.now;
+                self.st.temp_markups.retain(|t| t.until > now);
+                let mut m = m.clone();
+                if m.id == 0 {
+                    m.id = self.st.next_id;
+                    self.st.next_id += 1;
+                }
+                if m.from == 0 {
+                    m.from = now;
+                }
+                self.st.temp_markups.retain(|t| t.id != m.id);
+                if m.until > now {
+                    self.st.temp_markups.push(m);
+                }
+            }
+            Command::ClearTempMarkup { id } => {
+                self.st.temp_markups.retain(|t| t.id != *id);
             }
             Command::ManualHedge {
                 symbol,

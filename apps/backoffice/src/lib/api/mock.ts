@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, ReconciliationRow, Statement, SymbolExposure, IbPayoutPreview, AccountActivity, ActivityEvent, PlatformUser, AlertRule } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, ReconciliationRow, Statement, SymbolExposure, IbPayoutPreview, AccountActivity, ActivityEvent, PlatformUser, AlertRule, TempMarkup } from "./types";
 import { RULE_METRICS } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
@@ -33,6 +33,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
 
   let lpConfig: LpConfig | null = null;
   let tenants: Tenant[] = [{ id: "fxvps", name: "fxvps.ai", groups: ["demo-retail", "demo-hedge"], hostnames: ["trade.fxvps.ai", "console.fxvps.ai"] }];
+  let tempMarkups: TempMarkup[] = [{ id: "1", group: "", symbol: "XAUUSD", points: 20, from: new Date(Date.now() - 60_000).toISOString(), until: new Date(Date.now() + 25 * 60_000).toISOString(), reason: "NFP", active: true }];
   let alertRules: AlertRule[] = [{ id: "var-cap", enabled: true, metric: "var_total_usd", target: "", op: "gt", threshold: 50_000, severity: "critical", title: "Book VaR over 50k" }];
   const platformUsers: PlatformUser[] = [
     { institution: "demo-broker", login: 500123, name: "Ayşe Kaya", email: "ayse@example.com", phone: "+90 555 000 0001", country: "TR", city: "İstanbul", address: "Levent Mah. 12", group: "real\\pro", server: "MT5-Demo", leverage: 100, balance: 12_500.5, currency: "USD", registeredAt: "2026-09-01T10:00:00Z", lastLoginAt: new Date(Date.now() - 3_600_000).toISOString(), lastIp: "85.100.1.2", status: "active", comment: "", extra: { agent: "IB-7", zip: "34330" }, updatedMs: Date.now() - 60_000 },
@@ -265,6 +266,15 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       return delay({ active: alerts.filter((x) => !x.resolvedAt), recent: alerts.filter((x) => x.resolvedAt) });
     },
     async hedgePolicy() { return delay(hedge); },
+    async tempMarkups() { return delay(tempMarkups.filter((m) => new Date(m.until).getTime() > Date.now())); },
+    async setTempMarkup(req, actor) {
+      guard(actor, "groups.edit");
+      const now = Date.now();
+      tempMarkups.push({ id: String(now), group: req.group, symbol: req.symbol, points: req.points, from: new Date(now).toISOString(), until: new Date(now + req.ttlS * 1000).toISOString(), reason: req.reason, active: true });
+      audit(actor, "pricing.markup", "engine", `${req.points > 0 ? "+" : ""}${req.points} points ${req.group || "all groups"} ${req.symbol ?? "all symbols"} for ${req.ttlS} s`);
+      return delay(tempMarkups);
+    },
+    async clearTempMarkup(id, actor) { guard(actor, "groups.edit"); tempMarkups = tempMarkups.filter((m) => m.id !== id); audit(actor, "pricing.markup", "engine", `cleared #${id}`); return delay(tempMarkups); },
     async manualHedge(req, actor) { guard(actor, "risk.edit"); audit(actor, "risk.manualHedge", "lp", `${req.side} ${req.symbol} ${req.lots} lots`); return delay({ ok: true }); },
     async previewHedgePolicy(p) {
       const sym = (symbol: string, net: number, cur: number) => {

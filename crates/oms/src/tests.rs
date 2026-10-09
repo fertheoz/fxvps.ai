@@ -3393,3 +3393,52 @@ fn herd_rule_matches_once_enough_accounts_send_the_same_side() {
     h.market(4, "h5", Side::Buy, "1");
     assert!(h.router.take().is_empty());
 }
+
+#[test]
+fn temporary_markup_widens_the_group_quote_until_it_expires() {
+    use crate::TempMarkup;
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("b", USD, Routing::BBook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 0;
+    h.cmd(Command::SetGroup(g));
+    let base = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!((base.bid, base.ask), (px("1.10000"), px("1.10010")));
+    // +10 points on EURUSD for this group, 60 s
+    h.cmd(Command::SetTempMarkup(TempMarkup {
+        id: 0,
+        group: "b".into(),
+        symbol: Some("EURUSD".into()),
+        points: 10,
+        from: 0,
+        until: h.ts + 60_000_000_000,
+        reason: "news".into(),
+    }));
+    let q = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!((q.bid, q.ask), (px("1.09990"), px("1.10020")));
+    assert_eq!(h.e.temp_markups().len(), 1);
+    assert_eq!(h.e.temp_markup_points("b", "EURUSD"), 10);
+    assert_eq!(h.e.temp_markup_points("b", "GBPUSD"), 0);
+    assert_eq!(h.e.temp_markup_points("other", "EURUSD"), 0);
+    // every group / every symbol stacks on top
+    h.cmd(Command::SetTempMarkup(TempMarkup {
+        id: 0,
+        group: String::new(),
+        symbol: None,
+        points: 5,
+        from: 0,
+        until: h.ts + 60_000_000_000,
+        reason: "all".into(),
+    }));
+    assert_eq!(h.e.temp_markup_points("b", "EURUSD"), 15);
+    // clearing one by id
+    let id = h.e.temp_markups()[0].id;
+    h.cmd(Command::ClearTempMarkup { id });
+    assert_eq!(h.e.temp_markup_points("b", "EURUSD"), 5);
+    // the TTL passes: back to the group's own markup
+    h.ts += 61_000_000_000;
+    h.quote("EURUSD", "1.10000", "1.10010");
+    assert_eq!(h.e.temp_markup_points("b", "EURUSD"), 0);
+    assert!(h.e.temp_markups().is_empty());
+}
