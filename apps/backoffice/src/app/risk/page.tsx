@@ -47,7 +47,7 @@ export default function RiskPage() {
           <CardHeader><CardTitle>{t("risk.topExposure")}</CardTitle></CardHeader>
           <CardContent>
             <table className="w-full text-sm">
-              <thead className="text-xs text-muted-foreground"><tr><th className="text-left">{t("positions.symbol")}</th><th className="text-right">Net lots</th><th className="text-right">A</th><th className="text-right">B</th><th className="text-right">LP</th><th className="text-right">{t("risk.hedgeCol")}</th><th className="text-right">{t("risk.limitCol")}</th><th className="text-right">Notional</th></tr></thead>
+              <thead className="text-xs text-muted-foreground"><tr><th className="text-left">{t("positions.symbol")}</th><th className="text-right">Net lots</th><th className="text-right">A</th><th className="text-right">B</th><th className="text-right">LP</th><th className="text-right">{t("risk.hedgeCol")}</th><th className="text-right">{t("risk.limitCol")}</th><th className="text-right">Notional</th><th className="text-right">σ 1d</th><th className="text-right">VaR</th></tr></thead>
               <tbody>
                 {(exp.data ?? []).slice(0, 10).map((e) => (
                   <tr key={e.symbol} className="border-t border-border tabular-nums">
@@ -59,6 +59,8 @@ export default function RiskPage() {
                     <td className="text-right">{e.hedgeLots ? e.hedgeLots : "—"}{e.hedgePendingLots ? <span className="text-xs text-muted-foreground"> (+{e.hedgePendingLots})</span> : null}</td>
                     <td className={`text-right ${e.overLimit ? "text-red-600 dark:text-red-400 font-semibold" : ""}`}>{e.limitLots != null ? e.limitLots : "—"}</td>
                     <td className="text-right">{f.money(e.notional, "USD", { compact: true })}</td>
+                    <td className="text-right text-muted-foreground">{e.volDailyPct !== undefined && e.volDailyPct > 0 ? `${e.volDailyPct.toFixed(2)}%` : "—"}</td>
+                    <td className="text-right">{e.varUsd ? Math.round(e.varUsd).toLocaleString() : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -151,6 +153,9 @@ function HedgeForm({ initial }: { initial: HedgePolicy }) {
           <NumField label={t("risk.accountLimit")} value={p.accountLimit ?? 0} onChange={(v) => set("accountLimit", v > 0 ? v : null)} step={0.1} disabled={!editable || p.mode !== "switch_to_a_book"} />
           <NumField label={t("risk.hedgeRatio")} value={p.hedgeRatioPct} onChange={(v) => set("hedgeRatioPct", Math.min(100, Math.max(1, Math.round(v))))} step={5} disabled={!editable || p.mode !== "hedge_excess"} />
           <NumField label={t("risk.releasePct")} value={p.releasePct} onChange={(v) => set("releasePct", Math.min(100, Math.max(0, Math.round(v))))} step={5} disabled={!editable || p.mode !== "hedge_excess"} />
+          <NumField label={t("risk.sliceLots")} value={p.sliceLots ?? 0} onChange={(v) => set("sliceLots", v > 0 ? v : null)} step={0.1} disabled={!editable || p.mode !== "hedge_excess"} />
+          <NumField label={t("risk.sliceInterval")} value={p.sliceIntervalS ?? 0} onChange={(v) => set("sliceIntervalS", Math.max(0, Math.round(v)))} step={10} disabled={!editable || p.mode !== "hedge_excess"} />
+          <NumField label={`${t("risk.varLimit")}${p.varTotalUsd !== undefined ? ` (${t("risk.varNow")} ${Math.round(p.varTotalUsd)})` : ""}`} value={p.varLimitUsd ?? 0} onChange={(v) => set("varLimitUsd", v > 0 ? Math.round(v) : null)} step={1000} disabled={!editable || p.mode !== "hedge_excess"} />
         </div>
         <Label>
           {t("risk.symbolLimits")}

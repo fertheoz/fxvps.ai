@@ -3130,3 +3130,62 @@ fn inventory_skew_moves_the_quote_with_the_b_book_net() {
     let q = h.e.group_quote("b", "EURUSD").unwrap();
     assert_eq!((q.bid, q.ask), (px("1.10000"), px("1.10010")), "flat again");
 }
+
+#[test]
+fn hedge_slices_go_out_one_per_interval() {
+    use risk::{HedgeMode, HedgePolicy};
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "b", "1000000");
+    h.cmd(Command::SetHedge(HedgePolicy {
+        enabled: true,
+        mode: HedgeMode::HedgeExcess,
+        default_symbol_limit: Some(qty("1")),
+        slice_lots: Some(qty("0.5")),
+        slice_interval_s: 60,
+        ..HedgePolicy::default()
+    }));
+    h.market(1, "x1", Side::Buy, "3"); // excess 2 lots → 4 slices of 0.5
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].volume, qty("0.5"));
+    h.quote("EURUSD", "1.10000", "1.10010"); // 1 µs later: too soon
+    assert!(h.router.take().is_empty());
+    h.ts += 60_000_000_000;
+    h.quote("EURUSD", "1.10000", "1.10010");
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1, "next slice after the interval");
+    assert_eq!(sent[0].volume, qty("0.5"));
+}
+
+#[test]
+fn var_cap_hedges_the_book_down_when_volatility_rises() {
+    use risk::{HedgeMode, HedgePolicy};
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "b", "1000000");
+    h.market(1, "x1", Side::Buy, "1"); // 1 lot B-book, ~110k USD notional
+    assert_eq!(h.e.var_total_usd().minor, 0, "no volatility sample yet");
+    // 10 one-minute samples moving 0.1% each: σ_min ≈ 0.1% → σ_day ≈ 3.8% → VaR ≈ 6.9k USD
+    let mut p = 1.10000f64;
+    for i in 0..10 {
+        h.ts += 60_000_000_000;
+        p *= if i % 2 == 0 { 1.001 } else { 0.999 };
+        let bid = format!("{:.5}", p);
+        let ask = format!("{:.5}", p + 0.0001);
+        h.quote("EURUSD", &bid, &ask);
+    }
+    let var = h.e.var_total_usd().minor as f64 / 100.0;
+    assert!(var > 3_000.0 && var < 15_000.0, "VaR {var}");
+    assert!(h.router.take().is_empty(), "no cap, no hedge");
+    // a 2k USD cap: roughly 70% of the lot gets hedged at the LP
+    h.cmd(Command::SetHedge(HedgePolicy {
+        enabled: true,
+        mode: HedgeMode::HedgeExcess,
+        var_limit_usd: Some(2_000),
+        ..HedgePolicy::default()
+    }));
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].side, Side::Sell);
+    let lots = sent[0].volume.raw() as f64 / 1e8;
+    assert!(lots > 0.5 && lots < 0.95, "hedged {lots} lots");
+}

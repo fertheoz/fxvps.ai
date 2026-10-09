@@ -36,6 +36,12 @@ pub struct EngineConfig {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
 struct State {
+    /// Per-symbol EWMA volatility for the VaR cap.
+    #[serde(default)]
+    vol: BTreeMap<String, VolState>,
+    /// Last hedge order per symbol (ns): TWAP slicing waits the interval.
+    #[serde(default)]
+    hedge_last_ts: BTreeMap<String, u64>,
     /// High-impact calendar events (ns, sorted) for the rules' news window.
     #[serde(default)]
     news_times: Vec<u64>,
@@ -627,7 +633,20 @@ impl Engine {
             }
             Command::SetHedge(policy) => {
                 self.st.hedge = policy.clone();
-                let symbols: Vec<String> = self.st.hedge_net.keys().cloned().collect();
+                // every symbol with a hedge or a B-book position is re-judged
+                let symbols: BTreeSet<String> = self
+                    .st
+                    .hedge_net
+                    .keys()
+                    .cloned()
+                    .chain(
+                        self.st
+                            .positions
+                            .values()
+                            .filter(|p| p.routing == Routing::BBook)
+                            .map(|p| p.symbol.clone()),
+                    )
+                    .collect();
                 for sym in symbols {
                     self.rebalance_hedge(&sym);
                 }
@@ -722,6 +741,12 @@ impl Engine {
                         ask: *ask,
                     },
                 );
+                let now = self.st.now;
+                self.st
+                    .vol
+                    .entry(symbol.clone())
+                    .or_default()
+                    .observe((bid.raw() + ask.raw()) / 2, now);
                 self.on_quote(symbol);
                 self.resolve_markouts(symbol);
             }
@@ -1441,27 +1466,48 @@ impl Engine {
     /// exposure has fallen to `release_pct` of the limit — counting orders in
     /// flight, in 0.01-lot steps.
     fn rebalance_hedge(&mut self, symbol: &str) {
-        let h = &self.st.hedge;
+        let h = self.st.hedge.clone();
         if !h.enabled || h.mode != HedgeMode::HedgeExcess {
             return;
         }
-        let Some(limit) = h.symbol_limit(symbol).map(|q| q.raw()) else {
-            return;
-        };
         let net = self.b_book_net(symbol);
         let cur = self.hedge_net(symbol) + self.hedge_pending(symbol);
-        let target = if net.abs() > limit {
-            let excess = net - net.signum() * limit;
-            -(excess as i128 * h.hedge_ratio_pct as i128 / 100) as i64
-        } else if net.abs() as i128 * 100 <= limit as i128 * h.release_pct as i128 {
-            0
-        } else {
-            cur
+        let mut target = match h.symbol_limit(symbol).map(|q| q.raw()) {
+            Some(limit) if net.abs() > limit => {
+                let excess = net - net.signum() * limit;
+                -(excess as i128 * h.hedge_ratio_pct as i128 / 100) as i64
+            }
+            Some(limit) if net.abs() as i128 * 100 <= limit as i128 * h.release_pct as i128 => 0,
+            _ => cur,
         };
+        // VaR cap: hedge this symbol down by the share that brings the whole
+        // book's VaR back under the limit (the more hedging wins)
+        if let Some(lim) = h.var_limit_usd.filter(|_| net != 0) {
+            let total = self.var_total_usd().minor as f64 / 100.0;
+            if total > lim as f64 {
+                let r = (1.0 - lim as f64 / total).clamp(0.0, 1.0);
+                let want = -((net as f64) * r).round() as i64;
+                if want.abs() > target.abs() {
+                    target = want;
+                }
+            }
+        }
         const STEP: i64 = 1_000_000; // 0.01 lot
-        let delta = (target - cur) / STEP * STEP;
+        let mut delta = (target - cur) / STEP * STEP;
         if delta == 0 {
             return;
+        }
+        // time-limited hedging: one slice per interval
+        if let Some(slice) = h.slice_lots.map(|q| q.raw()) {
+            let last = self.st.hedge_last_ts.get(symbol).copied().unwrap_or(0);
+            let wait = u64::from(h.slice_interval_s) * 1_000_000_000;
+            if last > 0 && self.st.now.saturating_sub(last) < wait {
+                return;
+            }
+            delta = delta.clamp(-slice, slice) / STEP * STEP;
+            if delta == 0 {
+                return;
+            }
         }
         let side = if delta > 0 { Side::Buy } else { Side::Sell };
         self.send_hedge(symbol.to_string(), side, Qty::from_raw(delta.abs()));
@@ -1482,6 +1528,7 @@ impl Engine {
             stop: None,
         };
         let sent = self.st.quotes.get(&symbol);
+        self.st.hedge_last_ts.insert(symbol.clone(), self.st.now);
         *self.st.hedge_pending.entry(symbol.clone()).or_default() += side.sign() * volume.raw();
         self.st.lp_orders.insert(
             id,
@@ -2521,6 +2568,58 @@ impl Engine {
         self.check_pending(symbol);
         self.check_sl_tp(symbol);
         self.check_margin();
+        // sliced / VaR-driven hedging progresses on the clock, not only on fills
+        let h = &self.st.hedge;
+        if h.enabled
+            && h.mode == HedgeMode::HedgeExcess
+            && (h.slice_lots.is_some() || h.var_limit_usd.is_some())
+        {
+            self.rebalance_hedge(symbol);
+        }
+    }
+
+    /// Daily volatility (fraction) of a symbol from its EWMA state.
+    pub fn volatility_daily(&self, symbol: &str) -> f64 {
+        self.st.vol.get(symbol).map_or(0.0, VolState::daily_sigma)
+    }
+
+    /// 1-day 95% parametric VaR of the B-book net on `symbol`, in USD.
+    pub fn var_symbol_usd(&self, symbol: &str) -> Option<Money> {
+        let net = self.b_book_net(symbol);
+        let spec = self.st.symbols.get(symbol)?;
+        let q = self.st.quotes.get(symbol)?;
+        let mid = (q.bid.raw() + q.ask.raw()) / 2;
+        // |lots| × contract × mid, scaled 1e8 in the quote currency
+        let notional =
+            net.unsigned_abs() as i128 * spec.contract_size as i128 * mid as i128 / SCALE as i128;
+        let m = Money::from_scaled(notional, spec.quote, Rounding::HalfEven).ok()?;
+        let var_minor = (m.minor as f64 * 1.65 * self.volatility_daily(symbol)).round() as i128;
+        self.st
+            .quotes
+            .convert(
+                Money::new(var_minor, spec.quote),
+                money::Currency::USD,
+                Rounding::HalfEven,
+            )
+            .ok()
+    }
+
+    /// Σ of the symbol VaRs (USD) over every symbol with a B-book position.
+    pub fn var_total_usd(&self) -> Money {
+        let symbols: BTreeSet<&str> = self
+            .st
+            .positions
+            .values()
+            .filter(|p| p.routing == Routing::BBook)
+            .map(|p| p.symbol.as_str())
+            .collect();
+        let mut total = Money::zero(money::Currency::USD);
+        for s in symbols {
+            if let Some(v) = self.var_symbol_usd(s) {
+                total = Money::new(total.minor + v.minor, money::Currency::USD);
+            }
+        }
+        total
     }
 
     fn check_pending(&mut self, symbol: &str) {
