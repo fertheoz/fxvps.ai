@@ -1395,6 +1395,15 @@ pub struct HedgePolicy {
     pub news_window_min: u32,
     #[serde(default)]
     pub news_action: NewsAction,
+    /// Warehouse volume caps: B-book lots opened in the last `burst_window_min`
+    /// minutes by one account (all symbols) / on one symbol (all accounts);
+    /// flow over a cap goes A-book (a toxic burst does not land in the book).
+    #[serde(default)]
+    pub burst_window_min: u32,
+    #[serde(default)]
+    pub burst_account_lots: Option<Qty>,
+    #[serde(default)]
+    pub burst_symbol_lots: Option<Qty>,
 }
 
 fn hundred() -> u8 {
@@ -1421,6 +1430,9 @@ impl Default for HedgePolicy {
             currency_limits_usd: BTreeMap::new(),
             news_window_min: 0,
             news_action: NewsAction::None,
+            burst_window_min: 0,
+            burst_account_lots: None,
+            burst_symbol_lots: None,
         }
     }
 }
@@ -1480,6 +1492,11 @@ impl HedgePolicy {
         if self.news_window_min > 1440 {
             return Err("newsWindowMin must be 0..1440".into());
         }
+        if self.burst_window_min > 1440 {
+            return Err("burstWindowMin must be 0..1440".into());
+        }
+        pos(self.burst_account_lots, "burstAccountLots")?;
+        pos(self.burst_symbol_lots, "burstSymbolLots")?;
         Ok(())
     }
 }

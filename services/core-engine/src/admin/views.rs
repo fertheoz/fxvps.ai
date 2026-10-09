@@ -312,6 +312,9 @@ pub fn hedge_policy(e: &Engine) -> Value {
         "newsWindowMin": h.news_window_min,
         "newsAction": h.news_action,
         "inNewsWindow": e.in_news_window(),
+        "burstWindowMin": h.burst_window_min,
+        "burstAccountLots": lots(h.burst_account_lots),
+        "burstSymbolLots": lots(h.burst_symbol_lots),
     })
 }
 

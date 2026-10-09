@@ -3243,3 +3243,35 @@ fn currency_leg_cap_and_news_window_route_or_pause_new_flow() {
         "closing is always allowed"
     );
 }
+
+#[test]
+fn burst_cap_sends_the_overflow_of_a_window_to_the_a_book() {
+    use risk::HedgePolicy;
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "b", "1000000");
+    h.account(2, "b", "1000000");
+    h.cmd(Command::SetHedge(HedgePolicy {
+        enabled: true,
+        burst_window_min: 10,
+        burst_account_lots: Some(qty("1")),
+        burst_symbol_lots: Some(qty("1.5")),
+        ..HedgePolicy::default()
+    }));
+    h.market(1, "a1", Side::Buy, "0.6"); // account 1: 0.6 in the window
+    assert!(h.router.take().is_empty());
+    h.market(1, "a2", Side::Buy, "0.3"); // 0.9
+    assert!(h.router.take().is_empty());
+    let id = h.market(1, "a3", Side::Buy, "0.2"); // would be 1.1 > 1 → A-book
+    assert_eq!(h.router.take().len(), 1);
+    assert_eq!(h.e.order(id).unwrap().rule.as_deref(), Some("hedge:burst"));
+    // account 2 is fresh, but the symbol already carries 0.9: 0.7 more breaks 1.5
+    let id = h.market(2, "b1", Side::Sell, "0.7");
+    assert_eq!(h.router.take().len(), 1);
+    assert_eq!(h.e.order(id).unwrap().rule.as_deref(), Some("hedge:burst"));
+    h.market(2, "b2", Side::Sell, "0.5"); // 1.4 ≤ 1.5: B-book
+    assert!(h.router.take().is_empty());
+    // the window slides: 11 minutes later account 1 is clean again
+    h.ts += 11 * 60_000_000_000;
+    h.market(1, "a4", Side::Buy, "0.9");
+    assert!(h.router.take().is_empty());
+}
