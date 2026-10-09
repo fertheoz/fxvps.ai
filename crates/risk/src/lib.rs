@@ -517,6 +517,17 @@ pub struct GroupConfig {
     pub markup_windows: Vec<MarkupWindow>,
     #[serde(default)]
     pub news_markup: Option<NewsMarkup>,
+    /// Volume bands: extra markup by order size (centi-lots thresholds).
+    #[serde(default)]
+    pub markup_bands: Vec<MarkupBand>,
+    /// Spread floor (target spread) in points: the client spread is widened
+    /// symmetrically up to it when the LP's is tighter.
+    #[serde(default)]
+    pub min_spread_points: Option<i64>,
+    /// Spread cap in points on the raw LP spread: above it no new market
+    /// order is taken and pending orders wait (volatility guard).
+    #[serde(default)]
+    pub max_spread_points: Option<i64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -598,6 +609,15 @@ pub struct MarkupWindow {
     pub add_points: i64,
 }
 
+/// Markup by order size: orders of at least `from_centilots` get `add_points`
+/// more (the highest matching band applies).
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkupBand {
+    pub from_centilots: i64,
+    pub add_points: i64,
+}
+
 /// Extra markup around high-impact calendar events.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -658,7 +678,19 @@ impl GroupConfig {
             lp_resting: false,
             markup_windows: Vec::new(),
             news_markup: None,
+            markup_bands: Vec::new(),
+            min_spread_points: None,
+            max_spread_points: None,
         }
+    }
+
+    /// Extra markup points of the volume band an order of `centilots` falls in.
+    pub fn band_points(&self, centilots: i64) -> i64 {
+        self.markup_bands
+            .iter()
+            .filter(|b| centilots >= b.from_centilots)
+            .max_by_key(|b| b.from_centilots)
+            .map_or(0, |b| b.add_points)
     }
 
     /// Markup in points applied on `side` of `symbol`'s quote (bid for Sell,
@@ -794,6 +826,20 @@ impl Quote {
         Quote {
             bid: Price::from_raw(self.bid.raw() - bid.raw()),
             ask: Price::from_raw(self.ask.raw() + ask.raw()),
+        }
+    }
+
+    /// Widens the spread symmetrically up to `min` (a spread floor / target spread).
+    pub fn floor_spread(&self, min: Price) -> Quote {
+        let spread = self.ask.raw() - self.bid.raw();
+        if spread >= min.raw() {
+            return *self;
+        }
+        let gap = min.raw() - spread;
+        let half = gap / 2;
+        Quote {
+            bid: Price::from_raw(self.bid.raw() - half),
+            ask: Price::from_raw(self.ask.raw() + (gap - half)),
         }
     }
 }

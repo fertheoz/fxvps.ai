@@ -3012,3 +3012,89 @@ fn scheduled_and_news_markup_add_to_the_client_price() {
     });
     assert_eq!(h.pos(1)[2].open_price, px("1.10035"));
 }
+
+#[test]
+fn volume_bands_add_markup_by_order_size() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 5;
+    g.markup_bands = vec![
+        risk::MarkupBand {
+            from_centilots: 100,
+            add_points: 2,
+        },
+        risk::MarkupBand {
+            from_centilots: 500,
+            add_points: 6,
+        },
+    ];
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "1000000");
+    for (clid, lots, expect) in [
+        ("s", "0.5", "1.10015"),
+        ("m", "1", "1.10017"),
+        ("l", "7", "1.10021"),
+    ] {
+        h.market(1, clid, Side::Buy, lots);
+        let lp = h.router.take()[0].lp_order_id;
+        h.cmd(Command::LpFill {
+            lp_order_id: lp,
+            exec_id: clid.into(),
+            volume: qty(lots),
+            price: px("1.10010"),
+        });
+        assert_eq!(
+            h.pos(1).last().unwrap().open_price,
+            px(expect),
+            "{lots} lots"
+        );
+    }
+}
+
+#[test]
+fn spread_floor_widens_symmetrically_and_cap_refuses_market_orders() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("b", USD, Routing::BBook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 0;
+    g.min_spread_points = Some(20); // LP spread is 10 points: widen to 20
+    g.max_spread_points = Some(30);
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "b", "100000");
+    let q = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!((q.bid, q.ask), (px("1.09995"), px("1.10015")));
+    h.market(1, "ok", Side::Buy, "0.1");
+    assert_eq!(h.pos(1)[0].open_price, px("1.10015"));
+    // LP spread blows out to 50 points: new market orders are refused, a
+    // pending buy stop that would fire waits, a close still goes through
+    h.quote("EURUSD", "1.10000", "1.10050");
+    let (ev, id) = h.order(NewOrder::market(1, "wide", "EURUSD", Side::Buy, qty("0.1")));
+    assert!(
+        matches!(ev.last(), Some(Event::OrderRejected { .. }))
+            || h.e.order(id).unwrap().status == OrderStatus::Rejected
+    );
+    let o = h.pending(1, "ps", Side::Buy, OrderType::Stop, None, Some("1.10040"));
+    let (_, pid) = h.order(o);
+    assert_eq!(
+        h.e.order(pid).unwrap().status,
+        OrderStatus::Accepted,
+        "pending waits"
+    );
+    h.quote("EURUSD", "1.10045", "1.10055"); // spread back to 10: the stop fires
+    assert_eq!(h.e.order(pid).unwrap().status, OrderStatus::Filled);
+    let pos = h.pos(1)[0].id;
+    h.quote("EURUSD", "1.10000", "1.10050");
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: pos,
+        volume: None,
+        client_order_id: "c".into(),
+    });
+    assert!(
+        h.pos(1).iter().all(|p| p.id != pos),
+        "closing is always allowed"
+    );
+}

@@ -2390,6 +2390,13 @@ struct MarkupWindowDto {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct MarkupBandDto {
+    from_lots: f64,
+    add_points: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct NewsMarkupDto {
     window_min: u32,
     add_points: i64,
@@ -2446,6 +2453,13 @@ struct GroupDto {
     markup_windows: Option<Vec<MarkupWindowDto>>,
     #[serde(default)]
     news_markup: Option<Option<NewsMarkupDto>>,
+    /// Volume bands (lots thresholds) and spread floor / cap in points (0 = off).
+    #[serde(default)]
+    markup_bands: Option<Vec<MarkupBandDto>>,
+    #[serde(default)]
+    min_spread_points: Option<i64>,
+    #[serde(default)]
+    max_spread_points: Option<i64>,
     /// A-book TP / pending limit entries rest at the LP as GTC limit orders.
     #[serde(default)]
     lp_resting: Option<bool>,
@@ -2670,6 +2684,37 @@ async fn save_group(
             });
         }
         cfg.markup_windows = out;
+    }
+    if let Some(bs) = g.markup_bands {
+        if bs.len() > 20 {
+            return Err(ApiError::bad("at most 20 markup bands"));
+        }
+        let mut out = Vec::new();
+        for b in bs {
+            if !(0.0..=10_000.0).contains(&b.from_lots) || !(-1000..=1000).contains(&b.add_points) {
+                return Err(ApiError::bad(
+                    "markupBands: fromLots 0..10000, addPoints -1000..1000",
+                ));
+            }
+            out.push(risk::MarkupBand {
+                from_centilots: (b.from_lots * 100.0).round() as i64,
+                add_points: b.add_points,
+            });
+        }
+        out.sort_by_key(|b| b.from_centilots);
+        cfg.markup_bands = out;
+    }
+    if let Some(p) = g.min_spread_points {
+        if !(0..=100_000).contains(&p) {
+            return Err(ApiError::bad("minSpreadPoints must be 0..100000"));
+        }
+        cfg.min_spread_points = (p > 0).then_some(p);
+    }
+    if let Some(p) = g.max_spread_points {
+        if !(0..=100_000).contains(&p) {
+            return Err(ApiError::bad("maxSpreadPoints must be 0..100000"));
+        }
+        cfg.max_spread_points = (p > 0).then_some(p);
     }
     if let Some(n) = g.news_markup {
         cfg.news_markup = match n {
