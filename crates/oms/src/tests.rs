@@ -3485,3 +3485,43 @@ fn pricing_formulas_shift_each_side_and_hot_swap_with_the_group() {
     let q = h.e.group_quote("b", "EURUSD").unwrap();
     assert_eq!((q.bid, q.ask), (px("1.10000"), px("1.10010")));
 }
+
+#[test]
+fn internal_matching_nets_opposite_flow_before_the_lp_sees_anything() {
+    use risk::{HedgeMode, HedgePolicy};
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "b", "1000000");
+    h.account(2, "b", "1000000");
+    h.cmd(Command::SetHedge(HedgePolicy {
+        enabled: true,
+        mode: HedgeMode::HedgeExcess,
+        default_symbol_limit: Some(qty("0")), // hedge the whole net …
+        hedge_ratio_pct: 100,
+        release_pct: 0,
+        net_delay_ms: 2000, // … but only after 2 s of quiet
+        ..HedgePolicy::default()
+    }));
+    h.market(1, "a", Side::Buy, "1");
+    assert!(
+        h.router.take().is_empty(),
+        "netting delay: nothing to the LP yet"
+    );
+    h.ts += 500_000_000;
+    h.market(2, "b", Side::Sell, "1"); // the other client takes the other side
+    assert!(h.router.take().is_empty());
+    h.ts += 3_000_000_000;
+    h.quote("EURUSD", "1.10000", "1.10010"); // delay over: net is 0, nothing to hedge
+    assert!(
+        h.router.take().is_empty(),
+        "matched internally: LP never involved"
+    );
+    assert_eq!(h.e.b_book_net("EURUSD"), 0);
+    // unmatched excess does go out once the delay has passed
+    h.market(1, "c", Side::Buy, "2");
+    assert!(h.router.take().is_empty());
+    h.ts += 3_000_000_000;
+    h.quote("EURUSD", "1.10000", "1.10010");
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!((sent[0].side, sent[0].volume), (Side::Sell, qty("2")));
+}

@@ -237,6 +237,7 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     },
     markout: (q) => call("GET", `/v1/analytics/markout?hours=${q?.hours ?? 24}&limit=${q?.limit ?? 500}`),
     whatIf: (req, actor) => call("POST", "/v1/analytics/whatif", req, actor),
+    internalization: (q) => call("GET", `/v1/analytics/internalization?hours=${q?.hours ?? 24}`),
     reconciliation: (from, to) => call("GET", `/v1/reports/reconciliation${rangeQs(from, to)}`),
     listAudit: () => call("GET", "/v1/audit"),
     listApprovals: (status = "pending_approval") => call<ApprovalRequest[]>("GET", `/v1/approvals?status=${enc(status)}`),

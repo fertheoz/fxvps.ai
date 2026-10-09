@@ -388,6 +388,7 @@ function AnalyticsTab() {
   const liq = useApiQuery("liquidity", [{ symbol: symbol || undefined, day: day || undefined }], { live: 30000 });
   const [hours, setHours] = React.useState(24);
   const mo = useApiQuery("markout", [{ hours, limit: 500 }], { live: 30000 });
+  const intl = useApiQuery("internalization", [{ hours }], { live: 30000 });
   const [delta, setDelta] = React.useState(2);
   const [group, setGroup] = React.useState("");
   const [wi, setWi] = React.useState<import("@/lib/api").WhatIfReport | null>(null);
@@ -451,6 +452,20 @@ function AnalyticsTab() {
         </div>
         <p className="mb-2 text-xs text-muted-foreground">{t("reports.markoutHint")}</p>
         <DataTable data={mo.data?.rows ?? []} columns={moCols} getRowId={(x) => x.id} storageKey="analytics-markout" />
+      </div>
+      <div className="rounded-md border border-border p-3" data-testid="internalization">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="font-medium">{t("reports.internalization")}</span>
+          {intl.data && <Badge tone={intl.data.internalPct >= 50 ? "success" : "muted"}>{f.num(intl.data.internalPct, 0)}% · {f.num(intl.data.internalLots)} / {f.num(intl.data.clientLots)} lot</Badge>}
+        </div>
+        <p className="mb-2 text-xs text-muted-foreground">{t("reports.internalizationHint")}</p>
+        {intl.data && intl.data.rows.length > 0 && (
+          <table className="w-full text-xs tabular-nums">
+            <thead><tr>{[t("positions.symbol"), t("reports.deals"), t("reports.clientLots"), t("reports.lpLots"), t("reports.internalLots"), "%", t("reports.captured")].map((h, i) => <th key={i} className="px-2 py-1 text-left font-medium text-muted-foreground">{h}</th>)}</tr></thead>
+            <tbody>{intl.data.rows.map((r) => <tr key={r.symbol} className="border-t border-border/60"><td className="px-2 py-0.5">{r.symbol}</td><td className="px-2 py-0.5">{r.deals}</td><td className="px-2 py-0.5">{f.num(r.clientLots)}</td><td className="px-2 py-0.5">{f.num(r.lpLots)}</td><td className="px-2 py-0.5">{f.num(r.internalLots)}</td><td className="px-2 py-0.5">{f.num(r.internalPct, 0)}</td><td className="px-2 py-0.5"><Pnl value={r.captured}>{f.money(r.captured)}</Pnl></td></tr>)}</tbody>
+          </table>
+        )}
+        {intl.data && intl.data.rows.length === 0 && <div className="text-xs text-muted-foreground">{t("common.noResults")}</div>}
       </div>
       <div className="rounded-md border border-border p-3" data-testid="whatif">
         <div className="mb-2 font-medium">{t("reports.whatIf")}</div>

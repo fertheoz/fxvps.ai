@@ -88,7 +88,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     { id: "al-3", kind: "lp_down", target: "LMAX-TRADING", severity: "critical", title: "LMAX TRADING session down", detail: "heartbeat timeout", raisedAt: Date.now() * 1e6 - 8e12, resolvedAt: Date.now() * 1e6 - 7.6e12, acked: true },
   ];
   let swapCfg: SwapConfig = { enabled: true, rolloverHourUtc: 22, skipWeekend: true, lastRolloverAt: null };
-  let hedge: HedgePolicy = { enabled: true, mode: "switch_to_a_book", defaultSymbolLimit: 25, symbolLimits: { XAUUSD: 5 }, totalLimit: 100, accountLimit: 10, hedgeRatioPct: 100, releasePct: 80, sliceLots: null, sliceIntervalS: 0, varLimitUsd: null, currencyLimitsUsd: {}, newsWindowMin: 0, newsAction: "none", burstWindowMin: 0, burstAccountLots: null, burstSymbolLots: null };
+  let hedge: HedgePolicy = { enabled: true, mode: "switch_to_a_book", defaultSymbolLimit: 25, symbolLimits: { XAUUSD: 5 }, totalLimit: 100, accountLimit: 10, hedgeRatioPct: 100, releasePct: 80, sliceLots: null, sliceIntervalS: 0, varLimitUsd: null, currencyLimitsUsd: {}, newsWindowMin: 0, newsAction: "none", burstWindowMin: 0, burstAccountLots: null, burstSymbolLots: null, netDelayMs: 0 };
   const lpRuntime = (p: LpPolicyRuntime): LpPolicyRuntime => p;
   let lpAgg: LpAggregation = {
     mode: "best_price",
@@ -805,6 +805,10 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       const rows = Array.from({ length: Math.min(q?.limit ?? 500, 40) }, (_, i) => ({ id: String(9000 + i), at: new Date(Date.now() - i * 600_000).toISOString(), login: s.clients[i % 5]?.login ?? 1001, symbol: i % 3 === 0 ? "XAUUSD" : "EURUSD", side: (i % 2 ? "buy" : "sell") as "buy" | "sell", entry: (i % 4 === 0 ? "out" : "in") as "in" | "out", lots: 0.1 * (1 + (i % 5)), price: i % 3 === 0 ? 4130 + rnd() : 1.1 + rnd() / 100, m1: (rnd() - 0.5) * 4, m5: (rnd() - 0.4) * 8, m30: (rnd() - 0.3) * 15 }));
       const summary = ["EURUSD", "XAUUSD"].map((symbol) => { const r = rows.filter((x) => x.symbol === symbol); const avg = (k: "m1" | "m5" | "m30") => r.reduce((a, x) => a + (x[k] ?? 0), 0) / Math.max(1, r.length); return { symbol, deals: r.length, m1: avg("m1"), m5: avg("m5"), m30: avg("m30") }; });
       return delay({ rows, summary });
+    },
+    async internalization() {
+      const rows = [{ symbol: "EURUSD", deals: 180, clientLots: 96, bBookLots: 96, lpLots: 31, internalLots: 65, internalPct: 67.7, captured: 412_50 }, { symbol: "XAUUSD", deals: 44, clientLots: 12.4, bBookLots: 12.4, lpLots: 9.1, internalLots: 3.3, internalPct: 26.6, captured: 188_00 }];
+      return delay({ rows, clientLots: 108.4, lpLots: 40.1, internalLots: 68.3, internalPct: 63.0 });
     },
     async whatIf(req) {
       const rows = [{ symbol: "EURUSD", legs: 120, lots: 84.5, currency: "USD", delta: req.deltaPoints * 0.00001 * 100_000 * 84.5, deltaUsd: req.deltaPoints * 0.00001 * 100_000 * 84.5 }, { symbol: "XAUUSD", legs: 40, lots: 12.2, currency: "USD", delta: req.deltaPoints * 0.01 * 100 * 12.2, deltaUsd: req.deltaPoints * 0.01 * 100 * 12.2 }];

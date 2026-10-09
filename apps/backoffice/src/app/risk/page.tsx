@@ -182,7 +182,7 @@ function HedgeForm({ initial }: { initial: HedgePolicy }) {
               {HEDGE_MODES.map((m) => <option key={m} value={m}>{t(`risk.hedgeMode.${m}` as MessageKey)}</option>)}
             </select>
           </Label>
-          <NumField label={t("risk.symbolLimit")} value={p.defaultSymbolLimit ?? 0} onChange={(v) => set("defaultSymbolLimit", v > 0 ? v : null)} step={0.1} disabled={!editable} />
+          <NumField label={t("risk.symbolLimit")} value={p.defaultSymbolLimit ?? -1} onChange={(v) => set("defaultSymbolLimit", v >= 0 ? v : null)} step={0.1} disabled={!editable} />
           <NumField label={t("risk.totalLimit")} value={p.totalLimit ?? 0} onChange={(v) => set("totalLimit", v > 0 ? v : null)} step={1} disabled={!editable} />
           <NumField label={t("risk.accountLimit")} value={p.accountLimit ?? 0} onChange={(v) => set("accountLimit", v > 0 ? v : null)} step={0.1} disabled={!editable || p.mode !== "switch_to_a_book"} />
           <NumField label={t("risk.hedgeRatio")} value={p.hedgeRatioPct} onChange={(v) => set("hedgeRatioPct", Math.min(100, Math.max(1, Math.round(v))))} step={5} disabled={!editable || p.mode !== "hedge_excess"} />
@@ -204,6 +204,14 @@ function HedgeForm({ initial }: { initial: HedgePolicy }) {
           <NumField label={t("risk.burstAccount")} value={p.burstAccountLots ?? 0} onChange={(v) => set("burstAccountLots", v > 0 ? v : null)} step={0.5} disabled={!editable} />
           <NumField label={t("risk.burstSymbol")} value={p.burstSymbolLots ?? 0} onChange={(v) => set("burstSymbolLots", v > 0 ? v : null)} step={0.5} disabled={!editable} />
         </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <NumField label={t("risk.netDelay")} value={(p.netDelayMs ?? 0) / 1000} onChange={(v) => set("netDelayMs", Math.max(0, Math.min(600, v)) * 1000)} step={0.5} disabled={!editable} />
+          <div className="flex items-end gap-2">
+            <Button variant="outline" onClick={() => setP({ ...p, enabled: true, mode: "hedge_excess", defaultSymbolLimit: 0, hedgeRatioPct: 100, releasePct: 0, netDelayMs: p.netDelayMs && p.netDelayMs > 0 ? p.netDelayMs : 2000 })} disabled={!editable} data-testid="internal-matching-preset">{t("risk.internalPreset")}</Button>
+            {p.enabled && p.mode === "hedge_excess" && p.defaultSymbolLimit === 0 && (p.netDelayMs ?? 0) > 0 && <Badge tone="success">{t("risk.internalOn")}</Badge>}
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">{t("risk.internalHint")}</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <NumField label={t("risk.newsWindow")} value={p.newsWindowMin ?? 0} onChange={(v) => set("newsWindowMin", Math.min(1440, Math.max(0, Math.round(v))))} step={5} disabled={!editable} />
           <Label>

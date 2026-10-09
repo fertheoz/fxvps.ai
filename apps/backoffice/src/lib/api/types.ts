@@ -65,6 +65,8 @@ export interface HedgePolicy {
   burstWindowMin?: number;
   burstAccountLots?: number | null;
   burstSymbolLots?: number | null;
+  /** Internal matching: netting delay after a B-book fill before the hedge goes to the LP (ms, 0 = off). */
+  netDelayMs?: number;
 }
 
 export type NewsAction = "none" | "a_book" | "reject";
@@ -508,6 +510,8 @@ export interface LiquidityHour { hour: number; ticks: number; avgSpreadPoints: n
 export interface LiquidityMap { symbol: string; day: string; ticks: number; hours: LiquidityHour[]; days: string[]; symbols: string[] }
 export interface MarkoutRow { id: string; at: string; login: number; symbol: string; side: "buy" | "sell"; entry: "in" | "out"; lots: number; price: number; m1: number | null; m5: number | null; m30: number | null }
 export interface MarkoutReport { rows: MarkoutRow[]; summary: { symbol: string; deals: number; m1: number; m5: number; m30: number }[] }
+export interface InternalizationRow { symbol: string; deals: number; clientLots: number; bBookLots: number; lpLots: number; internalLots: number; internalPct: number; captured: number }
+export interface InternalizationReport { rows: InternalizationRow[]; clientLots: number; lpLots: number; internalLots: number; internalPct: number }
 export interface WhatIfRow { symbol: string; legs: number; lots: number; currency: string; delta: number; deltaUsd: number | null }
 export interface WhatIfReport { deltaPoints: number; group: string | null; rows: WhatIfRow[]; totalUsd: number }
 
@@ -945,6 +949,7 @@ export interface AdminApi {
   liquidity(q?: { symbol?: string; day?: string }): Promise<LiquidityMap>;
   markout(q?: { hours?: number; limit?: number }): Promise<MarkoutReport>;
   whatIf(req: { hours?: number; deltaPoints: number; group?: string | null }, actor: Actor): Promise<WhatIfReport>;
+  internalization(q?: { hours?: number }): Promise<InternalizationReport>;
   reconciliation(from?: string, to?: string): Promise<ReconciliationRow[]>;
 
   listAudit(): Promise<AuditEntry[]>;

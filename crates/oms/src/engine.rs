@@ -45,6 +45,10 @@ struct State {
     /// Last hedge order per symbol (ns): TWAP slicing waits the interval.
     #[serde(default)]
     hedge_last_ts: BTreeMap<String, u64>,
+    /// Last B-book deal per symbol (ns): the internal-matching netting delay
+    /// counts from here.
+    #[serde(default)]
+    last_b_deal_ts: BTreeMap<String, u64>,
     /// High-impact calendar events (ns, sorted) for the rules' news window.
     #[serde(default)]
     news_times: Vec<u64>,
@@ -1741,6 +1745,14 @@ impl Engine {
         let Some(target) = self.hedge_target(&h, symbol) else {
             return;
         };
+        // internal matching: let opposite client flow net out first
+        if h.net_delay_ms > 0 {
+            let last = self.st.last_b_deal_ts.get(symbol).copied().unwrap_or(0);
+            let wait = u64::from(h.net_delay_ms) * 1_000_000;
+            if last > 0 && self.st.now.saturating_sub(last) < wait {
+                return;
+            }
+        }
         let cur = self.hedge_net(symbol) + self.hedge_pending(symbol);
         const STEP: i64 = 1_000_000; // 0.01 lot
         let mut delta = (target - cur) / STEP * STEP;
@@ -2665,6 +2677,9 @@ impl Engine {
             deal(self, pid, DealEntry::In, left, z, (0, 0), copy);
         }
         self.balance_event(account);
+        if g.routing == Routing::BBook {
+            self.st.last_b_deal_ts.insert(symbol.clone(), self.st.now);
+        }
         self.rebalance_hedge(&symbol);
     }
 
@@ -2855,7 +2870,7 @@ impl Engine {
         let h = &self.st.hedge;
         if h.enabled
             && h.mode == HedgeMode::HedgeExcess
-            && (h.slice_lots.is_some() || h.var_limit_usd.is_some())
+            && (h.slice_lots.is_some() || h.var_limit_usd.is_some() || h.net_delay_ms > 0)
         {
             self.rebalance_hedge(symbol);
         }

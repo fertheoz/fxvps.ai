@@ -1448,6 +1448,12 @@ pub struct HedgePolicy {
     pub burst_account_lots: Option<Qty>,
     #[serde(default)]
     pub burst_symbol_lots: Option<Qty>,
+    /// Internal matching (parça 14b): after a B-book fill on a symbol the
+    /// hedge rebalancer waits this long, so opposite client flow nets out
+    /// inside the book and only the net excess ever reaches the LP. With a
+    /// symbol limit of 0 and ratio 100 % this is a fully netted omnibus.
+    #[serde(default)]
+    pub net_delay_ms: u32,
 }
 
 fn hundred() -> u8 {
@@ -1477,6 +1483,7 @@ impl Default for HedgePolicy {
             burst_window_min: 0,
             burst_account_lots: None,
             burst_symbol_lots: None,
+            net_delay_ms: 0,
         }
     }
 }
@@ -1497,7 +1504,9 @@ impl HedgePolicy {
                 Ok(())
             }
         };
-        pos(self.default_symbol_limit, "defaultSymbolLimit")?;
+        if self.default_symbol_limit.is_some_and(|q| q.raw() < 0) {
+            return Err("defaultSymbolLimit must be ≥ 0 (0 = hedge the whole net)".into());
+        }
         pos(self.total_limit, "totalLimit")?;
         pos(self.account_limit, "accountLimit")?;
         if self.symbol_limits.len() > 500 {
@@ -1541,6 +1550,9 @@ impl HedgePolicy {
         }
         pos(self.burst_account_lots, "burstAccountLots")?;
         pos(self.burst_symbol_lots, "burstSymbolLots")?;
+        if self.net_delay_ms > 600_000 {
+            return Err("netDelayMs must be 0..600000".into());
+        }
         Ok(())
     }
 }
