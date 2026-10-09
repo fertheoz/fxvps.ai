@@ -64,6 +64,8 @@ pub enum GatewayEvent {
         in_seq: u64,
         /// Unix ms of the last inbound message.
         last_msg_ms: u64,
+        /// Smoothed receive − `SendingTime` of inbound messages, ms (0 = unknown).
+        latency_ms: u64,
     },
     /// A trading-session message the gateway does not model (e.g. the LP's
     /// PositionReport AP / RequestForPositionsAck AO), fields as text.
@@ -186,6 +188,44 @@ pub struct SessionStatus {
     /// Unix ms of the last inbound message (0 = none yet).
     #[serde(default)]
     pub last_msg_ms: u64,
+    /// Smoothed receive − `SendingTime` of inbound messages, ms (0 = unknown).
+    /// Feed QoS: the console shows it, the aggregator can suspend a slow LP.
+    #[serde(default)]
+    pub latency_ms: u64,
+}
+
+/// Unix ms of a FIX `SendingTime` (`YYYYMMDD-HH:MM:SS[.sss]`), UTC.
+pub fn sending_time_ms(s: &str) -> Option<u64> {
+    let b = s.as_bytes();
+    if b.len() < 17 || b[8] != b'-' || b[11] != b':' || b[14] != b':' {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| s.get(r).and_then(|x| x.parse::<i64>().ok());
+    let (y, m, d) = (num(0..4)?, num(4..6)?, num(6..8)?);
+    let (hh, mm, ss) = (num(9..11)?, num(12..14)?, num(15..17)?);
+    let ms = match b.get(17) {
+        Some(b'.') => {
+            let frac = s.get(18..)?;
+            let frac = frac.get(..3.min(frac.len()))?;
+            let v = frac.parse::<i64>().ok()?;
+            v * 10_i64.pow((3 - frac.len()) as u32)
+        }
+        None => 0,
+        _ => return None,
+    };
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || hh > 23 || mm > 59 || ss > 60 {
+        return None;
+    }
+    // days from civil (Howard Hinnant)
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + hh * 3600 + mm * 60 + ss;
+    u64::try_from(secs * 1000 + ms).ok()
 }
 
 fn unix_ms() -> u64 {
@@ -207,10 +247,12 @@ pub fn apply_status(table: &mut [SessionStatus], ev: &GatewayEvent) {
             session,
             in_seq,
             last_msg_ms,
+            latency_ms,
         } => {
             if let Some(r) = table.iter_mut().find(|r| r.kind == *session) {
                 r.in_seq = *in_seq;
                 r.last_msg_ms = *last_msg_ms;
+                r.latency_ms = *latency_ms;
             }
             return;
         }
@@ -289,6 +331,7 @@ pub fn start(mut cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
             rejects: 0,
             in_seq: 0,
             last_msg_ms: 0,
+            latency_ms: 0,
         })
         .collect::<Vec<_>>(),
     ));
@@ -344,15 +387,32 @@ pub fn start(mut cfg: GatewayConfig) -> Result<GatewayHandle, GatewayError> {
 #[derive(Default)]
 struct Stats {
     last: Option<std::time::Instant>,
+    /// EWMA (1/8) of receive − `SendingTime`, ms; 0 = no sample yet.
+    latency_ms: u64,
 }
 
 impl Stats {
+    /// Feeds one inbound message's `SendingTime` into the latency average.
+    /// Clock skew can make the difference negative: clamped to 0.
+    fn sample(&mut self, sending_time: &str) {
+        let Some(sent) = sending_time_ms(sending_time) else {
+            return;
+        };
+        let lat = unix_ms().saturating_sub(sent);
+        self.latency_ms = if self.latency_ms == 0 {
+            lat.max(1)
+        } else {
+            ((self.latency_ms * 7 + lat) / 8).max(1)
+        };
+    }
+
     fn due(
         &mut self,
         events: &broadcast::Sender<GatewayEvent>,
         kind: SessionKind,
-        in_seq: u64,
+        header: &fix_codec::Header,
     ) -> bool {
+        self.sample(&header.sending_time);
         let now = std::time::Instant::now();
         if self
             .last
@@ -361,11 +421,46 @@ impl Stats {
             self.last = Some(now);
             let _ = events.send(GatewayEvent::SessionStats {
                 session: kind,
-                in_seq,
+                in_seq: header.msg_seq_num,
                 last_msg_ms: unix_ms(),
+                latency_ms: self.latency_ms,
             });
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod latency_tests {
+    use super::*;
+
+    #[test]
+    fn sending_time_parses_fix_utc_timestamps() {
+        assert_eq!(sending_time_ms("19700101-00:00:00"), Some(0));
+        assert_eq!(sending_time_ms("19700101-00:00:01.250"), Some(1250));
+        assert_eq!(
+            sending_time_ms("20240301-12:00:00.5"),
+            Some(1_709_294_400_500)
+        );
+        assert_eq!(
+            sending_time_ms("20261009-07:30:15.123"),
+            Some(1_791_531_015_123)
+        );
+        assert_eq!(sending_time_ms("2026-10-09"), None);
+        assert_eq!(sending_time_ms("20261309-07:30:15"), None);
+    }
+
+    #[test]
+    fn latency_is_smoothed_and_never_zero_once_sampled() {
+        let mut s = Stats::default();
+        s.sample("garbage");
+        assert_eq!(s.latency_ms, 0);
+        s.sample("19700101-00:00:00"); // ancient → huge, clamped by u64 math only
+        assert!(s.latency_ms > 0);
+        let before = s.latency_ms;
+        s.sample(&fix_codec::now_timestamp()); // ~0 ms → average drops by about 1/8
+        assert!(s.latency_ms < before);
+        assert!(s.latency_ms >= 1);
     }
 }
 
@@ -527,7 +622,7 @@ async fn md_task(
                         let _ = cmd.send(SessionCommand::Send(req)).await;
                     }
                     Some(SessionEvent::App(m)) => match &m.body {
-                        _ if stats.due(&events, kind, m.header.msg_seq_num) => {}
+                        _ if stats.due(&events, kind, &m.header) => {}
                         Body::MarketDataSnapshot(w) => {
                             if let Some(q) = books.snapshot(&cfg, w) {
                                 let _ = events.send(GatewayEvent::Quote(q));
@@ -762,7 +857,7 @@ async fn trade_task(
                         let _ = events.send(GatewayEvent::SessionUp { session: kind });
                     }
                     Some(SessionEvent::App(m)) => match &m.body {
-                        _ if stats.due(&events, kind, m.header.msg_seq_num) => {}
+                        _ if stats.due(&events, kind, &m.header) => {}
                         Body::ExecutionReport(er) => {
                             let _ = events.send(GatewayEvent::Execution(normalize::execution(&cfg, er)));
                         }
@@ -843,6 +938,7 @@ mod status_tests {
                 rejects: 0,
                 in_seq: 0,
                 last_msg_ms: 0,
+                latency_ms: 0,
             })
             .collect()
     }

@@ -477,6 +477,8 @@ export interface Tenant { id: string; name: string; groups: string[]; hostnames:
 
 export interface AlertSettings {
   lpDownGraceS: number;
+  /** Feed QoS: warn when an LP's market-data latency stays above this (ms, 0 = off). */
+  lpSlowMs?: number;
   fillRateMinOrders: number;
   fillRateFloorPct: number;
   latencyFloorMs: number;
@@ -897,6 +899,10 @@ export interface LpPolicyRuntime extends Omit<LpPolicy, "minLots" | "maxLots"> {
   /** Symbols excluded by the deviation guard right now. */
   deviating: string[];
   lastQuoteAt: string | null;
+  /** Market-data latency measured by the gateway (ms, 0 = unknown). */
+  latencyMs?: number;
+  /** Suspended by the feed-QoS guard right now. */
+  slow?: boolean;
   mdUp: boolean;
   tradeUp: boolean;
 }
@@ -906,6 +912,8 @@ export interface LpAggregation {
   maxDeviationPoints: number;
   /** Silent-LP guard (ms, 0 = off). */
   maxQuoteAgeMs?: number;
+  /** Feed-QoS guard (ms, 0 = off). */
+  maxLatencyMs?: number;
   lps: LpPolicyRuntime[];
 }
 
@@ -914,6 +922,8 @@ export interface LpAggregationInput {
   maxDeviationPoints: number;
   /** Silent-LP guard (ms, 0 = off). */
   maxQuoteAgeMs?: number;
+  /** Feed-QoS guard (ms, 0 = off). */
+  maxLatencyMs?: number;
   lps: LpPolicy[];
 }
 

@@ -131,6 +131,7 @@ function AlertsCard() {
       <CardContent className="grid gap-3 sm:grid-cols-2">
         <p className="text-xs text-muted-foreground sm:col-span-2">{t("settings.alertsHint")}</p>
         <NumField label={t("settings.lpDownGrace")} value={cfg.lpDownGraceS} onChange={(v) => set("lpDownGraceS", Math.max(0, Math.round(v)))} step={10} disabled={!editable} />
+        <NumField label={t("settings.lpSlow")} value={cfg.lpSlowMs ?? 0} onChange={(v) => set("lpSlowMs", Math.min(60000, Math.max(0, Math.round(v))))} step={100} disabled={!editable} />
         <NumField label={t("settings.fillRateMinOrders")} value={cfg.fillRateMinOrders} onChange={(v) => set("fillRateMinOrders", Math.max(1, Math.round(v)))} step={1} disabled={!editable} />
         <NumField label={t("settings.fillRateFloor")} value={cfg.fillRateFloorPct} onChange={(v) => set("fillRateFloorPct", Math.min(100, Math.max(0, Math.round(v))))} step={1} disabled={!editable} />
         <NumField label={t("settings.latencyFloor")} value={cfg.latencyFloorMs} onChange={(v) => set("latencyFloorMs", Math.max(0, Math.round(v)))} step={50} disabled={!editable} />

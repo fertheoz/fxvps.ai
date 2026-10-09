@@ -144,6 +144,9 @@ pub struct SettingsRec {
 pub struct AlertSettings {
     #[serde(default = "d_lp_down")]
     pub lp_down_grace_s: u64,
+    /// Feed QoS: warn when an LP's market-data latency (ms) stays above this. 0 = off.
+    #[serde(default = "d_lp_slow")]
+    pub lp_slow_ms: u64,
     #[serde(default = "d_fr_orders")]
     pub fill_rate_min_orders: u32,
     /// Percent, e.g. 90.
@@ -170,6 +173,9 @@ pub struct AlertSettings {
     pub daily_report_hour_utc: Option<u8>,
 }
 
+fn d_lp_slow() -> u64 {
+    2000
+}
 fn d_lp_down() -> u64 {
     60
 }
@@ -190,6 +196,7 @@ impl Default for AlertSettings {
     fn default() -> AlertSettings {
         AlertSettings {
             lp_down_grace_s: 60,
+            lp_slow_ms: 2000,
             fill_rate_min_orders: 10,
             fill_rate_floor_pct: 90,
             latency_floor_ms: 500,
@@ -1296,8 +1303,9 @@ impl AdminState {
                     "settings.alerts".into(),
                     "alerts".into(),
                     format!(
-                        "lp down {}s, fill ≥{}% (≥{} orders), latency >{}ms ×{}, webhook {}, telegram {}, quiet {:?}, daily report {:?}",
+                        "lp down {}s, feed slow >{}ms, fill ≥{}% (≥{} orders), latency >{}ms ×{}, webhook {}, telegram {}, quiet {:?}, daily report {:?}",
                         settings.lp_down_grace_s,
+                        settings.lp_slow_ms,
                         settings.fill_rate_floor_pct,
                         settings.fill_rate_min_orders,
                         settings.latency_floor_ms,

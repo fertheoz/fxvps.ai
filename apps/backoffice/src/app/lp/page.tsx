@@ -208,7 +208,7 @@ function AggregationCard() {
   const q = useApiQuery("getLpAggregation", [], { live: 5000 });
   if (q.isLoading) return <Card className="mt-4 p-4">{t("common.loading")}</Card>;
   if (q.error || !q.data) return <Card className="mt-4 p-4 text-sm text-muted-foreground" data-testid="lp-agg-none">{t("lp.aggNone")}</Card>;
-  return <AggregationForm key={JSON.stringify([q.data.mode, q.data.maxDeviationPoints, q.data.maxQuoteAgeMs, q.data.lps.map((p) => [p.name, p.enabled, p.orders, p.priority, p.minLots, p.maxLots, p.symbols])])} data={q.data} />;
+  return <AggregationForm key={JSON.stringify([q.data.mode, q.data.maxDeviationPoints, q.data.maxQuoteAgeMs, q.data.maxLatencyMs, q.data.lps.map((p) => [p.name, p.enabled, p.orders, p.priority, p.minLots, p.maxLots, p.symbols])])} data={q.data} />;
 }
 
 function AggregationForm({ data }: { data: LpAggregation }) {
@@ -221,12 +221,13 @@ function AggregationForm({ data }: { data: LpAggregation }) {
   const [mode, setMode] = React.useState<AggMode>(data.mode);
   const [dev, setDev] = React.useState(data.maxDeviationPoints);
   const [age, setAge] = React.useState((data.maxQuoteAgeMs ?? 30000) / 1000);
+  const [lat, setLat] = React.useState(data.maxLatencyMs ?? 0);
   const [lps, setLps] = React.useState<PolicyDraft[]>(toDraft(data));
   const [newLp, setNewLp] = React.useState("");
   const mut = useApiMutation((v: Parameters<ReturnType<typeof api>["saveLpAggregation"]>[0]) => api().saveLpAggregation(v, actor), () => toast(t("lp.aggSaved")));
   const upd = (i: number, patch: Partial<PolicyDraft>) => setLps(lps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
   const save = () => mut.mutate({
-    mode, maxDeviationPoints: Math.max(0, Math.trunc(dev) || 0), maxQuoteAgeMs: Math.max(0, Math.round(age * 1000) || 0),
+    mode, maxDeviationPoints: Math.max(0, Math.trunc(dev) || 0), maxQuoteAgeMs: Math.max(0, Math.round(age * 1000) || 0), maxLatencyMs: Math.max(0, Math.round(lat) || 0),
     lps: lps.map(({ symbolsText, ...p }) => ({ ...p, minLots: p.minLots?.trim() || null, maxLots: p.maxLots?.trim() || null, symbols: symbolsText.split(/[\s,]+/).map((x) => x.trim().toUpperCase()).filter(Boolean) })),
   });
   const runtime = (name: string) => data.lps.find((p) => p.name === name);
@@ -244,12 +245,13 @@ function AggregationForm({ data }: { data: LpAggregation }) {
           </Label>
           <NumField label={t("lp.deviation")} value={dev} onChange={setDev} step={1} disabled={!editable} />
           <NumField label={t("lp.quoteAge")} value={age} onChange={setAge} step={5} disabled={!editable} />
+          <NumField label={t("lp.maxLatency")} value={lat} onChange={setLat} step={100} disabled={!editable} />
         </div>
         <p className="-mt-2 text-xs text-muted-foreground">{t("lp.deviationHint")}</p>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-xs text-muted-foreground">
-              <tr>{["LP", t("lp.enabled"), t("lp.takesOrders"), t("lp.priority"), t("lp.minLots"), t("lp.maxLots"), t("lp.symbols"), t("common.status"), t("lp.quoting"), t("lp.lastQuote"), ""].map((h, i) => <th key={i} className="whitespace-nowrap px-2 py-2 text-left font-medium">{h}</th>)}</tr>
+              <tr>{["LP", t("lp.enabled"), t("lp.takesOrders"), t("lp.priority"), t("lp.minLots"), t("lp.maxLots"), t("lp.symbols"), t("common.status"), t("lp.quoting"), t("lp.lastQuote"), t("lp.feedLatency"), ""].map((h, i) => <th key={i} className="whitespace-nowrap px-2 py-2 text-left font-medium">{h}</th>)}</tr>
             </thead>
             <tbody>
               {lps.map((p, i) => {
@@ -274,6 +276,7 @@ function AggregationForm({ data }: { data: LpAggregation }) {
                     </td>
                     <td className="px-2 py-2 tabular-nums">{r?.quoting ?? 0}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-xs">{r?.lastQuoteAt ? f.date(r.lastQuoteAt) : "—"}</td>
+                    <td className="px-2 py-2 whitespace-nowrap text-xs tabular-nums">{r?.latencyMs ? <>{r.latencyMs} ms{r.slow && <Badge tone="danger" className="ml-1">{t("lp.slow")}</Badge>}</> : "—"}</td>
                     <td className="px-2 py-1">{editable && <Button size="sm" variant="ghost" onClick={() => setLps(lps.filter((_, j) => j !== i))} aria-label="remove"><Trash2 className="h-3 w-3" /></Button>}</td>
                   </tr>
                 );

@@ -285,7 +285,12 @@ pub fn funding_conditions(admin: &super::store::AdminState) -> Vec<Condition> {
 }
 
 /// Conditions from the FIX session table and the LP aggregator.
-pub fn infra_conditions(ctx: &AdminCtx, now_ms: u64, grace_ms: u64) -> Vec<Condition> {
+pub fn infra_conditions(
+    ctx: &AdminCtx,
+    now_ms: u64,
+    grace_ms: u64,
+    slow_ms: u64,
+) -> Vec<Condition> {
     let mut out = Vec::new();
     if let Some(rows) = ctx
         .lp_status
@@ -294,6 +299,25 @@ pub fn infra_conditions(ctx: &AdminCtx, now_ms: u64, grace_ms: u64) -> Vec<Condi
     {
         for r in rows {
             if r.logged_on {
+                // feed QoS: a logged-on market-data session whose smoothed
+                // latency sits above the threshold
+                if slow_ms > 0
+                    && r.kind == fix_gateway::SessionKind::MarketData
+                    && r.latency_ms > slow_ms
+                {
+                    let lp = if r.lp.is_empty() {
+                        r.target_comp_id.clone()
+                    } else {
+                        r.lp.clone()
+                    };
+                    out.push(Condition {
+                        kind: "lp_slow",
+                        target: format!("{lp}-MD"),
+                        severity: Severity::Warning,
+                        title: format!("{lp} feed slow"),
+                        detail: format!("market data latency {} ms > {} ms", r.latency_ms, slow_ms),
+                    });
+                }
                 continue;
             }
             // never connected yet (since_ms == 0) counts once the grace period has passed
@@ -562,7 +586,12 @@ pub fn spawn(ctx: AdminCtx) {
                 break;
             };
             if !warming_up {
-                conditions.extend(infra_conditions(&ctx, now_ns / 1_000_000, grace_ms));
+                conditions.extend(infra_conditions(
+                    &ctx,
+                    now_ns / 1_000_000,
+                    grace_ms,
+                    settings.lp_slow_ms,
+                ));
             }
             let (raised, resolved) = ctx.alerts.apply_full(now_ns, conditions);
             for a in &raised {

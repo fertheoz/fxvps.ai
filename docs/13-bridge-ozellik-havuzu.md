@@ -172,6 +172,7 @@ trading süreci kapalıyken gelen icra Denetçi farkı olarak görünür.
 | 2026-10-09 | 2 | ✅ | #198 | Profil zamanlayıcı: kurallarda dakika penceresi/haftanın günleri/min spread; gruplarda zamanlı markup pencereleri + haber markup'ı |
 | 2026-10-09 | 3 | 🔧 | #203 | Hacim bantları (emir büyüklüğüne göre ek markup), spread tabanı/hedef (simetrik genişletme), spread tavanı (üstünde yeni piyasa emri yok, bekleyenler bekler, kapanış serbest) |
 | 2026-10-09 | 4 | 🔧 | #204 | Envanter skew: grup fiyatı B-book net pozisyonla kayar (puan/lot, tavan); bizi düzleştiren akış ödüllenir; havuza 14b dahili eşleştirme eklendi |
+| 2026-10-09 | 9 | 🔧 | #209 | Beslenti QoS: gateway MD gecikmesi (alım − SendingTime, EWMA) → lp_status/LP sayfası "Besleme gecikmesi"; agregatör `maxLatencyMs` kapısı (yavaş LP askıda); `lp_slow` uyarısı (ayar: besleme yavaş eşiği, varsayılan 2000 ms) |
 | 2026-10-09 | 8 | 🔧 | #208 | Last look (yalnız API/bridge piyasa emirleri): tutma süresi + müşteri lehine kayma eşiği → ret; terminal/mobil/copy asla tutulmaz; tutulan emir iptal edilebilir |
 | 2026-10-09 | 7 | 🔧 | #207 | Depo hacim tavanı: N dakikada hesap/sembol başına açılan B-book lot; aşan akış A-book (`hedge:burst`) |
 | 2026-10-09 | 6 | 🔧 | #206 | Para birimi maruziyeti (bacak bazında A/B, USD) + para birimi tavanı (aşan akış A-book); haber penceresi (A-book'a zorla / yeni emirleri durdur, kapanış serbest) |

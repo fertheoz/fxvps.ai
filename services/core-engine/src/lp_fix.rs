@@ -522,6 +522,13 @@ pub async fn run_bridge(
             if engine.command(cmd).await.is_err() {
                 break; // engine stopped
             }
+        } else if let GatewayEvent::SessionStats {
+            session: fix_gateway::SessionKind::MarketData,
+            latency_ms,
+            ..
+        } = &ev
+        {
+            agg.set_latency(&lp, *latency_ms);
         } else if let GatewayEvent::SessionUp { .. } | GatewayEvent::SessionDown { .. } = ev {
             tracing::info!(lp, event = ?ev, "fix-gateway session event");
         }
