@@ -471,6 +471,7 @@ pub async fn run_bridge(
     events: broadcast::Sender<Arc<CoreEvent>>,
     lp: String,
     agg: Arc<Aggregator>,
+    ticks: Option<Arc<crate::ticks::TickStore>>,
 ) {
     let mut markups = Markups::default();
     loop {
@@ -492,7 +493,14 @@ pub async fn run_bridge(
                 asks: q.asks.iter().map(lots).collect(),
                 ts_ns: q.ts_recv_ns,
             };
+            let top = (
+                book.bids.first().map_or(0, |l| l.1.raw()),
+                book.asks.first().map_or(0, |l| l.1.raw()),
+            );
             if let Some((bid, ask)) = agg.update(&lp, sym, book) {
+                if let Some(t) = &ticks {
+                    t.record(sym, q.ts_recv_ns, bid.raw(), ask.raw(), top.0, top.1);
+                }
                 let cmd = Command::Quote {
                     symbol: sym.to_string(),
                     bid,

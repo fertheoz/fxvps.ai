@@ -38,6 +38,7 @@ pub mod lp_agg;
 pub mod lp_fix;
 pub mod output;
 pub mod stack;
+pub mod ticks;
 
 pub type Query = Box<dyn FnOnce(&Engine) -> Value + Send>;
 

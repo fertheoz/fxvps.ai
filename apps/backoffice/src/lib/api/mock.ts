@@ -782,6 +782,28 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
         };
       }));
     },
+    async liquidity(q) {
+      const rnd = mulberry32(7);
+      const symbol = q?.symbol ?? "EURUSD";
+      const day = q?.day ?? new Date().toISOString().slice(0, 10);
+      const hours = Array.from({ length: 24 }, (_, hour) => {
+        const open = hour >= 7 && hour <= 20;
+        const ticks = open ? 3000 + Math.floor(rnd() * 500) : 400 + Math.floor(rnd() * 300);
+        const avg = open ? 0.8 + rnd() * 0.6 : 2 + rnd() * 3;
+        return { hour, ticks, avgSpreadPoints: avg, minSpreadPoints: Math.max(0.1, avg - 0.5), maxSpreadPoints: avg * (open ? 3 : 6), avgBidLots: open ? 5 + rnd() * 10 : 1 + rnd() * 2, avgAskLots: open ? 5 + rnd() * 10 : 1 + rnd() * 2 };
+      });
+      return delay({ symbol, day, ticks: hours.reduce((a, h) => a + h.ticks, 0), hours, days: [day, new Date(Date.now() - 864e5).toISOString().slice(0, 10)], symbols: ["EURUSD", "GBPUSD", "XAUUSD"] });
+    },
+    async markout(q) {
+      const rnd = mulberry32(13);
+      const rows = Array.from({ length: Math.min(q?.limit ?? 500, 40) }, (_, i) => ({ id: String(9000 + i), at: new Date(Date.now() - i * 600_000).toISOString(), login: s.clients[i % 5]?.login ?? 1001, symbol: i % 3 === 0 ? "XAUUSD" : "EURUSD", side: (i % 2 ? "buy" : "sell") as "buy" | "sell", entry: (i % 4 === 0 ? "out" : "in") as "in" | "out", lots: 0.1 * (1 + (i % 5)), price: i % 3 === 0 ? 4130 + rnd() : 1.1 + rnd() / 100, m1: (rnd() - 0.5) * 4, m5: (rnd() - 0.4) * 8, m30: (rnd() - 0.3) * 15 }));
+      const summary = ["EURUSD", "XAUUSD"].map((symbol) => { const r = rows.filter((x) => x.symbol === symbol); const avg = (k: "m1" | "m5" | "m30") => r.reduce((a, x) => a + (x[k] ?? 0), 0) / Math.max(1, r.length); return { symbol, deals: r.length, m1: avg("m1"), m5: avg("m5"), m30: avg("m30") }; });
+      return delay({ rows, summary });
+    },
+    async whatIf(req) {
+      const rows = [{ symbol: "EURUSD", legs: 120, lots: 84.5, currency: "USD", delta: req.deltaPoints * 0.00001 * 100_000 * 84.5, deltaUsd: req.deltaPoints * 0.00001 * 100_000 * 84.5 }, { symbol: "XAUUSD", legs: 40, lots: 12.2, currency: "USD", delta: req.deltaPoints * 0.01 * 100 * 12.2, deltaUsd: req.deltaPoints * 0.01 * 100 * 12.2 }];
+      return delay({ deltaPoints: req.deltaPoints, group: req.group ?? null, rows, totalUsd: rows.reduce((a, r) => a + (r.deltaUsd ?? 0), 0) });
+    },
     async revenue(): Promise<RevenueReport> {
       const dayAgo = Date.now() - 86_400_000;
       const zero = () => ({ markup: 0, bBook: 0, commission: 0, lp: 0, total: 0 });

@@ -181,6 +181,9 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/reports/lp-executions", get(lp_executions))
         .route("/v1/reports/execution", get(execution))
         .route("/v1/reports/revenue", get(revenue))
+        .route("/v1/analytics/liquidity", get(analytics_liquidity))
+        .route("/v1/analytics/markout", get(analytics_markout))
+        .route("/v1/analytics/whatif", post(analytics_whatif))
         .route("/v1/audit", get(audit))
         .route("/v1/admin-users", get(list_users))
         .route("/v1/admin-users/{id}", put(save_user))
@@ -3204,6 +3207,88 @@ async fn hedge_put(
     drop(store);
     ctx.notify(&["hedgePolicy", "exposure", "listAudit"]);
     Ok(Json(ctx.q(views::hedge_policy).await?))
+}
+
+#[derive(Deserialize)]
+struct LiquidityQuery {
+    symbol: Option<String>,
+    day: Option<String>,
+}
+
+/// Liquidity-by-hour map from the tick warehouse (parça 13).
+async fn analytics_liquidity(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<LiquidityQuery>,
+) -> ApiResult {
+    need(&actor, "reports.view")?;
+    let dir = ctx.data_dir.join("ticks");
+    let symbols = super::super::ticks::symbols(&dir);
+    let symbol = q
+        .symbol
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty())
+        .or_else(|| symbols.first().cloned())
+        .unwrap_or_default();
+    if symbol.contains('/') || symbol.contains('\\') || symbol.contains("..") {
+        return Err(ApiError::bad("bad symbol"));
+    }
+    let day = q
+        .day
+        .filter(|d| d.len() == 10 && d.chars().all(|c| c.is_ascii_digit() || c == '-'))
+        .unwrap_or_else(|| super::super::ticks::day_of(domain::now_ns()));
+    Ok(Json(
+        ctx.q(move |e| views::liquidity(e, &dir, &symbol, &day))
+            .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+struct MarkoutQuery {
+    hours: Option<u32>,
+    limit: Option<usize>,
+}
+
+async fn analytics_markout(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<MarkoutQuery>,
+) -> ApiResult {
+    need(&actor, "reports.view")?;
+    let hours = u64::from(q.hours.unwrap_or(24).clamp(1, 24 * 30));
+    let limit = q.limit.unwrap_or(500).clamp(1, 5000);
+    let since = domain::now_ns().saturating_sub(hours * 3_600_000_000_000);
+    let dir = ctx.data_dir.join("ticks");
+    Ok(Json(
+        ctx.q(move |e| views::markout(e, &dir, since, limit))
+            .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WhatIfReq {
+    hours: Option<u32>,
+    delta_points: i64,
+    group: Option<String>,
+}
+
+async fn analytics_whatif(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(r): Json<WhatIfReq>,
+) -> ApiResult {
+    need(&actor, "reports.view")?;
+    if !(-1000..=1000).contains(&r.delta_points) {
+        return Err(ApiError::bad("deltaPoints must be -1000..1000"));
+    }
+    let hours = u64::from(r.hours.unwrap_or(24).clamp(1, 24 * 30));
+    let since = domain::now_ns().saturating_sub(hours * 3_600_000_000_000);
+    let group = r.group.filter(|g| !g.trim().is_empty());
+    Ok(Json(
+        ctx.q(move |e| views::whatif_markup(e, since, r.delta_points, group.as_deref()))
+            .await?,
+    ))
 }
 
 #[derive(Deserialize)]
