@@ -487,3 +487,17 @@ fn daily_window_wraps_midnight_and_honours_weekdays() {
     // weekday filter: Monday only
     assert!(!daily_window_active(&[0], 0, 1440, fri_2150));
 }
+
+#[test]
+fn skew_scales_with_net_lots_and_is_capped() {
+    use crate::SkewPolicy;
+    let p = SkewPolicy {
+        centipoints_per_lot: 150,
+        max_points: 30,
+    }; // 1.5 points per lot
+    assert_eq!(p.points(0), 0);
+    assert_eq!(p.points(2 * 100_000_000), 3); // clients net long 2 lots → +3 points
+    assert_eq!(p.points(-10 * 100_000_000), -15);
+    assert_eq!(p.points(100 * 100_000_000), 30); // capped
+    assert_eq!(p.points(-100 * 100_000_000), -30);
+}

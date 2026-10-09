@@ -528,6 +528,9 @@ pub struct GroupConfig {
     /// order is taken and pending orders wait (volatility guard).
     #[serde(default)]
     pub max_spread_points: Option<i64>,
+    /// Inventory skew of the client price (B-book price formation).
+    #[serde(default)]
+    pub skew: Option<SkewPolicy>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -618,6 +621,29 @@ pub struct MarkupBand {
     pub add_points: i64,
 }
 
+/// Inventory skew (price formation): both client prices move by
+/// `centipoints_per_lot` × the B-book net client position on the symbol
+/// (lots, signed, long = clients net long), capped at `max_points`. Clients
+/// net long → we are short → prices go up: buying costs more, selling pays
+/// more, so the flow that squares our book is attracted.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SkewPolicy {
+    /// Hundredths of a point per net lot (e.g. 150 = 1.5 points per lot).
+    pub centipoints_per_lot: i64,
+    pub max_points: i64,
+}
+
+impl SkewPolicy {
+    /// Shift in points for a B-book net of `net_raw` (lots × 1e8).
+    pub fn points(&self, net_raw: i64) -> i64 {
+        let lots_x100 = net_raw / 1_000_000; // centi-lots
+        let pts = (lots_x100 as i128 * self.centipoints_per_lot as i128) / 10_000; // centi-lots × centi-points → points
+        let max = self.max_points.max(0) as i128;
+        pts.clamp(-max, max) as i64
+    }
+}
+
 /// Extra markup around high-impact calendar events.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -681,6 +707,7 @@ impl GroupConfig {
             markup_bands: Vec::new(),
             min_spread_points: None,
             max_spread_points: None,
+            skew: None,
         }
     }
 
@@ -826,6 +853,14 @@ impl Quote {
         Quote {
             bid: Price::from_raw(self.bid.raw() - bid.raw()),
             ask: Price::from_raw(self.ask.raw() + ask.raw()),
+        }
+    }
+
+    /// Both prices moved by `shift` (inventory skew).
+    pub fn shifted(&self, shift: Price) -> Quote {
+        Quote {
+            bid: Price::from_raw(self.bid.raw() + shift.raw()),
+            ask: Price::from_raw(self.ask.raw() + shift.raw()),
         }
     }
 

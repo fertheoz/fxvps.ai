@@ -98,6 +98,8 @@ function GroupDialog({ group, onClose }: { group: Group; onClose: () => void }) 
         <MarkupBandsField value={draft.markupBands ?? []} onChange={(v) => set("markupBands", v)} />
         <NumField label={t("groups.minSpread")} value={draft.minSpreadPoints ?? 0} onChange={(v) => set("minSpreadPoints", v > 0 ? Math.trunc(v) : null)} step={1} />
         <NumField label={t("groups.maxSpread")} value={draft.maxSpreadPoints ?? 0} onChange={(v) => set("maxSpreadPoints", v > 0 ? Math.trunc(v) : null)} step={1} />
+        <NumField label={t("groups.skewPerLot")} value={draft.skew?.pointsPerLot ?? 0} onChange={(v) => set("skew", v > 0 ? { pointsPerLot: v, maxPoints: draft.skew?.maxPoints ?? 30 } : null)} step={0.1} />
+        <NumField label={t("groups.skewMax")} value={draft.skew?.maxPoints ?? 0} onChange={(v) => set("skew", draft.skew ? { ...draft.skew, maxPoints: Math.max(0, Math.trunc(v)) } : v > 0 ? { pointsPerLot: 1, maxPoints: Math.trunc(v) } : null)} step={5} />
         <SelectField label={t("groups.priceImprovement")} value={draft.passPriceImprovement ? "client" : "broker"} options={["client", "broker"] as const} onChange={(v) => set("passPriceImprovement", v === "client")} />
         <SelectField label={t("groups.lpResting")} value={draft.lpResting ? "lp" : "trigger"} options={["lp", "trigger"] as const} onChange={(v) => set("lpResting", v === "lp")} />
         <NumField label={t("groups.swapMult")} value={draft.swapMultiplier} onChange={(v) => set("swapMultiplier", v)} error={errors.swapMultiplier} step={0.1} />

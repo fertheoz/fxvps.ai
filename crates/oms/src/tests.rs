@@ -3098,3 +3098,35 @@ fn spread_floor_widens_symmetrically_and_cap_refuses_market_orders() {
         "closing is always allowed"
     );
 }
+
+#[test]
+fn inventory_skew_moves_the_quote_with_the_b_book_net() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("b", USD, Routing::BBook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 0;
+    g.skew = Some(risk::SkewPolicy {
+        centipoints_per_lot: 1000,
+        max_points: 30,
+    }); // 10 points per lot
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "b", "1000000");
+    let q = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!(
+        (q.bid, q.ask),
+        (px("1.10000"), px("1.10010")),
+        "flat book: no skew"
+    );
+    h.market(1, "l1", Side::Buy, "2"); // clients net long 2 lots → +20 points
+    let q = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!((q.bid, q.ask), (px("1.10020"), px("1.10030")));
+    h.market(1, "l2", Side::Buy, "5"); // net 7 lots → capped at +30
+    let q = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!((q.bid, q.ask), (px("1.10030"), px("1.10040")));
+    // a seller gets the skewed (better) bid: the flow that squares us is paid for
+    h.market(1, "s1", Side::Sell, "7");
+    assert_eq!(h.pos(1).last().unwrap().open_price, px("1.10030"));
+    let q = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!((q.bid, q.ask), (px("1.10000"), px("1.10010")), "flat again");
+}
