@@ -475,10 +475,73 @@ export interface PerfReport {
 }
 export interface Tenant { id: string; name: string; groups: string[]; hostnames: string[]; brandColor?: string; logoUrl?: string; supportEmail?: string }
 
+/** Account-behaviour thresholds (0 = flag off). */
+export interface BehaviorThresholds {
+  windowH: number;
+  scalperHoldS: number;
+  scalperMinCloses: number;
+  scalperPct: number;
+  burstPerMin: number;
+  churnConnects: number;
+  authFails: number;
+  ipCount: number;
+}
+export const DEFAULT_BEHAVIOR: BehaviorThresholds = { windowH: 24, scalperHoldS: 60, scalperMinCloses: 10, scalperPct: 50, burstPerMin: 30, churnConnects: 30, authFails: 10, ipCount: 5 };
+
+export type BehaviorFlag = "scalper" | "burst" | "churn" | "brute_force" | "ip_hopping" | "flood";
+export interface AccountActivity {
+  login: number;
+  name: string;
+  group: string;
+  platforms: string[];
+  ips: string[];
+  orders: number;
+  cancels: number;
+  maxPerMin: number;
+  closes: number;
+  medianHoldS: number | null;
+  scalpPct: number;
+  connects: number;
+  disconnects: number;
+  authFails: number;
+  flags: BehaviorFlag[];
+  score: number;
+}
+export interface IpActivity { ip: string; authFails: number; keyFails: number; connRejects: number; accounts: number[]; flags: BehaviorFlag[] }
+export interface ActivityReport { windowH: number; accounts: AccountActivity[]; ips: IpActivity[] }
+export type ActivityKind = "connect" | "disconnect" | "auth_fail" | "key_fail" | "conn_reject";
+export interface ActivityEvent { tsMs: number; kind: ActivityKind; account: number | null; names: string[]; platform: string; ip: string | null; detail: string }
+
+/** A user of a connected trading platform (MT5 server behind the bridge). */
+export interface PlatformUser {
+  institution: string;
+  login: number;
+  name: string;
+  email: string;
+  phone: string;
+  country: string;
+  city: string;
+  address: string;
+  group: string;
+  server: string;
+  leverage: number;
+  balance: number;
+  currency: string;
+  registeredAt: string;
+  lastLoginAt: string;
+  lastIp: string;
+  status: string;
+  comment: string;
+  extra: Record<string, string>;
+  updatedMs: number;
+}
+export interface PlatformUserDetail { user: PlatformUser; institution: { id: string; account: string; name: string } | null; events: ActivityEvent[] }
+
 export interface AlertSettings {
   lpDownGraceS: number;
   /** Feed QoS: warn when an LP's market-data latency stays above this (ms, 0 = off). */
   lpSlowMs?: number;
+  behavior?: BehaviorThresholds;
   fillRateMinOrders: number;
   fillRateFloorPct: number;
   latencyFloorMs: number;
@@ -769,6 +832,12 @@ export interface AdminApi {
   perf(): Promise<PerfReport>;
   listTenants(): Promise<Tenant[]>;
   saveTenants(ts: Tenant[], actor: Actor): Promise<Tenant[]>;
+  /** Parça 10a: account behaviour and platform (MT5) users. */
+  activityAccounts(q?: { hours?: number }): Promise<ActivityReport>;
+  activityEvents(q?: { hours?: number; login?: number; ip?: string; limit?: number }): Promise<ActivityEvent[]>;
+  listPlatformUsers(q?: { q?: string; institution?: string }): Promise<PlatformUser[]>;
+  getPlatformUser(id: string): Promise<PlatformUserDetail>;
+  upsertPlatformUsers(users: Partial<PlatformUser>[], actor: Actor): Promise<{ upserted: number }>;
 
   listGroups(): Promise<Group[]>;
   listRules(): Promise<RoutingRule[]>;

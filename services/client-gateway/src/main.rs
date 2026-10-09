@@ -273,6 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut acfg = admin::AdminConfig::new(&data_dir).with_env(flag("CORE_DEV_AUTH"))?;
         let table = lp_status.clone().unwrap_or_default();
         acfg.lp_status = Some(table.clone());
+        acfg.activity = Some(hub.activity.clone());
         acfg.agg = lp_agg.clone();
         acfg.names = fix_handle.as_ref().map(|s| s.names.clone());
         if nats_url.is_some() {

@@ -2,7 +2,7 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, ReconciliationRow, Statement, SymbolExposure, IbPayoutPreview } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, ReconciliationRow, Statement, SymbolExposure, IbPayoutPreview, AccountActivity, ActivityEvent, PlatformUser } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
@@ -32,6 +32,11 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
 
   let lpConfig: LpConfig | null = null;
   let tenants: Tenant[] = [{ id: "fxvps", name: "fxvps.ai", groups: ["demo-retail", "demo-hedge"], hostnames: ["trade.fxvps.ai", "console.fxvps.ai"] }];
+  const platformUsers: PlatformUser[] = [
+    { institution: "demo-broker", login: 500123, name: "Ayşe Kaya", email: "ayse@example.com", phone: "+90 555 000 0001", country: "TR", city: "İstanbul", address: "Levent Mah. 12", group: "real\\pro", server: "MT5-Demo", leverage: 100, balance: 12_500.5, currency: "USD", registeredAt: "2026-09-01T10:00:00Z", lastLoginAt: new Date(Date.now() - 3_600_000).toISOString(), lastIp: "85.100.1.2", status: "active", comment: "", extra: { agent: "IB-7", zip: "34330" }, updatedMs: Date.now() - 60_000 },
+    { institution: "demo-broker", login: 500124, name: "John Smith", email: "john@example.com", phone: "+44 7700 900001", country: "GB", city: "London", address: "1 Fleet St", group: "real\\standard", server: "MT5-Demo", leverage: 30, balance: 900, currency: "EUR", registeredAt: "2026-07-14T09:30:00Z", lastLoginAt: new Date(Date.now() - 86_400_000).toISOString(), lastIp: "31.1.1.1", status: "active", comment: "KYC pending", extra: {}, updatedMs: Date.now() - 600_000 },
+    { institution: "demo-broker", login: 500125, name: "Li Wei", email: "li@example.com", phone: "", country: "SG", city: "Singapore", address: "", group: "demo\\std", server: "MT5-Demo", leverage: 500, balance: 100_000, currency: "USD", registeredAt: "2026-10-01T00:00:00Z", lastLoginAt: "", lastIp: "", status: "disabled", comment: "", extra: {}, updatedMs: Date.now() - 6_000_000 },
+  ];
   let alertSettings: AlertSettings = { lpDownGraceS: 60, lpSlowMs: 2000, fillRateMinOrders: 10, fillRateFloorPct: 90, latencyFloorMs: 500, latencyMultiplier: 3, webhookUrl: "", telegramToken: "", telegramTokenSet: false, telegramChatId: "", quietHoursUtc: null, dailyReportHourUtc: 7 };
   let calendar: TradingCalendar = { holidays: ["2026-12-25", "2027-01-01"] };
   // Economic calendar: a few releases around "now" (the import adds the rest of the week).
@@ -499,6 +504,39 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     async simScenario(s2, actor) { guard(actor, "lp.manage"); sim = s2; audit(actor, "lp.sim", "scenario", JSON.stringify(s2)); return delay(sim); },
     async perf() { return delay({ engine: { samples: 5000, totalCommands: 2_400_000, p50Us: 38, p95Us: 120, p99Us: 410, maxUs: 2900, uptimeS: 86400 }, writerSeq: 2_400_000, replica: { seq: 2_399_998, lagCommands: 2, reloads: 1, applied: 120_000 }, budget: { p99Us: 5000, ok: true }, loadtest: { at: new Date(Date.now() - 6 * 36e5).toISOString(), ok: true, clients: 1000, connected: 1000, ordersPerMin: 10012, targetPerMin: 10000, ackP99Ms: 41, rejectPct: 0, quotesPerS: 9400 } }); },
     async listTenants() { return delay(tenants); },
+    async activityAccounts(q) {
+      const hours = q?.hours ?? 24;
+      const rows: AccountActivity[] = [
+        { login: s.clients[0]?.login ?? 1001, name: s.clients[0]?.name ?? "", group: s.clients[0]?.group ?? "demo-retail", platforms: ["terminal", "bridge"], ips: ["85.100.1.2", "85.100.1.9", "5.5.5.5", "7.7.7.7", "9.9.9.9"], orders: 180, cancels: 40, maxPerMin: 42, closes: 60, medianHoldS: 18, scalpPct: 83, connects: 45, disconnects: 44, authFails: 0, flags: ["scalper", "burst", "churn", "ip_hopping"], score: 90 },
+        { login: s.clients[1]?.login ?? 1002, name: s.clients[1]?.name ?? "", group: s.clients[1]?.group ?? "demo-retail", platforms: ["terminal"], ips: ["31.1.1.1"], orders: 12, cancels: 1, maxPerMin: 3, closes: 8, medianHoldS: 3600, scalpPct: 0, connects: 2, disconnects: 1, authFails: 12, flags: ["brute_force"], score: 25 },
+        { login: s.clients[2]?.login ?? 1003, name: s.clients[2]?.name ?? "", group: s.clients[2]?.group ?? "demo-retail", platforms: ["api"], ips: ["10.0.0.4"], orders: 5, cancels: 0, maxPerMin: 2, closes: 4, medianHoldS: 14400, scalpPct: 0, connects: 1, disconnects: 0, authFails: 0, flags: [], score: 0 },
+      ];
+      return delay({ windowH: hours, accounts: rows, ips: [{ ip: "31.1.1.1", authFails: 12, keyFails: 0, connRejects: 0, accounts: [s.clients[1]?.login ?? 1002], flags: ["brute_force"] }, { ip: "203.0.113.7", authFails: 0, keyFails: 6, connRejects: 40, accounts: [], flags: ["flood"] }] });
+    },
+    async activityEvents(q) {
+      const now = Date.now();
+      const all: ActivityEvent[] = Array.from({ length: 30 }, (_, i) => ({ tsMs: now - i * 90_000, kind: (["connect", "disconnect", "auth_fail", "connect", "conn_reject"] as const)[i % 5] ?? "connect", account: i % 3 === 0 ? (s.clients[1]?.login ?? 1002) : (s.clients[0]?.login ?? 1001), names: [], platform: i % 4 === 0 ? "bridge" : "terminal", ip: i % 3 === 0 ? "31.1.1.1" : "85.100.1.2", detail: i % 5 === 2 ? "invalid token: expired" : "" }));
+      return delay(all.filter((e) => (!q?.login || e.account === q.login) && (!q?.ip || e.ip === q.ip)).slice(0, q?.limit ?? 200));
+    },
+    async listPlatformUsers(q) {
+      const needle = (q?.q ?? "").toLowerCase();
+      return delay(platformUsers.filter((u) => (!q?.institution || u.institution === q.institution) && (!needle || String(u.login).includes(needle) || u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle) || u.group.toLowerCase().includes(needle) || u.lastIp.includes(needle))));
+    },
+    async getPlatformUser(id) {
+      const u = platformUsers.find((x) => `${x.institution}:${x.login}` === id);
+      if (!u) throw new Error("unknown platform user");
+      return delay({ user: u, institution: { id: u.institution, account: "2001", name: "Demo Broker Ltd" }, events: [{ tsMs: Date.now() - 60_000, kind: "connect", account: 2001, names: [u.institution], platform: "bridge", ip: "203.0.113.10", detail: "server MT5-Demo plugin fxvps-bridge 1.2" }] });
+    },
+    async upsertPlatformUsers(users, actor) {
+      guard(actor, "clients.edit");
+      for (const u of users) {
+        const full: PlatformUser = { institution: "", login: 0, name: "", email: "", phone: "", country: "", city: "", address: "", group: "", server: "", leverage: 0, balance: 0, currency: "", registeredAt: "", lastLoginAt: "", lastIp: "", status: "", comment: "", extra: {}, ...u, updatedMs: Date.now() };
+        const i = platformUsers.findIndex((x) => x.institution === full.institution && x.login === full.login);
+        if (i >= 0) platformUsers[i] = full; else platformUsers.push(full);
+      }
+      audit(actor, "platform.users", "platform", `${users.length} user record(s) upserted`);
+      return delay({ upserted: users.length });
+    },
     async saveTenants(ts, actor) { guard(actor, "users.edit"); tenants = ts; audit(actor, "tenants.update", "tenants", ts.map((t) => t.id).join(", ")); return delay(tenants); },
     async auditChain() { return delay({ count: s.audit.length, chained: s.audit.length, verified: true, headHash: "9f2a…demo", brokenAt: null, lastAt: s.audit[0]?.at ?? null }); },
     async setKyc(id, kyc, actor) {

@@ -71,6 +71,7 @@ export const ROUTE_PERMISSIONS: Record<string, Permission> = {
   "/risk": "risk.view",
   "/lp": "lp.view",
   "/bridge": "lp.view",
+  "/platform": "clients.view",
   "/denetim": "lp.view",
   "/copy": "clients.view",
   "/calendar": "settings.view",

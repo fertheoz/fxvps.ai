@@ -155,6 +155,25 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     simScenario: (s, actor) => call("POST", "/v1/lp/sim/scenario", s, actor),
     perf: () => call("GET", "/v1/perf"),
     listTenants: () => call("GET", "/v1/tenants"),
+    activityAccounts: (q) => call("GET", `/v1/activity/accounts${q?.hours ? `?hours=${q.hours}` : ""}`),
+    activityEvents: (q) => {
+      const p = new URLSearchParams();
+      if (q?.hours) p.set("hours", String(q.hours));
+      if (q?.login) p.set("login", String(q.login));
+      if (q?.ip) p.set("ip", q.ip);
+      if (q?.limit) p.set("limit", String(q.limit));
+      const s = p.toString();
+      return call("GET", `/v1/activity/events${s ? `?${s}` : ""}`);
+    },
+    listPlatformUsers: (q) => {
+      const p = new URLSearchParams();
+      if (q?.q) p.set("q", q.q);
+      if (q?.institution) p.set("institution", q.institution);
+      const s = p.toString();
+      return call("GET", `/v1/platform/users${s ? `?${s}` : ""}`);
+    },
+    getPlatformUser: (id) => call("GET", `/v1/platform/users/${enc(id)}`),
+    upsertPlatformUsers: (users, actor) => call("PUT", "/v1/platform/users", users, actor),
     saveTenants: (ts, actor) => call("PUT", "/v1/tenants", ts, actor),
     listGroups: () => call("GET", "/v1/groups"),
     listRules: async () => (await call<WireRule[]>("GET", "/v1/rules")).map(fromWireRule),

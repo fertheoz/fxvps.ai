@@ -91,6 +91,9 @@ pub struct Hub {
     pub cfg: ClientGatewayConfig,
     pub auth: Authenticator,
     pub metrics: Metrics,
+    /// Connection / auth events for the back office (parça 10a); shared with
+    /// the admin API when it runs in this process.
+    pub activity: Arc<core_engine::admin::activity::ActivityLog>,
     pub conns: crate::limits::ConnLimits,
     quotes: broadcast::Sender<Arc<QuoteMsg>>,
     depths: broadcast::Sender<Arc<DepthMsg>>,
@@ -399,6 +402,7 @@ impl Hub {
             depths,
             accounts,
             metrics: Metrics::default(),
+            activity: Arc::default(),
             conns: crate::limits::ConnLimits::new(
                 cfg.max_connections,
                 cfg.max_connections_per_ip,

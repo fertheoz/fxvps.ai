@@ -42,7 +42,7 @@ fn file(ctx: &AdminCtx) -> PathBuf {
     dir(ctx).join("kurumlar.json")
 }
 
-fn load(ctx: &AdminCtx) -> Result<Vec<Institution>, ApiError> {
+pub(super) fn load(ctx: &AdminCtx) -> Result<Vec<Institution>, ApiError> {
     match std::fs::read(file(ctx)) {
         Ok(b) => serde_json::from_slice(&b)
             .map_err(|e| ApiError::internal(format!("kurumlar.json: {e}"))),
