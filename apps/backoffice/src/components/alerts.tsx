@@ -1,6 +1,8 @@
 "use client";
 import * as React from "react";
-import { Bell, Check } from "lucide-react";
+import Link from "next/link";
+import { Bell, Check, UserX } from "lucide-react";
+import type { MessageKey } from "@/lib/i18n";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { api, useApiMutation, useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
@@ -24,6 +26,37 @@ function AlertRow({ a, onAck }: { a: Alert; onAck?: (id: string) => void }) {
 }
 
 /** Dashboard card: active alerts with acknowledge, plus the last resolved ones. */
+/** Parça 10a: accounts flagged by the behaviour scorer (top 5), with a link to the Platform page. */
+export function AccountAlertsCard() {
+  const t = useT();
+  const q = useApiQuery("activityAccounts", [{}], { live: 15000 });
+  const flagged = (q.data?.accounts ?? []).filter((a) => a.flags.length > 0).slice(0, 5);
+  const ips = (q.data?.ips ?? []).filter((r) => r.flags.length > 0).slice(0, 3);
+  return (
+    <Card className="min-w-0 overflow-hidden" data-testid="account-alerts">
+      <CardHeader><CardTitle className="flex items-center gap-2"><UserX className="h-4 w-4" />{t("dash.accountAlerts")}{flagged.length > 0 && <Badge tone="warning">{flagged.length}</Badge>}</CardTitle></CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {flagged.length === 0 && ips.length === 0 && <div className="text-muted-foreground">{t("dash.noAccountAlerts")}</div>}
+        {flagged.map((a) => (
+          <div key={a.login} className="flex flex-wrap items-center gap-1.5">
+            <Link className="font-medium tabular-nums underline-offset-2 hover:underline" href={`/platform?tab=alerts&login=${a.login}`}>{a.login}</Link>
+            <span className="text-xs text-muted-foreground">{a.name || a.group}</span>
+            {a.flags.map((f) => <Badge key={f} tone={f === "brute_force" ? "danger" : "warning"}>{t(`platform.flag.${f}` as MessageKey)}</Badge>)}
+          </div>
+        ))}
+        {ips.map((r) => (
+          <div key={r.ip} className="flex flex-wrap items-center gap-1.5">
+            <span className="font-mono text-xs">{r.ip}</span>
+            {r.flags.map((f) => <Badge key={f} tone="danger">{t(`platform.flag.${f}` as MessageKey)}</Badge>)}
+            <span className="text-xs text-muted-foreground">{r.authFails + r.keyFails} {t("platform.authFails").toLowerCase()}</span>
+          </div>
+        ))}
+        <div className="pt-1"><Link className="text-xs text-muted-foreground underline-offset-2 hover:underline" href="/platform?tab=alerts">{t("platform.openAll")}</Link></div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function AlertsCard() {
   const t = useT();
   const actor = useActor();

@@ -138,6 +138,117 @@ pub struct SettingsRec {
     pub funding: FundingInstructions,
 }
 
+/// Account-behaviour thresholds (parça 10a; Settings → Alerts). 0 turns a
+/// flag off.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BehaviorThresholds {
+    /// Hours of history scored (1..168).
+    pub window_h: u32,
+    /// A close held shorter than this is a scalp.
+    pub scalper_hold_s: u32,
+    pub scalper_min_closes: u32,
+    /// Percent of closes that are scalps.
+    pub scalper_pct: u8,
+    /// Client orders in any 60 s.
+    pub burst_per_min: u32,
+    /// Connects in the window.
+    pub churn_connects: u32,
+    /// Failed authentications in the window (per account / per IP).
+    pub auth_fails: u32,
+    /// Distinct IPs in the window.
+    pub ip_count: u32,
+}
+
+impl Default for BehaviorThresholds {
+    fn default() -> BehaviorThresholds {
+        BehaviorThresholds {
+            window_h: 24,
+            scalper_hold_s: 60,
+            scalper_min_closes: 10,
+            scalper_pct: 50,
+            burst_per_min: 30,
+            churn_connects: 30,
+            auth_fails: 10,
+            ip_count: 5,
+        }
+    }
+}
+
+/// A user of a connected trading platform (MT5 server behind the bridge),
+/// as the platform reports it; keyed `institution:login`. Fields the
+/// platform does not know stay empty; anything beyond the schema lands in
+/// `extra` (name → value) so nothing the plugin sends is dropped.
+#[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PlatformUser {
+    pub institution: String,
+    pub login: u64,
+    pub name: String,
+    pub email: String,
+    pub phone: String,
+    pub country: String,
+    pub city: String,
+    pub address: String,
+    pub group: String,
+    pub server: String,
+    pub leverage: u32,
+    pub balance: f64,
+    pub currency: String,
+    pub registered_at: String,
+    pub last_login_at: String,
+    pub last_ip: String,
+    pub status: String,
+    pub comment: String,
+    pub extra: BTreeMap<String, String>,
+    /// Set by the store when the record was last upserted.
+    pub updated_ms: u64,
+}
+
+impl PlatformUser {
+    pub fn key(&self) -> String {
+        format!("{}:{}", self.institution, self.login)
+    }
+
+    /// Length limits so a plugin cannot grow the journal without bound.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.institution.is_empty() || self.institution.len() > 32 {
+            return Err("institution 1-32 chars".into());
+        }
+        if self.login == 0 {
+            return Err("login > 0".into());
+        }
+        let texts = [
+            &self.name,
+            &self.email,
+            &self.phone,
+            &self.country,
+            &self.city,
+            &self.address,
+            &self.group,
+            &self.server,
+            &self.currency,
+            &self.registered_at,
+            &self.last_login_at,
+            &self.last_ip,
+            &self.status,
+            &self.comment,
+        ];
+        if texts.iter().any(|t| t.len() > 200) {
+            return Err("text fields ≤ 200 chars".into());
+        }
+        if self.extra.len() > 40
+            || self
+                .extra
+                .iter()
+                .any(|(k, v)| k.len() > 40 || v.len() > 200)
+        {
+            return Err("extra: ≤ 40 entries, key ≤ 40, value ≤ 200 chars".into());
+        }
+        Ok(())
+    }
+}
+
 /// Alert thresholds, channels and the daily operations report (stage 13).
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -147,6 +258,9 @@ pub struct AlertSettings {
     /// Feed QoS: warn when an LP's market-data latency (ms) stays above this. 0 = off.
     #[serde(default = "d_lp_slow")]
     pub lp_slow_ms: u64,
+    /// Account-behaviour flags (parça 10a).
+    #[serde(default)]
+    pub behavior: BehaviorThresholds,
     #[serde(default = "d_fr_orders")]
     pub fill_rate_min_orders: u32,
     /// Percent, e.g. 90.
@@ -197,6 +311,7 @@ impl Default for AlertSettings {
         AlertSettings {
             lp_down_grace_s: 60,
             lp_slow_ms: 2000,
+            behavior: BehaviorThresholds::default(),
             fill_rate_min_orders: 10,
             fill_rate_floor_pct: 90,
             latency_floor_ms: 500,
@@ -463,6 +578,10 @@ pub enum AdminCmd {
     AlertSettingsSaved {
         settings: AlertSettings,
     },
+    /// Platform user records (bridge plugin or import), upserted by key.
+    PlatformUsersUpserted {
+        users: Vec<PlatformUser>,
+    },
     /// Tenant registry (stage 14), full replacement.
     TenantsSaved {
         tenants: Vec<TenantRec>,
@@ -660,6 +779,9 @@ pub struct AdminState {
     /// Tenants (stage 14).
     #[serde(default)]
     pub tenants: BTreeMap<String, TenantRec>,
+    /// Platform (MT5) users reported by bridge plugins or imported, by `institution:login`.
+    #[serde(default)]
+    pub platform_users: BTreeMap<String, PlatformUser>,
     /// Copy trading strategies by provider account.
     #[serde(default)]
     pub strategies: BTreeMap<u64, super::copy_admin::StrategyRec>,
@@ -1281,6 +1403,19 @@ impl AdminState {
                     "rules.update".into(),
                     "routing".into(),
                     format!("{count} rules"),
+                )
+            }
+            AdminCmd::PlatformUsersUpserted { users } => {
+                for u in users {
+                    let mut u = u.clone();
+                    u.updated_ms = r.ts / 1_000_000;
+                    self.platform_users.insert(u.key(), u);
+                }
+                self.audit(
+                    r,
+                    "platform.users".into(),
+                    "platform".into(),
+                    format!("{} user record(s) upserted", users.len()),
                 )
             }
             AdminCmd::TenantsSaved { tenants } => {

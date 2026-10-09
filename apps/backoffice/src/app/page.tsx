@@ -3,7 +3,7 @@ import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, PageHeader, Pnl, Stat, Tabs } from "@/components/ui/primitives";
 import { ExecutionChart, ExposureChart, FlowChart, RevenueChart, VolumeChart } from "@/components/charts";
-import { AlertsCard } from "@/components/alerts";
+import { AccountAlertsCard, AlertsCard } from "@/components/alerts";
 import { FixBadge } from "@/components/badges";
 import { useApiQuery } from "@/lib/queries";
 import { useFormat, useT } from "@/lib/hooks";
@@ -71,6 +71,7 @@ export default function DashboardPage() {
           <CardContent>{d ? <ExecutionChart data={d.buckets} labels={[t("reports.avgSlip"), t("reports.p95Latency")]} /> : t("common.loading")}</CardContent>
         </Card>
         <AlertsCard />
+        <AccountAlertsCard />
 
         <Card className="min-w-0 overflow-hidden xl:col-span-2">
           <CardHeader><CardTitle>{t("dash.exposure")}</CardTitle></CardHeader>

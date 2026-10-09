@@ -31,6 +31,8 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     { key: "settings.fourEyes", page: "nav.settings", href: "/settings" },
     { key: "denetim.autoheal", page: "nav.denetim", href: "/denetim" },
     { key: "bridge.add", page: "nav.bridge", href: "/bridge" },
+    { key: "platform.alerts", page: "nav.platform", href: "/platform" },
+    { key: "settings.behavior", page: "nav.settings", href: "/settings" },
   ];
   const cmds: Cmd[] = [
     ...NAV.filter((n) => canAccessRoute(actor.role, n.href)).map((n) => ({ id: n.href, label: t(n.key), group: t("palette.hint"), icon: n.icon, run: () => router.push(n.href) })),

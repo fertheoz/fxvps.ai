@@ -4,7 +4,7 @@
 use super::auth::{self, Actor, Claims, Role};
 use super::store::{
     AdminCmd, AdminState, AdminUserRec, AlertSettings, BalanceKind, BalanceOp, FundingKind,
-    FundingMethod, FundingRequest, FundingStatus, KycDoc, OpStatus, SettingsRec,
+    FundingMethod, FundingRequest, FundingStatus, KycDoc, OpStatus, PlatformUser, SettingsRec,
 };
 use super::{need, views, AdminCtx, ApiError, ApiResult, ClientActor};
 use axum::extract::{Path, Query, State};
@@ -38,6 +38,13 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/accounts/{id}/balance-ops", post(balance_op))
         .route("/v1/accounts/{id}/kyc", patch(set_kyc))
         .route("/v1/accounts/{id}/group", patch(set_group))
+        .route("/v1/activity/accounts", get(activity_accounts))
+        .route("/v1/activity/events", get(activity_events))
+        .route(
+            "/v1/platform/users",
+            get(list_platform_users).put(upsert_platform_users),
+        )
+        .route("/v1/platform/users/{id}", get(platform_user))
         .route("/v1/accounts/{id}/profile", patch(set_profile))
         .route("/v1/accounts/{id}/kyc/documents", get(kyc_docs))
         .route("/v1/accounts/{id}/kyc/documents/{doc}", get(kyc_doc_file))
@@ -2187,6 +2194,8 @@ async fn alert_settings_put(
         || a.latency_multiplier == 0
         || a.lp_down_grace_s > 86_400
         || a.lp_slow_ms > 60_000
+        || !(1..=168).contains(&a.behavior.window_h)
+        || a.behavior.scalper_pct > 100
     {
         return Err(ApiError::bad("invalid thresholds"));
     }
@@ -3479,6 +3488,157 @@ fn tenant_filter(v: Value, allowed: &Option<std::collections::BTreeSet<u64>>) ->
         }
         other => other,
     }
+}
+
+#[derive(Deserialize)]
+struct ActivityQuery {
+    hours: Option<u32>,
+    login: Option<u64>,
+    ip: Option<String>,
+    limit: Option<usize>,
+}
+
+/// Account behaviour of the last `hours` (default: the alert-settings window).
+async fn activity_accounts(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<ActivityQuery>,
+) -> ApiResult {
+    need(&actor, "clients.view")?;
+    let st = ctx.view_state().await;
+    let mut th = st.alerts.behavior.clone();
+    if let Some(h) = q.hours {
+        th.window_h = h.clamp(1, 168);
+    }
+    let window_h = th.window_h;
+    let now_ns = domain::now_ns();
+    let events = ctx
+        .activity
+        .since((now_ns / 1_000_000).saturating_sub(u64::from(window_h) * 3_600_000));
+    let names = ctx.names.clone();
+    let (accounts, ips) = ctx
+        .q(move |e| {
+            let resolve = |n: &str| names.as_ref().and_then(|m| m.number(n));
+            super::activity::account_activity(e, &st, &events, now_ns, &th, &resolve)
+        })
+        .await?;
+    Ok(Json(
+        json!({ "windowH": window_h, "accounts": accounts, "ips": ips }),
+    ))
+}
+
+/// Raw connection / auth events, newest first; filter by `login` or `ip`.
+async fn activity_events(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<ActivityQuery>,
+) -> ApiResult {
+    need(&actor, "clients.view")?;
+    let hours = q.hours.unwrap_or(24).clamp(1, 168);
+    let limit = q.limit.unwrap_or(200).clamp(1, 2000);
+    let now_ms = domain::now_ns() / 1_000_000;
+    let names = ctx.names.clone();
+    let mut events = ctx
+        .activity
+        .since(now_ms.saturating_sub(u64::from(hours) * 3_600_000));
+    if let Some(login) = q.login {
+        events.retain(|e| {
+            e.account == Some(login)
+                || e.names
+                    .iter()
+                    .any(|n| names.as_ref().and_then(|m| m.number(n)) == Some(login))
+        });
+    }
+    if let Some(ip) = &q.ip {
+        events.retain(|e| e.ip.as_deref() == Some(ip.as_str()));
+    }
+    events.reverse();
+    events.truncate(limit);
+    Ok(Json(json!(events)))
+}
+
+#[derive(Deserialize)]
+struct PlatformUsersQuery {
+    q: Option<String>,
+    institution: Option<String>,
+}
+
+async fn list_platform_users(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<PlatformUsersQuery>,
+) -> ApiResult {
+    need(&actor, "clients.view")?;
+    let needle = q.q.map(|s| s.trim().to_lowercase()).unwrap_or_default();
+    let st = &ctx.store.lock().await.state;
+    let rows: Vec<&PlatformUser> = st
+        .platform_users
+        .values()
+        .filter(|u| q.institution.as_ref().is_none_or(|i| &u.institution == i))
+        .filter(|u| {
+            needle.is_empty()
+                || u.login.to_string().contains(&needle)
+                || u.name.to_lowercase().contains(&needle)
+                || u.email.to_lowercase().contains(&needle)
+                || u.group.to_lowercase().contains(&needle)
+                || u.last_ip.contains(&needle)
+                || u.country.to_lowercase().contains(&needle)
+        })
+        .collect();
+    Ok(Json(json!(rows)))
+}
+
+/// One platform user with the institution it belongs to and the bridge
+/// account's recent connection events.
+async fn platform_user(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Path(id): Path<String>,
+) -> ApiResult {
+    need(&actor, "clients.view")?;
+    let st = ctx.store.lock().await;
+    let Some(u) = st.state.platform_users.get(&id).cloned() else {
+        return Err(ApiError::not_found("unknown platform user"));
+    };
+    drop(st);
+    let institution = super::bridge_admin::load(&ctx)?
+        .into_iter()
+        .find(|i| i.id == u.institution);
+    let account = institution
+        .as_ref()
+        .and_then(|i| i.account.trim().parse::<u64>().ok());
+    let now_ms = domain::now_ns() / 1_000_000;
+    let mut events = ctx.activity.since(now_ms.saturating_sub(7 * 86_400_000));
+    events.retain(|e| account.is_some() && e.account == account);
+    events.reverse();
+    events.truncate(100);
+    Ok(Json(json!({
+        "user": u,
+        "institution": institution.map(|i| json!({ "id": i.id, "account": i.account, "name": i.name })),
+        "events": events,
+    })))
+}
+
+/// Upsert platform user records (manual import now; the bridge plugin sends
+/// the same shape as `{"t":"users","users":[...]}` once the MT5 API is wired).
+async fn upsert_platform_users(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(users): Json<Vec<PlatformUser>>,
+) -> ApiResult {
+    need(&actor, "clients.edit")?;
+    if users.is_empty() || users.len() > 500 {
+        return Err(ApiError::bad("1-500 users per request"));
+    }
+    for u in &users {
+        u.validate().map_err(ApiError::bad)?;
+    }
+    let n = users.len();
+    let mut store = ctx.store.lock().await;
+    store.append(&actor, AdminCmd::PlatformUsersUpserted { users })?;
+    drop(store);
+    ctx.notify(&["listPlatformUsers", "listAudit"]);
+    Ok(Json(json!({ "upserted": n })))
 }
 
 async fn list_alerts(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

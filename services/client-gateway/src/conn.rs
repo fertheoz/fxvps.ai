@@ -23,6 +23,7 @@ use tokio::time::{interval, timeout, MissedTickBehavior};
 use crate::auth::Claims;
 use crate::conflate::Conflator;
 use crate::hub::{AccountEvent, CmdError, Hub, NewOrder};
+use core_engine::admin::activity::ActivityKind;
 
 /// Upper bound of a stored preferences document.
 const PREFS_MAX_BYTES: usize = 64 * 1024;
@@ -172,6 +173,27 @@ pub async fn run(
 
 type Stream = futures_util::stream::SplitStream<WebSocket>;
 
+/// Records the disconnect of an authenticated session however it ends.
+struct DisconnectGuard<'a> {
+    hub: &'a Hub,
+    names: Vec<String>,
+    ip: Option<String>,
+    since: std::time::Instant,
+}
+
+impl Drop for DisconnectGuard<'_> {
+    fn drop(&mut self) {
+        self.hub.activity.record(
+            ActivityKind::Disconnect,
+            None,
+            std::mem::take(&mut self.names),
+            "terminal",
+            self.ip.as_deref(),
+            format!("after {} s", self.since.elapsed().as_secs()),
+        );
+    }
+}
+
 async fn next_inbound(stream: &mut Stream) -> Inbound {
     loop {
         match stream.next().await {
@@ -236,6 +258,14 @@ async fn session(
                 Ok(c) => c,
                 Err(e) => {
                     hub.metrics.auth_failures.inc();
+                    hub.activity.record(
+                        ActivityKind::AuthFail,
+                        None,
+                        Vec::new(),
+                        "terminal",
+                        peer_ip.as_deref(),
+                        format!("invalid token: {e}"),
+                    );
                     tracing::debug!(error = %e, "auth rejected");
                     let _ = out.error("", ErrorCode::Unauthenticated, "invalid token");
                     return Some((close_code::UNAUTHENTICATED, "unauthenticated".into()));
@@ -250,6 +280,14 @@ async fn session(
     };
     if slot.bind_subject(&claims.sub).is_err() {
         hub.metrics.connections_rejected.inc();
+        hub.activity.record(
+            ActivityKind::ConnReject,
+            None,
+            claims.accounts.clone(),
+            "terminal",
+            peer_ip.as_deref(),
+            format!("too many connections for {}", claims.sub),
+        );
         let _ = out.error(
             "",
             ErrorCode::RateLimited,
@@ -257,6 +295,20 @@ async fn session(
         );
         return Some((close_code::POLICY, "too many connections".into()));
     }
+    hub.activity.record(
+        ActivityKind::Connect,
+        None,
+        claims.accounts.clone(),
+        "terminal",
+        peer_ip.as_deref(),
+        claims.sub.clone(),
+    );
+    let _disconnect = DisconnectGuard {
+        hub,
+        names: claims.accounts.clone(),
+        ip: peer_ip.clone(),
+        since: std::time::Instant::now(),
+    };
     // The token is re-checked for the whole connection: at `exp` the session is
     // closed with UNAUTHENTICATED and the client reconnects with a fresh token.
     let expiry = token_deadline(claims.exp, domain::now_ns() / 1_000_000_000);

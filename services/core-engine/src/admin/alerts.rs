@@ -4,6 +4,7 @@
 //! (audited, optionally POSTed to `CORE_ALERT_WEBHOOK_URL`); one that clears
 //! resolves it. The console shows the active list and a short history.
 
+use super::activity::{self, AccountActivity, IpActivity};
 use super::{store::AdminCmd, views, AdminCtx};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -563,6 +564,40 @@ fn night_watch_lines() -> String {
     out
 }
 
+/// Account-behaviour conditions (parça 10a): one warning per flagged account
+/// and per brute-forcing IP.
+pub fn behavior_conditions(accounts: &[AccountActivity], ips: &[IpActivity]) -> Vec<Condition> {
+    let mut out = Vec::new();
+    for a in accounts.iter().filter(|a| !a.flags.is_empty()) {
+        out.push(Condition {
+            kind: "account_abuse",
+            target: a.login.to_string(),
+            severity: Severity::Warning,
+            title: format!("Account {} flagged: {}", a.login, a.flags.join(", ")),
+            detail: format!(
+                "orders {} (max {}/min), closes {} (scalp {}%), connects {}, auth fails {}, ips {}",
+                a.orders,
+                a.max_per_min,
+                a.closes,
+                a.scalp_pct,
+                a.connects,
+                a.auth_fails,
+                a.ips.len()
+            ),
+        });
+    }
+    for ip in ips.iter().filter(|r| r.flags.contains(&"brute_force")) {
+        out.push(Condition {
+            kind: "brute_force",
+            target: ip.ip.clone(),
+            severity: Severity::Warning,
+            title: format!("Brute force from {}", ip.ip),
+            detail: format!("auth fails {}, key fails {}", ip.auth_fails, ip.key_fails),
+        });
+    }
+    out
+}
+
 /// Background evaluator: every 15 s; thresholds and channels from the admin store.
 pub fn spawn(ctx: AdminCtx) {
     tokio::spawn(async move {
@@ -578,6 +613,36 @@ pub fn spawn(ctx: AdminCtx) {
             // warm-up: a process that just took over (blue/green) has no LP
             // status yet; give the links one grace period before judging them
             let warming_up = started.elapsed().as_millis() < u128::from(grace_ms);
+            // account behaviour: gateway connection log + orders / deals
+            let th = settings.behavior.clone();
+            let events = ctx.activity.since(
+                (now_ns / 1_000_000).saturating_sub(u64::from(th.window_h.max(1)) * 3_600_000),
+            );
+            let names = ctx.names.clone();
+            let st_b = st.clone();
+            let behavior = ctx
+                .engine
+                .read(move |e| {
+                    let resolve = |n: &str| names.as_ref().and_then(|m| m.number(n));
+                    activity::account_activity(e, &st_b, &events, now_ns, &th, &resolve)
+                })
+                .await
+                .unwrap_or_default();
+            // platform user records handed over by bridge sessions
+            let inbox = ctx.activity.take_users();
+            if !inbox.is_empty() {
+                let mut store = ctx.store.lock().await;
+                let ok = store
+                    .append(
+                        &super::auth::Actor::system(),
+                        AdminCmd::PlatformUsersUpserted { users: inbox },
+                    )
+                    .is_ok();
+                drop(store);
+                if ok {
+                    ctx.notify(&["listPlatformUsers"]);
+                }
+            }
             let Ok(mut conditions) = ctx
                 .engine
                 .read(move |e| engine_conditions(e, &st, now_ns))
@@ -585,6 +650,7 @@ pub fn spawn(ctx: AdminCtx) {
             else {
                 break;
             };
+            conditions.extend(behavior_conditions(&behavior.0, &behavior.1));
             if !warming_up {
                 conditions.extend(infra_conditions(
                     &ctx,

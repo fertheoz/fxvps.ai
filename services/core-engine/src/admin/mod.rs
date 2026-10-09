@@ -7,6 +7,7 @@
 //! settings) lives in the admin journal (see [`store`]). Both replay
 //! deterministically.
 
+pub mod activity;
 pub mod alerts;
 pub mod auth;
 mod bridge_admin;
@@ -62,6 +63,9 @@ pub struct AdminConfig {
     pub hazine: Option<usdt_watch::Hazine>,
     /// fix-gateway wire log (`<store_dir>/fixlog`, `CORE_FIX_LOG_DIR`), read-only.
     pub fix_log_dir: PathBuf,
+    /// Connection / auth event log shared with the client gateway (parça 10a);
+    /// `None`: a private, always-empty log.
+    pub activity: Option<Arc<activity::ActivityLog>>,
 }
 
 /// fix-gateway admin endpoint (`FIX_ADMIN_TOKEN` on the gateway side).
@@ -88,6 +92,7 @@ impl AdminConfig {
             mailer: None,
             hazine: None,
             fix_log_dir: PathBuf::from("/var/lib/fix-gateway/fixlog"),
+            activity: None,
         }
     }
 
@@ -121,6 +126,8 @@ impl AdminConfig {
 #[derive(Clone)]
 pub struct AdminCtx {
     pub fix_log_dir: PathBuf,
+    /// Connection / auth events of the client gateway (parça 10a).
+    pub activity: Arc<activity::ActivityLog>,
     pub engine: EngineHandle,
     pub store: Arc<Mutex<AdminStore>>,
     pub auth: Arc<Authenticator>,
@@ -371,6 +378,7 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
     let (live, _) = broadcast::channel(256);
     let ctx = AdminCtx {
         fix_log_dir: cfg.fix_log_dir.clone(),
+        activity: cfg.activity.clone().unwrap_or_default(),
         engine: engine.clone(),
         store: Arc::new(Mutex::new(store)),
         auth: Arc::new(auth),

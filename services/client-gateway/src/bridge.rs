@@ -27,6 +27,8 @@ use tokio::sync::broadcast;
 
 use crate::hub::{AccountEvent, Hub, NewOrder};
 use crate::PeerIp;
+use core_engine::admin::activity::ActivityKind;
+use core_engine::admin::store::PlatformUser;
 use core_engine::api::OrderKind;
 
 pub const PROTOCOL: u64 = 1;
@@ -237,6 +239,28 @@ impl Drop for SessionGuard {
     }
 }
 
+/// Records the end of a bridge session however it ends.
+struct BridgeDisconnect {
+    hub: Arc<Hub>,
+    account: Option<u64>,
+    institution: String,
+    ip: Option<String>,
+    since: Instant,
+}
+
+impl Drop for BridgeDisconnect {
+    fn drop(&mut self) {
+        self.hub.activity.record(
+            ActivityKind::Disconnect,
+            self.account,
+            vec![std::mem::take(&mut self.institution)],
+            "bridge",
+            self.ip.as_deref(),
+            format!("after {} s", self.since.elapsed().as_secs()),
+        );
+    }
+}
+
 pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
@@ -319,6 +343,14 @@ async fn run(hub: Arc<Hub>, bridge: Arc<Bridge>, socket: WebSocket, ip: Option<I
     let key = hello["key"].as_str().unwrap_or_default();
     let Some(inst) = bridge.authenticate(id, key, ip) else {
         tracing::warn!(institution = id, ?ip, "bridge authentication failed");
+        hub.activity.record(
+            ActivityKind::KeyFail,
+            None,
+            vec![id.to_string()],
+            "bridge",
+            ip.map(|i| i.to_string()).as_deref(),
+            format!("institution {id}: key or IP rejected"),
+        );
         let _ = send(
             &mut tx,
             json!({"t":"error","code":"auth","text":"authentication failed"}),
@@ -354,6 +386,25 @@ async fn run(hub: Arc<Hub>, bridge: Arc<Bridge>, socket: WebSocket, ip: Option<I
         ..Default::default()
     });
     let _guard = SessionGuard(bridge.clone(), sid);
+    hub.activity.record(
+        ActivityKind::Connect,
+        inst.account.trim().parse().ok(),
+        vec![inst.id.clone()],
+        "bridge",
+        ip.map(|i| i.to_string()).as_deref(),
+        format!(
+            "server {} plugin {}",
+            hello["server"].as_str().unwrap_or_default(),
+            hello["plugin"].as_str().unwrap_or_default()
+        ),
+    );
+    let _disconnect = BridgeDisconnect {
+        hub: hub.clone(),
+        account: inst.account.trim().parse().ok(),
+        institution: inst.id.clone(),
+        ip: ip.map(|i| i.to_string()),
+        since: Instant::now(),
+    };
     // Subscribe before the welcome so nothing is missed.
     let mut quotes = hub.subscribe_quotes();
     let mut accounts = hub.subscribe_accounts();
@@ -568,10 +619,37 @@ impl Session {
             "ping" => vec![json!({"t":"pong","ts":v["ts"]})],
             "order" => self.on_order(&v).await,
             "reconcile" => vec![self.on_reconcile(&v).await],
+            // platform user records (MT5 users of this institution): the plugin
+            // sends them on login / change; the back office persists them
+            "users" => vec![self.on_users(&v)],
             other => vec![
                 json!({"t":"error","code":"bad_request","text":format!("unknown type {other:?}")}),
             ],
         }
+    }
+
+    fn on_users(&self, v: &Value) -> Value {
+        let Some(list) = v["users"].as_array() else {
+            return json!({"t":"error","code":"bad_request","text":"users: array expected"});
+        };
+        if list.len() > 500 {
+            return json!({"t":"error","code":"bad_request","text":"users: at most 500 per message"});
+        }
+        let mut users = Vec::with_capacity(list.len());
+        for u in list {
+            let Ok(mut u) = serde_json::from_value::<PlatformUser>(u.clone()) else {
+                return json!({"t":"error","code":"bad_request","text":"users: invalid record"});
+            };
+            // the institution is the authenticated one, whatever the plugin says
+            u.institution = self.inst.id.clone();
+            if let Err(e) = u.validate() {
+                return json!({"t":"error","code":"bad_request","text":format!("users: {e}")});
+            }
+            users.push(u);
+        }
+        let n = users.len();
+        self.hub.activity.offer_users(users);
+        json!({"t":"users_ack","count":n})
     }
 
     async fn on_order(&mut self, v: &Value) -> Vec<Value> {
