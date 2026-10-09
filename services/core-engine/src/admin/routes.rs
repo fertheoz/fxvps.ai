@@ -134,6 +134,7 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/risk/hedge", get(hedge_get).put(hedge_put))
         .route("/v1/risk/hedge/manual", post(hedge_manual))
         .route("/v1/pricing/markup", get(markup_list).put(markup_put))
+        .route("/v1/pricing/algo/test", post(algo_test))
         .route("/v1/pricing/markup/{id}", delete(markup_delete))
         .route("/v1/risk/hedge/preview", post(hedge_preview))
         .route(
@@ -2511,6 +2512,9 @@ struct GroupDto {
     /// Inventory skew; `Some(None)` clears it.
     #[serde(default)]
     skew: Option<Option<SkewDto>>,
+    /// Algorithmic pricing formulas; `Some(None)` clears them.
+    #[serde(default)]
+    algo: Option<Option<risk::algo::PricingAlgo>>,
     /// Last look on API / bridge market orders; `Some(None)` clears it.
     #[serde(default)]
     last_look: Option<Option<LastLookDto>>,
@@ -2782,6 +2786,29 @@ async fn save_group(
                 max_move_points: l.max_move_points,
             }),
             _ => None,
+        };
+    }
+    if let Some(al) = g.algo {
+        cfg.algo = match al {
+            Some(a) if a.bid.trim().is_empty() && a.ask.trim().is_empty() => None,
+            Some(a) => {
+                let a = risk::algo::PricingAlgo {
+                    bid: if a.bid.trim().is_empty() {
+                        "0".into()
+                    } else {
+                        a.bid.trim().to_string()
+                    },
+                    ask: if a.ask.trim().is_empty() {
+                        "0".into()
+                    } else {
+                        a.ask.trim().to_string()
+                    },
+                };
+                a.validate()
+                    .map_err(|e| ApiError::bad(format!("algo: {e}")))?;
+                Some(a)
+            }
+            None => None,
         };
     }
     if let Some(sk) = g.skew {
@@ -3288,6 +3315,75 @@ async fn analytics_whatif(
     Ok(Json(
         ctx.q(move |e| views::whatif_markup(e, since, r.delta_points, group.as_deref()))
             .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlgoTestReq {
+    bid: String,
+    ask: String,
+    /// Group whose markup / quotes the variables come from.
+    group: String,
+    #[serde(default)]
+    symbols: Vec<String>,
+}
+
+/// Sandbox (parça 14): evaluates formulas against the live book without
+/// touching any group; returns the variables and the resulting quote.
+async fn algo_test(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(r): Json<AlgoTestReq>,
+) -> ApiResult {
+    need(&actor, "groups.view")?;
+    let a = risk::algo::PricingAlgo {
+        bid: if r.bid.trim().is_empty() {
+            "0".into()
+        } else {
+            r.bid.trim().to_string()
+        },
+        ask: if r.ask.trim().is_empty() {
+            "0".into()
+        } else {
+            r.ask.trim().to_string()
+        },
+    };
+    a.validate().map_err(ApiError::bad)?;
+    let want: Vec<String> = r.symbols.iter().map(|s| s.trim().to_uppercase()).collect();
+    Ok(Json(
+        ctx.q(move |e| {
+            let Some(mut g) = e.group(&r.group).cloned() else {
+                return json!({ "error": "unknown group", "rows": [] });
+            };
+            g.algo = None;
+            let rows: Vec<Value> = e
+                .symbols()
+                .filter(|s| want.is_empty() || want.contains(&s.symbol))
+                .filter_map(|s| {
+                    let base = e.group_quote(&g.name, &s.symbol)?;
+                    let vars = e.algo_vars(&g, &s.symbol);
+                    let (bid_pts, ask_pts) = e.algo_points(&g, &a, &s.symbol);
+                    let point = s.point().raw().max(1);
+                    let bid = base.bid.raw() - (bid_pts * point as f64).round() as i64;
+                    let ask = base.ask.raw() + (ask_pts * point as f64).round() as i64;
+                    Some(json!({
+                        "symbol": s.symbol,
+                        "vars": vars,
+                        "bidPoints": bid_pts,
+                        "askPoints": ask_pts,
+                        "bidNow": views::price_f(base.bid),
+                        "askNow": views::price_f(base.ask),
+                        "bid": views::price_f(Price::from_raw(bid.min(ask))),
+                        "ask": views::price_f(Price::from_raw(ask.max(bid))),
+                        "crossed": bid > ask,
+                    }))
+                })
+                .take(200)
+                .collect();
+            json!({ "rows": rows })
+        })
+        .await?,
     ))
 }
 

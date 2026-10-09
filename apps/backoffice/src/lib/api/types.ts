@@ -511,6 +511,10 @@ export interface MarkoutReport { rows: MarkoutRow[]; summary: { symbol: string; 
 export interface WhatIfRow { symbol: string; legs: number; lots: number; currency: string; delta: number; deltaUsd: number | null }
 export interface WhatIfReport { deltaPoints: number; group: string | null; rows: WhatIfRow[]; totalUsd: number }
 
+/** Algorithmic pricing sandbox (parça 14). */
+export interface AlgoVars { spread: number; net: number; vol: number; hour: number; news: number; markup: number }
+export interface AlgoTestRow { symbol: string; vars: AlgoVars; bidPoints: number; askPoints: number; bidNow: number; askNow: number; bid: number; ask: number; crossed: boolean }
+
 /** Temporary markup set through the pricing API (parça 12). */
 export interface TempMarkup { id: string; group: string; symbol: string | null; points: number; from: string; until: string; reason: string; active: boolean }
 
@@ -809,6 +813,8 @@ export interface AdminApi {
   manualHedge(req: { symbol: string; side: "buy" | "sell"; lots: number }, actor: Actor): Promise<{ ok: boolean }>;
   /** Parça 12: temporary markup (real-time pricing API). */
   tempMarkups(): Promise<TempMarkup[]>;
+  /** Parça 14: evaluate pricing formulas against the live book (nothing saved). */
+  testAlgo(req: { bid: string; ask: string; group: string; symbols?: string[] }, actor: Actor): Promise<{ rows: AlgoTestRow[]; error?: string }>;
   setTempMarkup(req: { group: string; symbol: string | null; points: number; ttlS: number; reason: string }, actor: Actor): Promise<TempMarkup[]>;
   clearTempMarkup(id: string, actor: Actor): Promise<TempMarkup[]>;
   previewHedgePolicy(p: HedgePolicy, actor: Actor): Promise<HedgePreview>;

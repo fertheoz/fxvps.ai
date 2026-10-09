@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import { AlgoFields } from "@/components/algo-fields";
 import { createColumnHelper } from "@tanstack/react-table";
 import { DataTable } from "@/components/ui/data-table";
 import { Button, Dialog, FieldError, PageHeader } from "@/components/ui/primitives";
@@ -100,6 +101,7 @@ function GroupDialog({ group, onClose }: { group: Group; onClose: () => void }) 
         <NumField label={t("groups.maxSpread")} value={draft.maxSpreadPoints ?? 0} onChange={(v) => set("maxSpreadPoints", v > 0 ? Math.trunc(v) : null)} step={1} />
         <NumField label={t("groups.skewPerLot")} value={draft.skew?.pointsPerLot ?? 0} onChange={(v) => set("skew", v > 0 ? { pointsPerLot: v, maxPoints: draft.skew?.maxPoints ?? 30 } : null)} step={0.1} />
         <NumField label={t("groups.skewMax")} value={draft.skew?.maxPoints ?? 0} onChange={(v) => set("skew", draft.skew ? { ...draft.skew, maxPoints: Math.max(0, Math.trunc(v)) } : v > 0 ? { pointsPerLot: 1, maxPoints: Math.trunc(v) } : null)} step={5} />
+        <AlgoFields draft={draft} set={set} />
         <NumField label={t("groups.lastLookHold")} value={draft.lastLook?.holdMs ?? 0} onChange={(v) => set("lastLook", v > 0 ? { holdMs: Math.min(10000, Math.trunc(v)), maxMovePoints: draft.lastLook?.maxMovePoints ?? 5 } : null)} step={50} />
         <NumField label={t("groups.lastLookMove")} value={draft.lastLook?.maxMovePoints ?? 0} onChange={(v) => set("lastLook", draft.lastLook ? { ...draft.lastLook, maxMovePoints: Math.max(0, Math.trunc(v)) } : null)} step={1} />
         <SelectField label={t("groups.priceImprovement")} value={draft.passPriceImprovement ? "client" : "broker"} options={["client", "broker"] as const} onChange={(v) => set("passPriceImprovement", v === "client")} />

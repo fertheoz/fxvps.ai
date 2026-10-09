@@ -3442,3 +3442,46 @@ fn temporary_markup_widens_the_group_quote_until_it_expires() {
     assert_eq!(h.e.temp_markup_points("b", "EURUSD"), 0);
     assert!(h.e.temp_markups().is_empty());
 }
+
+#[test]
+fn pricing_formulas_shift_each_side_and_hot_swap_with_the_group() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("b", USD, Routing::BBook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 0;
+    g.algo = Some(risk::algo::PricingAlgo {
+        bid: "if(net < -1, 10, 0)".into(), // clients net short: pay less on the bid
+        ask: "max(0, net) * 5".into(),     // clients net long: charge more on the ask
+    });
+    h.cmd(Command::SetGroup(g.clone()));
+    h.account(1, "b", "1000000");
+    let q = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!(
+        (q.bid, q.ask),
+        (px("1.10000"), px("1.10010")),
+        "flat: formulas give 0"
+    );
+    h.market(1, "l", Side::Buy, "2"); // net +2 → ask +10 points
+    let q = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!((q.bid, q.ask), (px("1.10000"), px("1.10020")));
+    h.market(1, "s", Side::Sell, "4"); // net -2 → bid -10 points
+    let q = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!((q.bid, q.ask), (px("1.09990"), px("1.10010")));
+    // hot swap: a new formula applies to the next quote
+    g.algo = Some(risk::algo::PricingAlgo {
+        bid: "2".into(),
+        ask: "2".into(),
+    });
+    h.cmd(Command::SetGroup(g.clone()));
+    let q = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!((q.bid, q.ask), (px("1.09998"), px("1.10012")));
+    // a broken formula is harmless: 0 points
+    g.algo = Some(risk::algo::PricingAlgo {
+        bid: "spread +".into(),
+        ask: "".into(),
+    });
+    h.cmd(Command::SetGroup(g));
+    let q = h.e.group_quote("b", "EURUSD").unwrap();
+    assert_eq!((q.bid, q.ask), (px("1.10000"), px("1.10010")));
+}

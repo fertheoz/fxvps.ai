@@ -556,6 +556,10 @@ pub struct GroupConfig {
     /// Inventory skew of the client price (B-book price formation).
     #[serde(default)]
     pub skew: Option<SkewPolicy>,
+    /// Algorithmic pricing (parça 14): the group's own bid / ask offset
+    /// formulas, applied after the skew; `None` = off.
+    #[serde(default)]
+    pub algo: Option<algo::PricingAlgo>,
     /// Last look on API / bridge market orders.
     #[serde(default)]
     pub last_look: Option<LastLook>,
@@ -746,6 +750,7 @@ impl GroupConfig {
             min_spread_points: None,
             max_spread_points: None,
             skew: None,
+            algo: None,
             last_look: None,
         }
     }
@@ -1696,6 +1701,8 @@ pub fn day_from_iso(s: &str) -> Option<u64> {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     u64::try_from(era * 146_097 + doe - 719_468).ok()
 }
+
+pub mod algo;
 
 #[cfg(test)]
 mod tests;

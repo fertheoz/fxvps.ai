@@ -172,7 +172,18 @@ pub struct HerdSignal {
     pub last_ts: u64,
 }
 
+/// Parsed pricing formulas per group (derived from `GroupConfig.algo`,
+/// rebuilt when the source changes; never journaled).
+#[derive(Default)]
+struct AlgoCache {
+    by_group: std::collections::HashMap<
+        String,
+        (risk::algo::PricingAlgo, risk::algo::Expr, risk::algo::Expr),
+    >,
+}
+
 pub struct Engine {
+    algo_cache: std::sync::Mutex<AlgoCache>,
     st: State,
     ledger: Ledger,
     router: Box<dyn LpRouter>,
@@ -211,6 +222,7 @@ impl Engine {
             ledger.open_account(id, k, p, n).expect("fresh ledger");
         }
         Engine {
+            algo_cache: std::sync::Mutex::new(AlgoCache::default()),
             st: State {
                 config,
                 next_id: 1,
@@ -594,10 +606,81 @@ impl Engine {
             Some(sk) => q.shifted(Price::from_raw(point * sk.points(self.b_book_net(symbol)))),
             None => q,
         };
+        // algorithmic pricing: the group's own formulas add points per side
+        let q = match &g.algo {
+            Some(a) => {
+                let (bid_pts, ask_pts) = self.algo_points(g, a, symbol);
+                let bid = q.bid.raw() - (bid_pts * point as f64).round() as i64;
+                let ask = q.ask.raw() + (ask_pts * point as f64).round() as i64;
+                if bid <= ask {
+                    Quote {
+                        bid: Price::from_raw(bid),
+                        ask: Price::from_raw(ask),
+                    }
+                } else {
+                    let mid = (bid + ask) / 2;
+                    Quote {
+                        bid: Price::from_raw(mid),
+                        ask: Price::from_raw(mid),
+                    }
+                }
+            }
+            None => q,
+        };
         Ok(match g.min_spread_points {
             Some(m) if m > 0 => q.floor_spread(Price::from_raw(point * m)),
             _ => q,
         })
+    }
+
+    /// Live variables of the pricing formulas for `group` on `symbol`.
+    pub fn algo_vars(&self, g: &GroupConfig, symbol: &str) -> risk::algo::Vars {
+        let point = self
+            .st
+            .symbols
+            .get(symbol)
+            .map_or(1, |s| s.point().raw().max(1)) as f64;
+        let spread = self
+            .st
+            .quotes
+            .get(symbol)
+            .map_or(0.0, |q| (q.ask.raw() - q.bid.raw()) as f64 / point);
+        risk::algo::Vars {
+            spread,
+            net: self.b_book_net(symbol) as f64 / 1e8,
+            vol: self.volatility_daily(symbol) * 100.0,
+            hour: ((self.st.now / 1_000_000_000) % 86_400 / 3_600) as f64,
+            news: if self.in_news_window() { 1.0 } else { 0.0 },
+            markup: g.markup_points_for(symbol, Side::Buy) as f64,
+        }
+    }
+
+    /// (bid, ask) extra points of the group's formulas right now; parsed
+    /// formulas are cached per group and rebuilt when the source changes.
+    pub fn algo_points(
+        &self,
+        g: &GroupConfig,
+        a: &risk::algo::PricingAlgo,
+        symbol: &str,
+    ) -> (f64, f64) {
+        let vars = self.algo_vars(g, symbol);
+        let mut cache = self.algo_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = cache.by_group.get(&g.name).filter(|(src, ..)| src == a);
+        let (bid, ask) = match entry {
+            Some((_, b, s)) => (risk::algo::eval(b, &vars), risk::algo::eval(s, &vars)),
+            None => {
+                let b = risk::algo::parse(&a.bid).unwrap_or(risk::algo::Expr::Num(0.0));
+                let s = risk::algo::parse(&a.ask).unwrap_or(risk::algo::Expr::Num(0.0));
+                let out = (risk::algo::eval(&b, &vars), risk::algo::eval(&s, &vars));
+                cache.by_group.insert(g.name.clone(), (a.clone(), b, s));
+                out
+            }
+        };
+        // a formula can move a price, never more than 10 000 points
+        (
+            bid.clamp(-10_000.0, 10_000.0),
+            ask.clamp(-10_000.0, 10_000.0),
+        )
     }
 
     /// The raw LP spread is above the group's cap: no new market orders,
@@ -626,6 +709,7 @@ impl Engine {
 
     pub fn restore(snap: &EngineSnapshot, router: Box<dyn LpRouter>) -> R<Engine> {
         Ok(Engine {
+            algo_cache: std::sync::Mutex::new(AlgoCache::default()),
             st: snap.state.clone(),
             ledger: Ledger::restore(&snap.ledger, []).map_err(e2s)?,
             router,
