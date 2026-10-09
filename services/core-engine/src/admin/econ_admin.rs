@@ -301,6 +301,29 @@ pub async fn client_list(
     read(&ctx, &q).await
 }
 
+/// Hands the engine the high-impact events around now (2 h back, 7 days
+/// ahead) for the routing rules' news window.
+pub async fn push_news_times(ctx: &AdminCtx) {
+    let now = domain::now_ns();
+    let (from, to) = (
+        now.saturating_sub(2 * 3_600_000_000_000),
+        now + 7 * 24 * 3_600_000_000_000,
+    );
+    let times: Vec<u64> = {
+        let store = ctx.store.lock().await;
+        store
+            .state
+            .econ_events
+            .values()
+            .filter(|e| e.impact == Impact::High && (from..=to).contains(&e.time_ns))
+            .map(|e| e.time_ns)
+            .collect()
+    };
+    if let Err(e) = ctx.cmd(oms::Command::SetNewsTimes(times)).await {
+        tracing::warn!(error = ?e, "news times not handed to the engine");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,28 +358,5 @@ mod tests {
             Some(vec!["EUR".to_string(), "USD".to_string()])
         );
         assert_eq!(currencies(&q(None, None, Some(" , "))), None);
-    }
-}
-
-/// Hands the engine the high-impact events around now (2 h back, 7 days
-/// ahead) for the routing rules' news window.
-pub async fn push_news_times(ctx: &AdminCtx) {
-    let now = domain::now_ns();
-    let (from, to) = (
-        now.saturating_sub(2 * 3_600_000_000_000),
-        now + 7 * 24 * 3_600_000_000_000,
-    );
-    let times: Vec<u64> = {
-        let store = ctx.store.lock().await;
-        store
-            .state
-            .econ_events
-            .values()
-            .filter(|e| e.impact == Impact::High && (from..=to).contains(&e.time_ns))
-            .map(|e| e.time_ns)
-            .collect()
-    };
-    if let Err(e) = ctx.cmd(oms::Command::SetNewsTimes(times)).await {
-        tracing::warn!(error = ?e, "news times not handed to the engine");
     }
 }
