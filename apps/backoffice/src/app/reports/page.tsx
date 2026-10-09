@@ -9,7 +9,7 @@ import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
 import { useToast } from "@/components/shell/providers";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { Trade } from "@/lib/schemas";
-import type { BestExecutionRow, ClientFlowRow, IbRow, ExecutionRow, ExecutionSummary, LpExecution, ReconciliationRow, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
+import type { BestExecutionRow, ClientFlowRow, ClientOrderDetail, IbRow, ExecutionRow, ExecutionSummary, LpExecution, LpOrderDetail, ReconciliationRow, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
 import { formatMinorPlain } from "@/lib/money";
 import { downloadCsv, toCsv } from "@/lib/utils";
 
@@ -265,7 +265,7 @@ export default function ReportsPage() {
       </div>
       {tab === "trades" && <DataTable data={trades.data ?? []} columns={tradeCols} getRowId={(x) => x.id} />}
       {tab === "statements" && <DataTable data={statements.data ?? []} columns={stmtCols} getRowId={(x) => String(x.login)} />}
-      {tab === "lp" && <DataTable data={lp.data ?? []} columns={lpCols} getRowId={(x) => x.id} />}
+      {tab === "lp" && <DataTable data={lp.data ?? []} columns={lpCols} getRowId={(x) => x.id} renderDetail={(x) => <LpExecutionDetail row={x} />} />}
       {tab === "execution" && (
         <div data-testid="execution-report">
           <p className="mb-2 text-xs text-muted-foreground">{t("reports.slipHint")}</p>
@@ -316,7 +316,7 @@ export default function ReportsPage() {
             <Stat label={t("reports.recon.broker")} value={<Pnl value={reconTotals.broker}>{f.money(reconTotals.broker)}</Pnl>} sub={t("reports.recon.expected")} />
             <Stat label={t("reports.recon.ok")} value={<Badge tone={reconTotals.bad === 0 ? "success" : "danger"}>{reconTotals.bad === 0 ? t("reports.recon.allOk") : `${reconTotals.bad} ✗`}</Badge>} sub={t("reports.recon.invariant")} />
           </div>
-          <DataTable data={recon.data ?? []} columns={reconCols} getRowId={(x) => x.id} />
+          <DataTable data={recon.data ?? []} columns={reconCols} getRowId={(x) => x.id} renderDetail={(x) => <ReconciliationDetail row={x} />} />
         </div>
       )}
       {tab === "revenue" && (
@@ -384,5 +384,141 @@ function IbPayButton({ row, to }: { row: IbRow; to: string }) {
         )}
       </Dialog>
     </>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Row detail panels: everything under the tab's heading, for one row.
+
+const ms = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `${v < 10 ? v.toFixed(1) : Math.round(v)} ms`);
+const ptsStr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}`);
+const Kv = ({ k, v, tone }: { k: string; v: React.ReactNode; tone?: "good" | "bad" }) => (
+  <div className="flex items-baseline justify-between gap-3 border-b border-border/60 py-0.5 text-xs">
+    <span className="text-muted-foreground">{k}</span>
+    <span className={`tabular-nums text-right ${tone === "good" ? "text-emerald-600 dark:text-emerald-400" : tone === "bad" ? "text-red-600 dark:text-red-400" : ""}`}>{v}</span>
+  </div>
+);
+const slipTone2 = (v: number | null | undefined): "good" | "bad" | undefined => (v === null || v === undefined || v === 0 ? undefined : v < 0 ? "good" : "bad");
+
+/** LP-side timeline of one LP order: sent → reports, each with its latency. */
+function LpTimeline({ d, f }: { d: LpOrderDetail; f: ReturnType<typeof useFormat> }) {
+  const t = useT();
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      <div>
+        <Kv k={t("detail.kind")} v={<>{d.kind}{d.resting ? ` · r${d.revision}` : ""}{d.hedge ? ` · ${t("detail.hedge")}` : ""}</>} />
+        <Kv k={t("detail.sentAt")} v={f.date(d.sentAt)} />
+        <Kv k={t("detail.sentQuote")} v={`${d.sentBid ?? "—"} / ${d.sentAsk ?? "—"}`} />
+        {d.limit !== null && <Kv k={t("detail.limit")} v={d.limit} />}
+        {d.stop !== null && <Kv k={t("detail.stop")} v={d.stop} />}
+        <Kv k={t("detail.attempt")} v={`${d.attempt} / ${d.attempts}`} tone={d.attempts > 1 ? "bad" : undefined} />
+        <Kv k={t("detail.firstFill")} v={ms(d.firstFillMs)} />
+        <Kv k={t("detail.lastFill")} v={ms(d.lastFillMs)} />
+        <Kv k={t("detail.lpSlip")} v={ptsStr(d.lpSlipPts)} tone={slipTone2(d.lpSlipPts)} />
+        {d.reason && <Kv k={t("detail.reason")} v={d.reason} tone="bad" />}
+      </div>
+      <div>
+        <div className="mb-1 text-xs font-medium text-muted-foreground">{t("detail.reports")} ({d.fills.length})</div>
+        {d.fills.length === 0 && <div className="text-xs text-muted-foreground">{d.done ? t("detail.noFill") : t("detail.working")}</div>}
+        {d.fills.map((x) => (
+          <div key={x.execId} className="grid grid-cols-[auto_1fr_auto_auto] gap-2 border-b border-border/60 py-0.5 font-mono text-[11px]">
+            <span>{f.date(x.at)}</span><span className="truncate">{x.execId}</span><span className="tabular-nums">{x.lots} @ {x.price}</span><span className="tabular-nums text-muted-foreground">{ms(x.latencyMs)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Client side of one order and the plain-language verdict on its execution. */
+function ClientOrderPanel({ d, f }: { d: ClientOrderDetail; f: ReturnType<typeof useFormat> }) {
+  const t = useT();
+  const notes: { text: string; tone?: "good" | "bad" }[] = [];
+  if (d.lpOrders && d.lpOrders.length > 1) notes.push({ text: t("detail.noteRetries", { n: d.lpOrders.length }), tone: "bad" });
+  if (d.clientSlipPts !== null && d.clientSlipPts > 0) notes.push({ text: t("detail.noteClientSlip", { p: d.clientSlipPts.toFixed(1) }), tone: "bad" });
+  if (d.clientSlipPts !== null && d.clientSlipPts < 0) notes.push({ text: t("detail.noteImprovement", { p: (-d.clientSlipPts).toFixed(1) }), tone: "good" });
+  const worstLp = d.lpOrders?.reduce<number | null>((m, l) => (l.lpSlipPts !== null && (m === null || l.lpSlipPts > m) ? l.lpSlipPts : m), null) ?? null;
+  if (worstLp !== null && worstLp > 0) notes.push({ text: t("detail.noteLpSlip", { p: worstLp.toFixed(1) }), tone: "bad" });
+  const slowest = d.lpOrders?.reduce<number | null>((m, l) => (l.firstFillMs !== null && (m === null || l.firstFillMs > m) ? l.firstFillMs : m), null) ?? null;
+  if (slowest !== null && slowest > 500) notes.push({ text: t("detail.noteSlow", { ms: Math.round(slowest) }), tone: "bad" });
+  if (d.lpOrders?.some((l) => l.resting)) notes.push({ text: t("detail.noteResting"), tone: "good" });
+  if (d.filledLots > 0 && d.filledLots < d.lots) notes.push({ text: t("detail.notePartial", { a: d.filledLots, b: d.lots }), tone: "bad" });
+  if (d.reason) notes.push({ text: `${t("detail.reason")}: ${d.reason}`, tone: "bad" });
+  if (notes.length === 0) notes.push({ text: t("detail.noteClean"), tone: "good" });
+  return (
+    <div className="rounded-md border border-border bg-card p-2">
+      <div className="mb-1 flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-mono">#{d.orderId}</span><span className="text-muted-foreground">{d.clientOrderId}</span>
+        <SideBadge side={d.side} /><BookBadge book={d.book} /><span>{d.kind}</span><span className="text-muted-foreground">{d.origin} · {d.platform}{d.ip ? ` · ${d.ip}` : ""}</span>
+        {d.rule && <Badge tone="default">{t("rules.title")}: {d.rule}</Badge>}
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div>
+          <Kv k={t("detail.createdAt")} v={f.date(d.createdAt)} />
+          <Kv k={t("positions.lots")} v={`${d.filledLots} / ${d.lots}`} />
+          <Kv k={t("reports.requested")} v={d.requested ?? "—"} />
+          <Kv k={t("reports.fillPrice")} v={d.price ?? "—"} />
+          <Kv k={t("reports.clientSlip")} v={ptsStr(d.clientSlipPts)} tone={slipTone2(d.clientSlipPts)} />
+          {d.maxDeviationPts !== null && <Kv k={t("detail.maxDeviation")} v={d.maxDeviationPts} />}
+          {d.markupOverridePts !== null && <Kv k={t("detail.markupOverride")} v={d.markupOverridePts} />}
+          <Kv k={t("reports.status")} v={d.status} />
+        </div>
+        <div>
+          <div className="mb-1 text-xs font-medium text-muted-foreground">{t("detail.verdict")}</div>
+          {notes.map((n, i) => <div key={i} className={`text-xs ${n.tone === "good" ? "text-emerald-600 dark:text-emerald-400" : n.tone === "bad" ? "text-red-600 dark:text-red-400" : ""}`}>• {n.text}</div>)}
+        </div>
+      </div>
+      {d.lpOrders && d.lpOrders.length > 0 && (
+        <div className="mt-2 grid gap-2">
+          {d.lpOrders.map((l) => (
+            <div key={l.lpOrderId ?? l.sentAt} className="rounded border border-border/70 p-2">
+              <div className="mb-1 text-xs font-medium">LP #{l.lpOrderId} · {l.lp ?? "—"} · {l.side} {l.lots}</div>
+              <LpTimeline d={l} f={f} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LpExecutionDetail({ row }: { row: LpExecution }) {
+  const t = useT();
+  const f = useFormat();
+  if (!row.detail) return <div className="text-xs text-muted-foreground">{t("detail.none")}</div>;
+  return (
+    <div className="grid gap-3">
+      <div className="rounded-md border border-border bg-card p-2">
+        <div className="mb-1 text-xs font-medium">LP #{row.id} · {row.lp ?? "—"} · {row.symbol} · {row.side} {row.lots}</div>
+        <LpTimeline d={row.detail} f={f} />
+      </div>
+      {row.clients.filter((c) => c.detail).map((c) => <ClientOrderPanel key={c.orderId} d={c.detail!} f={f} />)}
+    </div>
+  );
+}
+
+function ReconciliationDetail({ row }: { row: ReconciliationRow }) {
+  const t = useT();
+  const f = useFormat();
+  if (!row.detail) return <div className="text-xs text-muted-foreground">{t("detail.none")}</div>;
+  const d = row.detail;
+  return (
+    <div className="grid gap-3">
+      <div className="rounded-md border border-border bg-card p-2">
+        <div className="mb-1 text-xs font-medium">{t("detail.positionDeals")} · #{row.position}</div>
+        <div className="grid grid-cols-[auto_auto_auto_1fr_1fr_1fr_1fr_1fr_1fr] gap-x-3 text-[11px]">
+          {[t("audit.at"), t("detail.entry"), t("positions.lots"), t("reports.clientPrice"), t("reports.lpPrice"), t("reports.recon.clientPnl"), t("reports.recon.lpPnl"), t("reports.recon.markup"), t("reports.recon.commission")].map((h) => <span key={h} className="text-muted-foreground">{h}</span>)}
+          {d.deals.map((x) => (
+            <React.Fragment key={x.dealId}>
+              <span>{f.date(x.at)}</span><span>{x.entry} · {x.reason}</span><span className="tabular-nums">{x.lots}</span>
+              <span className="tabular-nums">{x.price}</span><span className="tabular-nums">{x.lpPrice ?? "—"}</span>
+              <Pnl value={x.pnl}>{f.money(x.pnl)}</Pnl><Pnl value={x.lpPnl}>{f.money(x.lpPnl)}</Pnl><Pnl value={x.markup}>{f.money(x.markup)}</Pnl><Pnl value={x.commission}>{f.money(x.commission)}</Pnl>
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+      {d.orders.map((o) => <ClientOrderPanel key={o.orderId} d={o} f={f} />)}
+    </div>
   );
 }

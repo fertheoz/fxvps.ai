@@ -261,7 +261,63 @@ export interface LpExecution {
   reason: string | null;
   createdAt: string;
   fills: { execId: string; lots: number; price: number; at: string }[];
-  clients: { orderId: string; login: number; lots: number; price: number }[];
+  clients: { orderId: string; login: number; lots: number; price: number; detail?: ClientOrderDetail }[];
+  /** Full LP-side detail (absent on older servers / the mock). */
+  detail?: LpOrderDetail;
+}
+
+/** One LP order as the bridge saw it: what went out and every report back. */
+export interface LpOrderDetail {
+  lpOrderId?: string;
+  lp?: string | null;
+  lots?: number;
+  side?: "buy" | "sell";
+  kind: string;
+  limit: number | null;
+  stop: number | null;
+  resting: boolean;
+  revision: number;
+  hedge: boolean;
+  sentBid: number | null;
+  sentAsk: number | null;
+  sentAt: string;
+  /** 1-based attempt index in the client order's chain, and the chain length. */
+  attempt: number;
+  attempts: number;
+  firstFillMs: number | null;
+  lastFillMs: number | null;
+  /** Fill vs the LP quote we saw when sending, points, + = worse for us. */
+  lpSlipPts: number | null;
+  fills: { execId: string; lots: number; price: number; at: string; latencyMs: number }[];
+  reason: string | null;
+  done: boolean;
+}
+
+/** One client order: what was asked, what was given. */
+export interface ClientOrderDetail {
+  orderId: string;
+  clientOrderId: string;
+  login: number;
+  side: "buy" | "sell";
+  kind: string;
+  origin: string;
+  platform: string;
+  ip: string | null;
+  lots: number;
+  filledLots: number;
+  requested: number | null;
+  price: number | null;
+  /** Fill vs requested, points, + = worse for the client. */
+  clientSlipPts: number | null;
+  status: string;
+  reason: string | null;
+  lpAttempts: number;
+  createdAt: string;
+  rule: string | null;
+  book: "A" | "B";
+  maxDeviationPts: number | null;
+  markupOverridePts: number | null;
+  lpOrders?: LpOrderDetail[];
 }
 
 /** One client order in the execution-quality report. Points: positive slippage = worse for the client. */
@@ -555,6 +611,11 @@ export interface ReconciliationRow {
   broker: number;
   /** client P&L + markup = LP P&L (A-book) held for this deal. */
   ok: boolean;
+  /** Everything behind the deal (absent on the mock). */
+  detail?: {
+    deals: { dealId: string; orderId: string; at: string; entry: string; side: "buy" | "sell"; lots: number; price: number; lpPrice: number | null; reason: string; pnl: number; lpPnl: number; markup: number; commission: number; swap: number; swapFee: number }[];
+    orders: ClientOrderDetail[];
+  };
 }
 
 /**
