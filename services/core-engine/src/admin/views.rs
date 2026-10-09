@@ -804,6 +804,7 @@ pub fn presets() -> Value {
 /// plus the closing deal's) and the swap-free fee are the broker's too.
 pub fn reconciliation(e: &Engine) -> Value {
     let deals = e.deals();
+    let chain = lp_chain(e);
     let mut rows: Vec<Value> = deals
         .iter()
         .rev()
@@ -846,7 +847,56 @@ pub fn reconciliation(e: &Engine) -> Value {
             } else {
                 d.lp_pnl == 0 && d.broker_pnl == -d.pnl.minor
             };
+            // detail: every deal of the position, and the LP chain behind each order
+            let position_deals: Vec<Value> = deals
+                .iter()
+                .filter(|x| x.position_id == d.position_id)
+                .map(|x| json!({
+                    "dealId": x.id.to_string(), "orderId": x.order_id.to_string(), "at": iso(x.ts),
+                    "entry": format!("{:?}", x.entry), "side": side_str(x.side), "lots": qty_f(x.volume),
+                    "price": price_f(x.price), "lpPrice": x.lp_price.map(price_f), "reason": format!("{:?}", x.reason),
+                    "pnl": minor(x.pnl.minor), "lpPnl": minor(x.lp_pnl), "markup": minor(x.broker_pnl),
+                    "commission": minor(-x.commission.minor), "swap": minor(x.swap), "swapFee": minor(-x.swap_fee),
+                }))
+                .collect();
+            let order_ids: Vec<oms::OrderId> = {
+                let mut v: Vec<oms::OrderId> = deals
+                    .iter()
+                    .filter(|x| x.position_id == d.position_id)
+                    .map(|x| x.order_id)
+                    .collect();
+                v.sort_unstable();
+                v.dedup();
+                v
+            };
+            let orders: Vec<Value> = order_ids
+                .iter()
+                .filter_map(|id| e.order(*id))
+                .map(|o| {
+                    let lps: Vec<Value> = chain
+                        .get(&o.id)
+                        .map(|v| {
+                            v.iter()
+                                .enumerate()
+                                .filter_map(|(i, lid)| e.lp_orders().find(|l| l.id == *lid).map(|l| (i, l)))
+                                .map(|(i, l)| {
+                                    let mut x = lp_order_detail(e, l, (i + 1, v.len()));
+                                    x["lpOrderId"] = json!(l.id.to_string());
+                                    x["lp"] = json!(l.lp);
+                                    x["lots"] = json!(qty_f(l.volume));
+                                    x["side"] = json!(side_str(l.side));
+                                    x
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let mut c = client_order_detail(e, o);
+                    c["lpOrders"] = Value::Array(lps);
+                    c
+                })
+                .collect();
             json!({
+                "detail": { "deals": position_deals, "orders": orders },
                 "id": d.id.to_string(),
                 "at": iso(d.ts),
                 "login": d.account,
@@ -1119,7 +1169,122 @@ pub fn execution(e: &Engine, admin: &AdminState) -> Value {
 
 /// Orders sent to the LP with their executions and the client orders they were
 /// allocated to, newest first.
+/// LP-side detail of one LP order: what went out (type, prices, the quote we
+/// saw), every report with its latency, the attempt index in the client
+/// order's chain, slippage against the sent quote (points, + = worse for us).
+fn lp_order_detail(e: &Engine, l: &oms::LpOrder, attempt: (usize, usize)) -> Value {
+    let point = e.symbol_spec(&l.symbol).map_or(0.0, |s| price_f(s.point()));
+    let sign = if l.side == Side::Buy { 1.0 } else { -1.0 };
+    let (mut lots, mut notional) = (0f64, 0f64);
+    for f in &l.fills {
+        lots += qty_f(f.volume);
+        notional += qty_f(f.volume) * price_f(f.price);
+    }
+    let avg = (lots > 0.0).then_some(notional / lots);
+    let sent = if l.side == Side::Buy {
+        l.sent_ask
+    } else {
+        l.sent_bid
+    }
+    .map(price_f);
+    let slip = match (avg, sent) {
+        (Some(a), Some(s)) if point > 0.0 => Some(sign * (a - s) / point),
+        _ => None,
+    };
+    let first = l.fills.iter().map(|f| f.ts).min();
+    let last = l.fills.iter().map(|f| f.ts).max();
+    let ms = |t: Option<u64>| t.map(|t| t.saturating_sub(l.created_ts) as f64 / 1e6);
+    let kind = if l.hedge {
+        "hedge"
+    } else if l.resting && l.stop.is_some() {
+        "stop GTC"
+    } else if l.resting {
+        "limit GTC"
+    } else if l.limit.is_some() {
+        "limit IOC"
+    } else {
+        "market IOC"
+    };
+    json!({
+        "kind": kind,
+        "limit": l.limit.map(price_f),
+        "stop": l.stop.map(price_f),
+        "resting": l.resting,
+        "revision": l.revision,
+        "hedge": l.hedge,
+        "sentBid": l.sent_bid.map(price_f),
+        "sentAsk": l.sent_ask.map(price_f),
+        "sentAt": iso(l.created_ts),
+        "attempt": attempt.0,
+        "attempts": attempt.1,
+        "firstFillMs": ms(first),
+        "lastFillMs": ms(last),
+        "lpSlipPts": slip,
+        "fills": l.fills.iter().map(|f| json!({
+            "execId": f.exec_id, "lots": qty_f(f.volume), "price": price_f(f.price), "at": iso(f.ts),
+            "latencyMs": f.ts.saturating_sub(l.created_ts) as f64 / 1e6,
+        })).collect::<Vec<_>>(),
+        "reason": l.reject_reason,
+        "done": l.done,
+    })
+}
+
+/// Client-side detail of one order: what was asked, what was given, the
+/// markup and the slippage against the request (points, + = worse for the client).
+fn client_order_detail(e: &Engine, o: &oms::Order) -> Value {
+    let point = e
+        .symbol_spec(&o.req.symbol)
+        .map_or(0.0, |s| price_f(s.point()));
+    let sign = if o.req.side == Side::Buy { 1.0 } else { -1.0 };
+    let requested = o
+        .req
+        .requested_price
+        .or(o.req.limit_price)
+        .or(o.req.stop_price)
+        .map(price_f);
+    let fill = (o.filled.raw() > 0).then(|| price_f(o.avg_price));
+    let slip = match (requested, fill) {
+        (Some(r), Some(f)) if point > 0.0 => Some(sign * (f - r) / point),
+        _ => None,
+    };
+    json!({
+        "orderId": o.id.to_string(),
+        "clientOrderId": o.req.client_order_id,
+        "login": o.req.account,
+        "side": side_str(o.req.side),
+        "kind": format!("{:?}", o.req.order_type).to_lowercase(),
+        "origin": format!("{:?}", o.origin),
+        "platform": format!("{:?}", o.req.platform).to_lowercase(),
+        "ip": o.req.ip,
+        "lots": qty_f(o.req.volume),
+        "filledLots": qty_f(o.filled),
+        "requested": requested,
+        "price": fill,
+        "clientSlipPts": slip,
+        "status": format!("{:?}", o.status),
+        "reason": o.reject_reason,
+        "lpAttempts": o.lp_attempts,
+        "createdAt": iso(o.created_ts),
+        "rule": o.rule,
+        "book": if o.routing == Routing::ABook { "A" } else { "B" },
+        "maxDeviationPts": o.req.max_deviation_points,
+        "markupOverridePts": o.markup_override,
+    })
+}
+
+/// Every LP order each client order took part in, oldest first.
+fn lp_chain(e: &Engine) -> BTreeMap<oms::OrderId, Vec<oms::LpOrderId>> {
+    let mut m: BTreeMap<oms::OrderId, Vec<oms::LpOrderId>> = BTreeMap::new();
+    for l in e.lp_orders() {
+        for c in &l.children {
+            m.entry(*c).or_default().push(l.id);
+        }
+    }
+    m
+}
+
 pub fn lp_executions(e: &Engine) -> Value {
+    let chain = lp_chain(e);
     let mut rows: Vec<Value> = e
         .lp_orders()
         .map(|l| {
@@ -1128,6 +1293,17 @@ pub fn lp_executions(e: &Engine) -> Value {
                 lots += qty_f(f.volume);
                 notional += qty_f(f.volume) * price_f(f.price);
             }
+            // attempt index of this LP order in its (first) client order's chain
+            let attempt = l
+                .children
+                .first()
+                .and_then(|c| chain.get(c))
+                .map_or((1, 1), |v| {
+                    (
+                        v.iter().position(|x| *x == l.id).map_or(1, |p| p + 1),
+                        v.len(),
+                    )
+                });
             let status = if l.reject_reason.is_some() {
                 "rejected"
             } else if l.done {
@@ -1142,12 +1318,14 @@ pub fn lp_executions(e: &Engine) -> Value {
                 .iter()
                 .filter_map(|c| e.order(*c))
                 .map(|o| {
-                    json!({
+                    let mut v = json!({
                         "orderId": o.id.to_string(),
                         "login": o.req.account,
                         "lots": qty_f(o.filled),
                         "price": price_f(o.avg_price),
-                    })
+                    });
+                    v["detail"] = client_order_detail(e, o);
+                    v
                 })
                 .collect();
             let fills: Vec<Value> = l
@@ -1175,6 +1353,7 @@ pub fn lp_executions(e: &Engine) -> Value {
                 "createdAt": iso(l.created_ts),
                 "fills": fills,
                 "clients": clients,
+                "detail": lp_order_detail(e, l, attempt),
             })
         })
         .collect();

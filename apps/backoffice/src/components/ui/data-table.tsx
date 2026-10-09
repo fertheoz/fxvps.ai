@@ -4,7 +4,7 @@ import {
   flexRender, getCoreRowModel, getFilteredRowModel, getPaginationRowModel, getSortedRowModel, useReactTable,
   type ColumnDef, type ColumnFiltersState, type FilterFn, type RowSelectionState, type SortingState, type VisibilityState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, Columns3, Filter, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Columns3, Filter, X } from "lucide-react";
 import { Button, Input } from "./primitives";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/hooks";
@@ -44,7 +44,7 @@ function readVisibility(key: string | undefined): VisibilityState {
 }
 
 export function DataTable<T>({
-  data, columns, onRowClick, pageSize = 15, toolbar, selectable, onSelectionChange, getRowId, searchable = true, testId,
+  data, columns, onRowClick, pageSize = 15, toolbar, selectable, onSelectionChange, getRowId, searchable = true, testId, renderDetail,
 }: {
   data: T[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -57,6 +57,8 @@ export function DataTable<T>({
   getRowId?: (row: T) => string;
   searchable?: boolean;
   testId?: string;
+  /** Rows expand on click into this panel (full detail of the row under the tab's heading). */
+  renderDetail?: (row: T) => React.ReactNode;
 }) {
   const t = useT();
   const [sorting, setSorting] = React.useState<SortingState>([]);
@@ -67,6 +69,7 @@ export function DataTable<T>({
   /** Column whose inline filter editor is open (double-click on its header). */
   const [editing, setEditing] = React.useState<string | null>(null);
   const [colsOpen, setColsOpen] = React.useState(false);
+  const [open, setOpen] = React.useState<Record<string, boolean>>({});
 
   React.useEffect(() => {
     if (!testId) return;
@@ -83,7 +86,20 @@ export function DataTable<T>({
       ...c,
       filterFn: c.filterFn ?? (isDateColumn(columnId(c as ColumnDef<unknown, unknown>)) ? "dateRange" : "text"),
     })) as ColumnDef<T>[];
-    if (!selectable) return withFilters;
+    const withDetail: ColumnDef<T>[] = renderDetail
+      ? [
+          {
+            id: "_detail",
+            header: () => null,
+            cell: ({ row }) => (open[row.id] ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />),
+            enableSorting: false,
+            enableColumnFilter: false,
+            enableHiding: false,
+          },
+          ...withFilters,
+        ]
+      : withFilters;
+    if (!selectable) return withDetail;
     return [
       {
         id: "_select",
@@ -97,9 +113,9 @@ export function DataTable<T>({
         enableColumnFilter: false,
         enableHiding: false,
       },
-      ...withFilters,
+      ...withDetail,
     ];
-  }, [columns, selectable]);
+  }, [columns, selectable, renderDetail, open]);
 
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
@@ -187,33 +203,52 @@ export function DataTable<T>({
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
                 {hg.headers.map((h) => {
-                  const canFilter = h.column.getCanFilter() && h.column.id !== "_select";
+                  const canFilter = h.column.getCanFilter() && !h.column.id.startsWith("_");
+                  const canSort = h.column.getCanSort() && !h.column.id.startsWith("_");
                   const value = h.column.getFilterValue();
                   const active = typeof value === "string" ? value !== "" : !!(value && ((value as DateRange).from || (value as DateRange).to));
+                  const sorted = h.column.getIsSorted();
                   return (
                     <th
                       key={h.id}
                       className={cn("relative whitespace-nowrap px-3 py-2 text-left font-medium", active && "text-foreground")}
-                      onDoubleClick={canFilter ? () => setEditing(editing === h.column.id ? null : h.column.id) : undefined}
-                      title={canFilter ? t("common.dblClickFilter") : undefined}
+                      title={canFilter || canSort ? t("common.clickFilter") : undefined}
                     >
-                      {h.isPlaceholder ? null : h.column.getCanSort() ? (
-                        <button
-                          className="inline-flex items-center gap-1 cursor-pointer"
-                          onClick={(e) => {
-                            // A double-click opens the filter; don't flip the sort twice on the way.
-                            if (e.detail > 1) return;
-                            h.column.getToggleSortingHandler()?.(e);
-                          }}
-                        >
-                          {flexRender(h.column.columnDef.header, h.getContext())}
-                          {h.column.getIsSorted() === "asc" ? <ArrowUp className="h-3 w-3" /> : h.column.getIsSorted() === "desc" ? <ArrowDown className="h-3 w-3" /> : null}
-                          {active && <Filter className="h-3 w-3 text-primary" />}
-                        </button>
+                      {h.isPlaceholder ? null : canFilter || canSort ? (
+                        <span className="inline-flex items-center gap-1">
+                          <button
+                            className="inline-flex items-center gap-1 cursor-pointer"
+                            onClick={() => setEditing(editing === h.column.id ? null : h.column.id)}
+                            data-testid={`dt-head-${h.column.id}`}
+                          >
+                            {flexRender(h.column.columnDef.header, h.getContext())}
+                            {active && <Filter className="h-3 w-3 text-primary" />}
+                          </button>
+                          {canSort && (
+                            <button
+                              className={cn("cursor-pointer rounded px-0.5", sorted ? "text-foreground" : "text-muted-foreground/60 hover:text-foreground")}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                h.column.toggleSorting(sorted === "asc");
+                              }}
+                              title={t(sorted === "asc" ? "common.sortDesc" : "common.sortAsc")}
+                              aria-label={t("common.sort")}
+                            >
+                              {sorted === "asc" ? <ArrowUp className="h-3 w-3" /> : sorted === "desc" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3 opacity-50" />}
+                            </button>
+                          )}
+                        </span>
                       ) : flexRender(h.column.columnDef.header, h.getContext())}
                       {editing === h.column.id && (
-                        <div className="absolute left-0 top-full z-20 mt-1 grid gap-1 rounded-md border border-border bg-card p-2 shadow-lg" data-testid={`dt-filter-${h.column.id}`} onDoubleClick={(e) => e.stopPropagation()}>
-                          {isDateColumn(h.column.id) ? (
+                        <div className="absolute left-0 top-full z-20 mt-1 grid gap-1 rounded-md border border-border bg-card p-2 shadow-lg" data-testid={`dt-filter-${h.column.id}`}>
+                          {canSort && (
+                            <div className="flex gap-1 text-[11px]">
+                              <button className={cn("rounded border border-border px-1.5 py-0.5", sorted === "asc" && "bg-primary/10 text-primary")} onClick={() => h.column.toggleSorting(false)}>↑ {t("common.sortAsc")}</button>
+                              <button className={cn("rounded border border-border px-1.5 py-0.5", sorted === "desc" && "bg-primary/10 text-primary")} onClick={() => h.column.toggleSorting(true)}>↓ {t("common.sortDesc")}</button>
+                              {sorted && <button className="px-1 text-muted-foreground hover:text-foreground" onClick={() => h.column.clearSorting()}>{t("common.sortNone")}</button>}
+                            </div>
+                          )}
+                          {canFilter && (isDateColumn(h.column.id) ? (
                             <>
                               <label className="grid gap-0.5 text-[11px]">
                                 {t("common.from")}
@@ -235,7 +270,7 @@ export function DataTable<T>({
                                 if (e.key === "Enter" || e.key === "Escape") setEditing(null);
                               }}
                             />
-                          )}
+                          ))}
                           <div className="flex justify-between gap-2 text-[11px]">
                             <button className="text-muted-foreground hover:text-foreground" onClick={() => h.column.setFilterValue(undefined)}>{t("common.clear")}</button>
                             <button className="text-primary" onClick={() => setEditing(null)}>{t("common.done")}</button>
@@ -253,15 +288,25 @@ export function DataTable<T>({
               <tr><td colSpan={cols.length} className="px-3 py-8 text-center text-muted-foreground">{t("common.noResults")}</td></tr>
             )}
             {rows.map((row) => (
-              <tr
-                key={row.id}
-                onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-                className={cn("border-t border-border", onRowClick && "cursor-pointer hover:bg-muted/40", row.getIsSelected() && "bg-primary/5")}
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="whitespace-nowrap px-3 py-1.5">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-                ))}
-              </tr>
+              <React.Fragment key={row.id}>
+                <tr
+                  onClick={renderDetail || onRowClick ? () => {
+                    if (renderDetail) setOpen((o) => ({ ...o, [row.id]: !o[row.id] }));
+                    onRowClick?.(row.original);
+                  } : undefined}
+                  className={cn("border-t border-border", (onRowClick || renderDetail) && "cursor-pointer hover:bg-muted/40", row.getIsSelected() && "bg-primary/5", open[row.id] && "bg-muted/30")}
+                  data-testid={renderDetail ? `dt-row-${row.id}` : undefined}
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <td key={cell.id} className="whitespace-nowrap px-3 py-1.5">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                  ))}
+                </tr>
+                {renderDetail && open[row.id] && (
+                  <tr className="border-t border-border bg-muted/20" data-testid={`dt-detail-${row.id}`}>
+                    <td colSpan={row.getVisibleCells().length} className="px-4 py-3">{renderDetail(row.original)}</td>
+                  </tr>
+                )}
+              </React.Fragment>
             ))}
           </tbody>
         </table>
