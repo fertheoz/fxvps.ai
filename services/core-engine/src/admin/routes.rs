@@ -2183,7 +2183,11 @@ async fn alert_settings_put(
     Json(mut a): Json<AlertSettings>,
 ) -> ApiResult {
     need(&actor, "settings.edit")?;
-    if a.fill_rate_floor_pct > 100 || a.latency_multiplier == 0 || a.lp_down_grace_s > 86_400 {
+    if a.fill_rate_floor_pct > 100
+        || a.latency_multiplier == 0
+        || a.lp_down_grace_s > 86_400
+        || a.lp_slow_ms > 60_000
+    {
         return Err(ApiError::bad("invalid thresholds"));
     }
     if a.quiet_hours_utc.is_some_and(|(f, t)| f > 23 || t > 24)

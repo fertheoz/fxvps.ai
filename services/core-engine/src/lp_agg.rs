@@ -121,6 +121,11 @@ pub struct AggConfig {
     /// clients while the real market is closed.
     #[serde(default = "default_quote_age")]
     pub max_quote_age_ms: u64,
+    /// Feed QoS guard: an LP whose market-data latency (receive −
+    /// `SendingTime`, smoothed in the gateway) is above this is left out
+    /// (quotes and orders) until it recovers. 0 = off (default).
+    #[serde(default)]
+    pub max_latency_ms: u64,
 }
 
 pub const DEFAULT_QUOTE_AGE_MS: u64 = 0;
@@ -142,6 +147,7 @@ impl Default for AggConfig {
             lps: Vec::new(),
             max_deviation_points: DEFAULT_DEVIATION_POINTS,
             max_quote_age_ms: DEFAULT_QUOTE_AGE_MS,
+            max_latency_ms: 0,
         }
     }
 }
@@ -247,6 +253,12 @@ pub struct LpRuntime {
     #[serde(default)]
     pub silent: bool,
     pub last_quote_ns: u64,
+    /// Market-data latency reported by the gateway, ms (0 = unknown).
+    #[serde(default)]
+    pub latency_ms: u64,
+    /// Left out by the feed-QoS guard (`latency_ms` > `max_latency_ms`).
+    #[serde(default)]
+    pub slow: bool,
 }
 
 #[derive(Default)]
@@ -255,6 +267,8 @@ struct Books {
     by_symbol: BTreeMap<String, BTreeMap<String, LpBook>>,
     /// lp -> last quote time
     last: BTreeMap<String, u64>,
+    /// lp -> market-data latency reported by the gateway (ms)
+    latency: BTreeMap<String, u64>,
     /// symbol -> point (raw price units), for the deviation guard
     points: BTreeMap<String, i64>,
     /// last aggregated top of book sent to the engine, per symbol
@@ -304,6 +318,15 @@ impl Aggregator {
             .unwrap_or_else(|e| e.into_inner())
             .sent
             .clear();
+    }
+
+    /// Market-data latency of an LP as the gateway measured it (ms).
+    pub fn set_latency(&self, lp: &str, latency_ms: u64) {
+        self.books
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .latency
+            .insert(lp.to_string(), latency_ms);
     }
 
     /// Point size of a symbol (raw price units), needed by the deviation guard.
@@ -484,6 +507,8 @@ impl Aggregator {
                     deviating,
                     silent: !is_fresh(&cfg, &b, &name),
                     last_quote_ns: b.last.get(&name).copied().unwrap_or(0),
+                    latency_ms: b.latency.get(&name).copied().unwrap_or(0),
+                    slow: is_slow(&cfg, &b, &name),
                     name,
                 }
             })
@@ -505,6 +530,11 @@ fn is_fresh(cfg: &AggConfig, b: &Books, lp: &str) -> bool {
     newest.saturating_sub(b.last.get(lp).copied().unwrap_or(0)) <= age_ns
 }
 
+/// Feed-QoS guard: is `lp`'s market-data latency above `max_latency_ms`?
+fn is_slow(cfg: &AggConfig, b: &Books, lp: &str) -> bool {
+    cfg.max_latency_ms > 0 && b.latency.get(lp).copied().unwrap_or(0) > cfg.max_latency_ms
+}
+
 fn eligible(cfg: &AggConfig, b: &Books, symbol: &str, lots: Option<Qty>) -> Vec<(String, LpBook)> {
     let Some(lps) = b.by_symbol.get(symbol) else {
         return Vec::new();
@@ -522,7 +552,9 @@ fn eligible(cfg: &AggConfig, b: &Books, symbol: &str, lots: Option<Qty>) -> Vec<
     let mut v: Vec<(String, LpBook)> = all
         .into_iter()
         .filter(|(lp, _)| {
-            is_fresh(cfg, b, lp) && lots.is_none_or(|l| cfg.policy(lp).allows_size(l))
+            is_fresh(cfg, b, lp)
+                && !is_slow(cfg, b, lp)
+                && lots.is_none_or(|l| cfg.policy(lp).allows_size(l))
         })
         .map(|(lp, bk)| (lp.clone(), bk.clone()))
         .collect();
@@ -746,6 +778,34 @@ mod tests {
         // LMAX is back
         agg.update("LMAX", "EURUSD", at("1.10000", "1.10010", 33 * s));
         assert_eq!(agg.choose("EURUSD", Side::Buy, qty("1"))[0], "LMAX");
+    }
+
+    #[test]
+    fn slow_lp_is_suspended_until_its_latency_recovers() {
+        let agg = Aggregator::new(AggConfig {
+            max_latency_ms: 500,
+            ..AggConfig::default()
+        });
+        agg.set_point("EURUSD", px("0.00001"));
+        agg.set_config(AggConfig {
+            max_latency_ms: 500,
+            lps: vec![LpPolicy::new("LMAX", 1), LpPolicy::new("SIM", 2)],
+            ..AggConfig::default()
+        });
+        agg.update("LMAX", "EURUSD", at("1.10000", "1.10010", 1));
+        agg.update("SIM", "EURUSD", at("1.09995", "1.10020", 1));
+        assert_eq!(agg.choose("EURUSD", Side::Buy, qty("1"))[0], "LMAX");
+        agg.set_latency("LMAX", 800);
+        assert_eq!(
+            agg.choose("EURUSD", Side::Buy, qty("1")),
+            vec!["SIM".to_string()]
+        );
+        let r = agg.runtime();
+        let lmax = r.iter().find(|r| r.name == "LMAX").unwrap();
+        assert!(lmax.slow && lmax.latency_ms == 800);
+        agg.set_latency("LMAX", 120);
+        assert_eq!(agg.choose("EURUSD", Side::Buy, qty("1"))[0], "LMAX");
+        assert!(!agg.runtime().iter().any(|r| r.slow));
     }
 
     #[test]

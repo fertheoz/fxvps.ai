@@ -32,7 +32,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
 
   let lpConfig: LpConfig | null = null;
   let tenants: Tenant[] = [{ id: "fxvps", name: "fxvps.ai", groups: ["demo-retail", "demo-hedge"], hostnames: ["trade.fxvps.ai", "console.fxvps.ai"] }];
-  let alertSettings: AlertSettings = { lpDownGraceS: 60, fillRateMinOrders: 10, fillRateFloorPct: 90, latencyFloorMs: 500, latencyMultiplier: 3, webhookUrl: "", telegramToken: "", telegramTokenSet: false, telegramChatId: "", quietHoursUtc: null, dailyReportHourUtc: 7 };
+  let alertSettings: AlertSettings = { lpDownGraceS: 60, lpSlowMs: 2000, fillRateMinOrders: 10, fillRateFloorPct: 90, latencyFloorMs: 500, latencyMultiplier: 3, webhookUrl: "", telegramToken: "", telegramTokenSet: false, telegramChatId: "", quietHoursUtc: null, dailyReportHourUtc: 7 };
   let calendar: TradingCalendar = { holidays: ["2026-12-25", "2027-01-01"] };
   // Economic calendar: a few releases around "now" (the import adds the rest of the week).
   const hourMs = 3_600_000;
@@ -86,8 +86,8 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     mode: "best_price",
     maxDeviationPoints: 300,
     lps: [
-      lpRuntime({ name: "LMAX", enabled: true, orders: true, priority: 1, minLots: null, maxLots: null, symbols: [], quoting: 41, deviating: [], lastQuoteAt: new Date().toISOString(), mdUp: true, tradeUp: true }),
-      lpRuntime({ name: "SIM", enabled: true, orders: false, priority: 2, minLots: 0.01, maxLots: 50, symbols: [], quoting: 5, deviating: [], lastQuoteAt: new Date().toISOString(), mdUp: true, tradeUp: true }),
+      lpRuntime({ name: "LMAX", enabled: true, orders: true, priority: 1, minLots: null, maxLots: null, symbols: [], quoting: 41, deviating: [], lastQuoteAt: new Date().toISOString(), latencyMs: 38, slow: false, mdUp: true, tradeUp: true }),
+      lpRuntime({ name: "SIM", enabled: true, orders: false, priority: 2, minLots: 0.01, maxLots: 50, symbols: [], quoting: 5, deviating: [], lastQuoteAt: new Date().toISOString(), latencyMs: 3, slow: false, mdUp: true, tradeUp: true }),
     ],
   };
   const redactLp = (c: LpConfig): LpConfig => ({
@@ -627,7 +627,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
         maxDeviationPoints: c.maxDeviationPoints,
         lps: c.lps.map((p) => {
           const prev = lpAgg.lps.find((x) => x.name === p.name);
-          return { ...p, minLots: p.minLots == null ? null : Number(p.minLots), maxLots: p.maxLots == null ? null : Number(p.maxLots), quoting: prev?.quoting ?? 0, deviating: prev?.deviating ?? [], lastQuoteAt: prev?.lastQuoteAt ?? null, mdUp: prev?.mdUp ?? false, tradeUp: prev?.tradeUp ?? false };
+          return { ...p, minLots: p.minLots == null ? null : Number(p.minLots), maxLots: p.maxLots == null ? null : Number(p.maxLots), quoting: prev?.quoting ?? 0, deviating: prev?.deviating ?? [], lastQuoteAt: prev?.lastQuoteAt ?? null, latencyMs: prev?.latencyMs ?? 0, slow: prev?.slow ?? false, mdUp: prev?.mdUp ?? false, tradeUp: prev?.tradeUp ?? false };
         }),
       };
       audit(actor, "lp.aggregation", "aggregator", `${c.mode}; ${c.lps.map((p) => p.name + (p.enabled ? "" : " (off)")).join(", ")}`);

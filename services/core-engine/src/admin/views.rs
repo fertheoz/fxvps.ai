@@ -1654,6 +1654,8 @@ pub fn lp_aggregation(
                 "quoting": r.quoting,
                 "deviating": r.deviating,
                 "silent": r.silent,
+                "latencyMs": r.latency_ms,
+                "slow": r.slow,
                 "lastQuoteAt": (r.last_quote_ns > 0).then(|| iso(r.last_quote_ns)),
                 "mdUp": up(fix_gateway::SessionKind::MarketData),
                 "tradeUp": up(fix_gateway::SessionKind::Trading),
@@ -1664,6 +1666,7 @@ pub fn lp_aggregation(
         "mode": cfg.mode,
         "maxDeviationPoints": cfg.max_deviation_points,
         "maxQuoteAgeMs": cfg.max_quote_age_ms,
+        "maxLatencyMs": cfg.max_latency_ms,
         "lps": lps,
     })
 }
@@ -1802,7 +1805,7 @@ pub fn lp_sessions(rows: &[fix_gateway::SessionStatus]) -> Value {
                     "status": status,
                     "inSeq": r.in_seq,
                     "outSeq": 0,
-                    "latencyMs": 0,
+                    "latencyMs": r.latency_ms,
                     "rejects24h": r.rejects,
                     "lastHeartbeat": iso(r.last_msg_ms.max(r.since_ms).saturating_mul(1_000_000)),
                     "lastMsgAgeMs": if r.last_msg_ms > 0 { domain::now_ns() / 1_000_000 - r.last_msg_ms.min(domain::now_ns() / 1_000_000) } else { 0 },

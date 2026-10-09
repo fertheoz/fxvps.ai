@@ -204,6 +204,7 @@ impl RemoteGateway {
                 rejects: 0,
                 in_seq: 0,
                 last_msg_ms: 0,
+                latency_ms: 0,
             })
             .collect::<Vec<_>>(),
         ));
