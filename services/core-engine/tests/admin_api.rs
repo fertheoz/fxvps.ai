@@ -95,6 +95,7 @@ impl T {
                 rejects: 2,
                 in_seq: 0,
                 last_msg_ms: 0,
+                latency_ms: 0,
             },
         ])));
         // Real fix-gateway admin endpoint with a managed config file.
@@ -147,6 +148,7 @@ impl T {
                 rejects: 2,
                 in_seq: 0,
                 last_msg_ms: 0,
+                latency_ms: 0,
             },
         ])));
         // Real fix-gateway admin endpoint with a managed config file.
