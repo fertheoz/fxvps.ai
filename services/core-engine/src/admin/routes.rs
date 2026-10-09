@@ -4382,10 +4382,21 @@ async fn lp_executions(
 ) -> ApiResult {
     need(&actor, "reports.view")?;
     let (from, to, limit) = report_window(&q, 500, 5_000);
-    Ok(Json(
-        ctx.qr(move |e| views::lp_executions(e, from, to, limit))
-            .await?,
-    ))
+    let mut v = ctx
+        .qr(move |e| views::lp_executions(e, from, to, limit))
+        .await?;
+    // deal-moment book snapshots live on the aggregator (parça 15)
+    if let (Some(agg), Some(rows)) = (&ctx.agg, v.as_array_mut()) {
+        for row in rows {
+            let Some(id) = row["id"].as_str().and_then(|s| s.parse::<u64>().ok()) else {
+                continue;
+            };
+            if let Some(snap) = agg.snapshot(id) {
+                row["detail"]["book"] = json!(snap);
+            }
+        }
+    }
+    Ok(Json(v))
 }
 
 async fn execution(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

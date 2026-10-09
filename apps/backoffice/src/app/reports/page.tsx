@@ -9,7 +9,7 @@ import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
 import { useToast } from "@/components/shell/providers";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { Trade } from "@/lib/schemas";
-import type { BestExecutionRow, ClientFlowRow, ClientOrderDetail, IbRow, ExecutionRow, ExecutionSummary, LpExecution, LpOrderDetail, MarkoutRow, ReconciliationRow, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
+import type { BestExecutionRow, BookSnapshot, ClientFlowRow, ClientOrderDetail, IbRow, ExecutionRow, ExecutionSummary, LpExecution, LpOrderDetail, MarkoutRow, ReconciliationRow, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
 import { formatMinorPlain } from "@/lib/money";
 import { downloadCsv, toCsv } from "@/lib/utils";
 
@@ -639,7 +639,33 @@ function LpTimeline({ d, f }: { d: LpOrderDetail; f: ReturnType<typeof useFormat
           </div>
         ))}
       </div>
+      {d.book && <BookAtSend b={d.book} />}
       {d.clOrdId && <FixMessages clOrdId={d.clOrdId} />}
+    </div>
+  );
+}
+
+/** Parça 15: the book the router saw when it sent the LP order. */
+function BookAtSend({ b }: { b: BookSnapshot }) {
+  const t = useT();
+  const f = useFormat();
+  const rows = Math.max(b.merged.bids.length, b.merged.asks.length);
+  const lpAt = (side: "bids" | "asks", price: number) => b.lps.filter((l) => l[side].some(([p]) => p === price)).map((l) => l.lp).join(" ");
+  return (
+    <div className="sm:col-span-2">
+      <div className="mb-1 text-xs font-medium text-muted-foreground">{t("detail.book")} · {f.date(new Date(b.tsNs / 1e6).toISOString())} · {b.lps.map((l) => `${l.lp} ${l.ageMs} ms`).join(" · ")}</div>
+      <div className="grid grid-cols-2 gap-3 font-mono text-[11px] tabular-nums">
+        {(["bids", "asks"] as const).map((side) => (
+          <div key={side}>
+            <div className="mb-0.5 text-muted-foreground">{side === "bids" ? t("detail.bids") : t("detail.asks")}</div>
+            {Array.from({ length: rows }, (_, i) => b.merged[side][i]).map((lv, i) => lv ? (
+              <div key={i} className="grid grid-cols-[1fr_auto_auto] gap-2 border-b border-border/60 py-0.5">
+                <span className={side === "bids" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>{lv[0]}</span><span>{f.num(lv[1])}</span><span className="text-muted-foreground">{lpAt(side, lv[0])}</span>
+              </div>
+            ) : <div key={i} className="py-0.5 text-muted-foreground">—</div>)}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
