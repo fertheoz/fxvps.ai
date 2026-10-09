@@ -167,7 +167,10 @@ trading süreci kapalıyken gelen icra Denetçi farkı olarak görünür.
 | 2026-10-09 | 0 v1 | ✅ | #193 | SL ve stop girişleri LMAX'ta GTC **stop** (Stop OrdType 40=3/StopPx 99 codec→geçit→köprü→motor); trailing replace 1 sn kısıtlı; kaymaya açık kalan yalnız piyasa emirleri. Stop-limit girişi tetik kipinde (v2) |
 | 2026-10-09 | 0 v1b | ✅ | #194 | Tek kalem: retry politikalı piyasa emrinde LP kısmi dolumları zincir bitene kadar tutulur, müşteriye tek dolum (VWAP+markup), tek deal/pozisyon; iç hamleler görünmez |
 | 2026-10-09 | 0 v2a | ✅ | #196 | Terminalde "LP" rozeti (pozisyon SL/TP ve bekleyen emirde; proto v1.3 `lp_tp/lp_sl/lp_resting`, REST aynı); ask çizgisi varsayılan açık (eski kayıtlar bir kez açılır) |
-| 2026-10-09 | 1 | 🔧 | #197 | Kural değişkenleri: platform (terminal/mobile/api/bridge/copy), IP öneki/CIDR, hesap NOP, pencere hacmi (N dk'da açılan lot), scalper profili, haber penceresi (yüksek etkili olaylar motora `SetNewsTimes`); emirde platform+IP journal'da |
+| 2026-10-09 | 1 | ✅ | #197 | Kural değişkenleri: platform (terminal/mobile/api/bridge/copy), IP öneki/CIDR, hesap NOP, pencere hacmi (N dk'da açılan lot), scalper profili, haber penceresi (yüksek etkili olaylar motora `SetNewsTimes`); emirde platform+IP journal'da |
+| 2026-10-09 | 2 | ✅ | #198 | Profil zamanlayıcı: kurallarda dakika penceresi/haftanın günleri/min spread; gruplarda zamanlı markup pencereleri + haber markup'ı |
+| 2026-10-09 | konsol | ✅ | #199 #201 | Başlığa tek tık: sırala+süz; satır detayı (LP zaman çizelgesi, deneme/ms, kayma, değerlendirme; Mutabakat deal'leri); isteğe bağlı sütunlar (Columns'ta açılır, hatırlanır), sunucudan tarih aralığı yükleme, sayfa boyutu hatırlanır, fiyatlar sembol basamağına yuvarlı, yoğunluk sütun sayısına göre |
+| 2026-10-09 | FIX | ✅ | #200 | İşlem oturumu ham FIX çerçeveleri `fix-store/fixlog/<gün>.jsonl`; konsolda LP emri detayında "FIX mesajları" + kopyala (hazineci LP yazışması için; konsoldan hiçbir şey gönderilmez) |
 
 ## Kaynaklar
 PrimeXM: https://primexm.com/xcore/solutions/ · https://primexm.com/xcore-aggregation/ ·
