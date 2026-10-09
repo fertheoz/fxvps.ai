@@ -59,6 +59,8 @@ export const Group = z
     maxSpreadPoints: z.preprocess((v) => (v === undefined || v === 0 ? null : v), z.number().int().min(1).max(100000).nullable()),
     /** Inventory skew: client prices move by pointsPerLot × B-book net lots, capped. */
     skew: z.preprocess((v) => v ?? null, z.object({ pointsPerLot: z.number().min(0).max(1000), maxPoints: z.number().int().min(0).max(100000) }).nullable()),
+    /** Algorithmic pricing: bid / ask offset formulas (points), null = off. */
+    algo: z.preprocess((v) => v ?? null, z.object({ bid: z.string().max(400), ask: z.string().max(400) }).nullable()),
     /** Last look on API / bridge market orders: hold ms, max favourable move (points) before a reject. */
     lastLook: z.preprocess((v) => v ?? null, z.object({ holdMs: z.number().int().min(0).max(10000), maxMovePoints: z.number().int().min(0).max(100000) }).nullable()),
     /** Leverage cap Friday 20:00 - Sunday 22:00 UTC (null = none). */

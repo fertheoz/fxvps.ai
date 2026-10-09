@@ -112,6 +112,7 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     saveHedgePolicy: (p, actor) => call("PUT", "/v1/risk/hedge", wireHedge(p), actor),
     manualHedge: (req, actor) => call("POST", "/v1/risk/hedge/manual", req, actor),
     tempMarkups: () => call("GET", "/v1/pricing/markup"),
+    testAlgo: (req, actor) => call("POST", "/v1/pricing/algo/test", req, actor),
     setTempMarkup: (req, actor) => call("PUT", "/v1/pricing/markup", req, actor),
     clearTempMarkup: (id, actor) => call("DELETE", `/v1/pricing/markup/${enc(id)}`, undefined, actor),
     previewHedgePolicy: (p, actor) => call("POST", "/v1/risk/hedge/preview", wireHedge(p), actor),

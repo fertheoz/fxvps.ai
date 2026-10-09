@@ -266,6 +266,12 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       return delay({ active: alerts.filter((x) => !x.resolvedAt), recent: alerts.filter((x) => x.resolvedAt) });
     },
     async hedgePolicy() { return delay(hedge); },
+    async testAlgo(req) {
+      const vars = (net: number) => ({ spread: 1.2, net, vol: 0.7, hour: new Date().getUTCHours(), news: 0, markup: 5 });
+      const ev = (src: string, v: ReturnType<typeof vars>) => { const m = src.match(/^\s*(-?\d+(?:\.\d+)?)\s*$/); if (m) return Number(m[1]); return src.includes("net") ? Math.max(0, v.net) * 2 : src ? 1 : 0; };
+      const rows = [["EURUSD", 1.1, 2.4], ["GBPUSD", 1.27, -1.5], ["XAUUSD", 4130, 0.3]].map(([symbol, px, net]) => { const v = vars(Number(net)); const bp = ev(req.bid, v); const ap = ev(req.ask, v); const point = Number(px) > 100 ? 0.01 : 0.00001; return { symbol: String(symbol), vars: v, bidPoints: bp, askPoints: ap, bidNow: Number(px), askNow: Number(px) + point, bid: Number(px) - bp * point, ask: Number(px) + point + ap * point, crossed: false }; });
+      return delay({ rows });
+    },
     async tempMarkups() { return delay(tempMarkups.filter((m) => new Date(m.until).getTime() > Date.now())); },
     async setTempMarkup(req, actor) {
       guard(actor, "groups.edit");
