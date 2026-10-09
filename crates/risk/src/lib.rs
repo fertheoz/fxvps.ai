@@ -1339,6 +1339,18 @@ pub enum HedgeMode {
     HedgeExcess,
 }
 
+/// What happens to new client flow around high-impact calendar events.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NewsAction {
+    #[default]
+    None,
+    /// New risk-increasing orders go A-book inside the window.
+    ABook,
+    /// No new orders inside the window (closes always allowed).
+    Reject,
+}
+
 /// B-book exposure limits and the automatic hedge (console: Risk → Hedge).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -1374,6 +1386,15 @@ pub struct HedgePolicy {
     /// book is hedged down (HedgeExcess) until the VaR fits.
     #[serde(default)]
     pub var_limit_usd: Option<i64>,
+    /// Per-currency B-book exposure caps (USD notional of the currency leg,
+    /// e.g. `EUR → 500000`): flow that pushes a leg over goes A-book.
+    #[serde(default)]
+    pub currency_limits_usd: BTreeMap<String, i64>,
+    /// News restriction: ± minutes around high-impact events and what to do.
+    #[serde(default)]
+    pub news_window_min: u32,
+    #[serde(default)]
+    pub news_action: NewsAction,
 }
 
 fn hundred() -> u8 {
@@ -1397,6 +1418,9 @@ impl Default for HedgePolicy {
             slice_lots: None,
             slice_interval_s: 0,
             var_limit_usd: None,
+            currency_limits_usd: BTreeMap::new(),
+            news_window_min: 0,
+            news_action: NewsAction::None,
         }
     }
 }
@@ -1441,6 +1465,20 @@ impl HedgePolicy {
         }
         if self.var_limit_usd.is_some_and(|v| v <= 0) {
             return Err("varLimitUsd must be positive".into());
+        }
+        if self.currency_limits_usd.len() > 50 {
+            return Err("too many currency limits".into());
+        }
+        for (c, v) in &self.currency_limits_usd {
+            if c.parse::<Currency>().is_err() {
+                return Err(format!("unknown currency {c}"));
+            }
+            if *v <= 0 {
+                return Err(format!("currency limit {c} must be positive"));
+            }
+        }
+        if self.news_window_min > 1440 {
+            return Err("newsWindowMin must be 0..1440".into());
         }
         Ok(())
     }

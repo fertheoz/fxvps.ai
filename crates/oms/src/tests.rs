@@ -3189,3 +3189,57 @@ fn var_cap_hedges_the_book_down_when_volatility_rises() {
     let lots = sent[0].volume.raw() as f64 / 1e8;
     assert!(lots > 0.5 && lots < 0.95, "hedged {lots} lots");
 }
+
+#[test]
+fn currency_leg_cap_and_news_window_route_or_pause_new_flow() {
+    use risk::{HedgePolicy, NewsAction};
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "b", "1000000");
+    let mut p = HedgePolicy {
+        enabled: true,
+        ..HedgePolicy::default()
+    };
+    p.currency_limits_usd.insert("EUR".into(), 150_000);
+    h.cmd(Command::SetHedge(p.clone()));
+    h.market(1, "e1", Side::Buy, "1"); // +100k EUR ≈ 110k USD: under the cap, B-book
+    assert!(h.router.take().is_empty());
+    let x = h.e.currency_exposure();
+    assert_eq!(x[&money::Currency::EUR].1, 10_000_000);
+    assert_eq!(
+        x[&money::Currency::USD].1,
+        -11_001_000,
+        "short the quote leg at the open price (ask)"
+    );
+    let id = h.market(1, "e2", Side::Buy, "1"); // would be 220k USD of EUR: A-book
+    assert_eq!(h.router.take().len(), 1);
+    assert_eq!(
+        h.e.order(id).unwrap().rule.as_deref(),
+        Some("hedge:currency")
+    );
+    h.market(1, "e3", Side::Sell, "0.5"); // reduces the leg: stays B-book
+    assert!(h.router.take().is_empty());
+    // news: ±15 min of an event → A-book; Reject → refused (closes still allowed)
+    p.currency_limits_usd.clear();
+    p.news_window_min = 15;
+    p.news_action = NewsAction::ABook;
+    h.cmd(Command::SetHedge(p.clone()));
+    h.cmd(Command::SetNewsTimes(vec![h.ts + 5 * 60_000_000_000]));
+    let id = h.market(1, "n1", Side::Buy, "0.1");
+    assert_eq!(h.router.take().len(), 1);
+    assert_eq!(h.e.order(id).unwrap().rule.as_deref(), Some("news"));
+    p.news_action = NewsAction::Reject;
+    h.cmd(Command::SetHedge(p));
+    let (ev, _) = h.order(NewOrder::market(1, "n2", "EURUSD", Side::Buy, qty("0.1")));
+    assert!(ev.iter().any(|e| matches!(e, Event::OrderRejected { .. })));
+    let pid = h.pos(1)[0].id;
+    h.cmd(Command::ClosePosition {
+        account: 1,
+        position_id: pid,
+        volume: None,
+        client_order_id: "c".into(),
+    });
+    assert!(
+        h.pos(1).iter().all(|p| p.id != pid),
+        "closing is always allowed"
+    );
+}
