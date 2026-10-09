@@ -201,6 +201,10 @@ export function DataTable<T>({
   };
 
   const rows = table.getRowModel().rows;
+  // Density follows the number of visible columns: roomy when few, tight when many.
+  const ncols = table.getVisibleLeafColumns().length;
+  const pad = ncols <= 8 ? "px-3" : ncols <= 14 ? "px-2" : "px-1";
+  const textCls = ncols <= 14 ? "text-sm" : "text-[13px]";
   return (
     <div className="grid gap-2" data-testid={testId}>
       {(searchable || toolbar) && (
@@ -244,7 +248,7 @@ export function DataTable<T>({
         </div>
       )}
       <div className="overflow-x-auto rounded-lg border border-border bg-card">
-        <table className="w-full text-[13px]">
+        <table className={cn("w-full", textCls)}>
           <thead className="bg-muted/50 text-xs text-muted-foreground">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
@@ -257,7 +261,7 @@ export function DataTable<T>({
                   return (
                     <th
                       key={h.id}
-                      className={cn("relative whitespace-nowrap px-1.5 py-1.5 text-left font-medium", active && "text-foreground")}
+                      className={cn("relative whitespace-nowrap py-1.5 text-left font-medium", pad, active && "text-foreground")}
                       title={canFilter || canSort ? t("common.clickFilter") : undefined}
                     >
                       {h.isPlaceholder ? null : canFilter || canSort ? (
@@ -344,7 +348,7 @@ export function DataTable<T>({
                   data-testid={renderDetail ? `dt-row-${row.id}` : undefined}
                 >
                   {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="whitespace-nowrap px-1.5 py-1">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                    <td key={cell.id} className={cn("whitespace-nowrap py-1", pad)}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
                   ))}
                 </tr>
                 {renderDetail && open[row.id] && (
