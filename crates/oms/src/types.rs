@@ -420,6 +420,22 @@ pub struct Account {
     pub margin_call: bool,
 }
 
+/// A temporary markup set through the pricing API (parça 12).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TempMarkup {
+    pub id: u64,
+    /// Group name; empty = every group.
+    pub group: String,
+    /// Core symbol; `None` = every symbol.
+    pub symbol: Option<String>,
+    /// Extra points (negative narrows, floored at zero total).
+    pub points: i64,
+    pub from: u64,
+    pub until: u64,
+    pub reason: String,
+}
+
 /// An order sent to the LP for the omnibus account, with the client orders
 /// it is allocated to.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -552,6 +568,14 @@ pub enum Command {
     LpRouted {
         lp_order_id: LpOrderId,
         lp: String,
+    },
+    /// Temporary markup (parça 12): extra points on top of the group's
+    /// markup for `group` ("" = every group) and `symbol` (`None` = every
+    /// symbol) until `until` (ns). `id` 0 = the engine assigns one.
+    SetTempMarkup(TempMarkup),
+    /// Ends a temporary markup early.
+    ClearTempMarkup {
+        id: u64,
     },
     /// B-book exposure limits / auto-hedge policy (stage 7).
     SetHedge(HedgePolicy),

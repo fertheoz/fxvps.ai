@@ -343,6 +343,28 @@ pub fn hedge_preview(e: &Engine, h: &risk::HedgePolicy) -> Value {
     })
 }
 
+/// Temporary markups (parça 12), soonest to expire first.
+pub fn temp_markups(e: &Engine) -> Value {
+    let mut v = e.temp_markups();
+    v.sort_by_key(|m| m.until);
+    Value::Array(
+        v.into_iter()
+            .map(|m| {
+                json!({
+                    "id": m.id.to_string(),
+                    "group": m.group,
+                    "symbol": m.symbol,
+                    "points": m.points,
+                    "from": iso(m.from),
+                    "until": iso(m.until),
+                    "reason": m.reason,
+                    "active": m.from <= domain::now_ns(),
+                })
+            })
+            .collect(),
+    )
+}
+
 pub fn hedge_policy(e: &Engine) -> Value {
     let h = e.hedge_policy();
     let lots = |q: Option<Qty>| q.map(qty_f);

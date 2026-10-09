@@ -5,7 +5,7 @@ import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import { HEDGE_MODES, NEWS_ACTIONS, type HedgeMode, type HedgePolicy, type HedgePreview, type MarginCallRow, type NewsAction } from "@/lib/api";
-import { NumField, SelectField } from "@/components/form";
+import { NumField, SelectField, TextField } from "@/components/form";
 import { useMfaOk } from "@/lib/queries";
 import type { MessageKey } from "@/lib/i18n";
 
@@ -99,6 +99,7 @@ export default function RiskPage() {
         </Card>
         <HedgeCard />
         <ManualHedgeCard symbols={(exp.data ?? []).map((r) => r.symbol)} />
+        <TempMarkupCard groups={(groups.data ?? []).map((g) => g.name)} />
         <Card>
           <CardHeader><CardTitle>{t("risk.presets")}</CardTitle></CardHeader>
           <CardContent className="grid gap-3">
@@ -252,6 +253,63 @@ function HedgePreviewTable({ p }: { p: HedgePreview }) {
       )}
       <div className="mt-1 text-muted-foreground">{t("risk.previewMoves", { n: moves.length })}</div>
     </div>
+  );
+}
+
+/** Parça 12: temporary markup through the real-time pricing API (MFA). */
+function TempMarkupCard({ groups }: { groups: string[] }) {
+  const t = useT();
+  const f = useFormat();
+  const actor = useActor();
+  const toast = useToast();
+  const mfaOk = useMfaOk();
+  const editable = actor.can("groups.edit") && mfaOk;
+  const q = useApiQuery("tempMarkups", [], { live: 10000 });
+  const [group, setGroup] = React.useState("");
+  const [symbol, setSymbol] = React.useState("");
+  const [points, setPoints] = React.useState(10);
+  const [ttl, setTtl] = React.useState(30);
+  const [reason, setReason] = React.useState("");
+  const set = useApiMutation((v: Parameters<ReturnType<typeof api>["setTempMarkup"]>[0]) => api().setTempMarkup(v, actor), () => { toast(t("risk.markupSet")); setReason(""); });
+  const clear = useApiMutation((id: string) => api().clearTempMarkup(id, actor), () => toast(t("risk.markupCleared")));
+  return (
+    <Card data-testid="temp-markup">
+      <CardHeader><CardTitle>{t("risk.tempMarkup")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-xs text-muted-foreground">{t("risk.tempMarkupHint")} <code className="rounded bg-muted px-1">PUT /v1/pricing/markup</code></p>
+        {(q.data ?? []).length > 0 && (
+          <table className="w-full text-xs">
+            <thead><tr>{[t("clients.group"), t("risk.symbol"), t("groups.markup"), t("risk.until"), t("risk.reason"), ""].map((h, i) => <th key={i} className="px-2 py-1 text-left font-medium text-muted-foreground">{h}</th>)}</tr></thead>
+            <tbody>
+              {(q.data ?? []).map((m) => (
+                <tr key={m.id} className="border-t border-border/60">
+                  <td className="px-2 py-1">{m.group || <span className="text-muted-foreground">{t("risk.allGroups")}</span>}</td>
+                  <td className="px-2 py-1 font-mono">{m.symbol ?? <span className="text-muted-foreground">{t("risk.allSymbols")}</span>}</td>
+                  <td className="px-2 py-1 tabular-nums"><Badge tone={m.points > 0 ? "warning" : "info"}>{m.points > 0 ? "+" : ""}{m.points}</Badge></td>
+                  <td className="whitespace-nowrap px-2 py-1 tabular-nums">{f.date(m.until)}</td>
+                  <td className="px-2 py-1 text-muted-foreground">{m.reason}</td>
+                  <td className="px-2 py-1">{editable && <Button size="sm" variant="ghost" onClick={() => clear.mutate(m.id)} data-testid={`markup-clear-${m.id}`}>{t("risk.markupClear")}</Button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="grid gap-3 sm:grid-cols-5">
+          <Label>
+            {t("clients.group")}
+            <select className="rounded-md border border-border bg-background p-2 text-sm" value={group} onChange={(e) => setGroup(e.target.value)} disabled={!editable} data-testid="markup-group">
+              <option value="">{t("risk.allGroups")}</option>
+              {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
+          </Label>
+          <TextField label={`${t("risk.symbol")} (${t("risk.allSymbols")})`} value={symbol} onChange={(v) => setSymbol(v.toUpperCase())} disabled={!editable} />
+          <NumField label={t("risk.markupPoints")} value={points} onChange={(v) => setPoints(Math.max(-1000, Math.min(1000, Math.round(v))))} step={1} disabled={!editable} />
+          <NumField label={t("risk.ttlMin")} value={ttl} onChange={(v) => setTtl(Math.max(1, Math.min(1440, Math.round(v))))} step={5} disabled={!editable} />
+          <TextField label={t("risk.reason")} value={reason} onChange={setReason} disabled={!editable} />
+        </div>
+        {editable && <div><Button onClick={() => set.mutate({ group, symbol: symbol.trim() || null, points, ttlS: ttl * 60, reason })} disabled={set.isPending || points === 0} data-testid="markup-set">{t("risk.markupApply")}</Button></div>}
+      </CardContent>
+    </Card>
   );
 }
 
