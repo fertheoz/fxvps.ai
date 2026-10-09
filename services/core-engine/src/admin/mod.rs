@@ -22,6 +22,7 @@ pub mod store;
 mod stream;
 pub mod usdt_watch;
 pub mod views;
+pub mod volcalc;
 
 use crate::EngineHandle;
 use auth::{Actor, Authenticator, Role};
@@ -409,6 +410,7 @@ pub fn app(engine: EngineHandle, auth: Authenticator, cfg: AdminConfig) -> std::
     };
     stream::spawn_ticker(ctx.clone(), cfg.live_interval_ms);
     alerts::spawn(ctx.clone());
+    volcalc::spawn(ctx.clone());
     statement::spawn(ctx.clone());
     usdt_watch::spawn(ctx.clone());
     let legacy =

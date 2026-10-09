@@ -796,7 +796,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
         const open = hour >= 7 && hour <= 20;
         const ticks = open ? 3000 + Math.floor(rnd() * 500) : 400 + Math.floor(rnd() * 300);
         const avg = open ? 0.8 + rnd() * 0.6 : 2 + rnd() * 3;
-        return { hour, ticks, avgSpreadPoints: avg, minSpreadPoints: Math.max(0.1, avg - 0.5), maxSpreadPoints: avg * (open ? 3 : 6), avgBidLots: open ? 5 + rnd() * 10 : 1 + rnd() * 2, avgAskLots: open ? 5 + rnd() * 10 : 1 + rnd() * 2 };
+        return { hour, ticks, avgSpreadPoints: avg, minSpreadPoints: Math.max(0.1, avg - 0.5), maxSpreadPoints: avg * (open ? 3 : 6), avgBidLots: open ? 5 + rnd() * 10 : 1 + rnd() * 2, avgAskLots: open ? 5 + rnd() * 10 : 1 + rnd() * 2, depthBidLots: open ? 30 + rnd() * 40 : 5, depthAskLots: open ? 30 + rnd() * 40 : 5 };
       });
       return delay({ symbol, day, ticks: hours.reduce((a, h) => a + h.ticks, 0), hours, days: [day, new Date(Date.now() - 864e5).toISOString().slice(0, 10)], symbols: ["EURUSD", "GBPUSD", "XAUUSD"] });
     },

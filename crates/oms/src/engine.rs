@@ -42,6 +42,9 @@ struct State {
     /// Per-symbol EWMA volatility for the VaR cap.
     #[serde(default)]
     vol: BTreeMap<String, VolState>,
+    /// Warehouse volatility overrides: symbol -> (σ_daily × 1e8, set at ns).
+    #[serde(default)]
+    vol_override: BTreeMap<String, (u64, u64)>,
     /// Last hedge order per symbol (ns): TWAP slicing waits the interval.
     #[serde(default)]
     hedge_last_ts: BTreeMap<String, u64>,
@@ -817,6 +820,18 @@ impl Engine {
                 t.sort_unstable();
                 t.dedup();
                 self.st.news_times = t;
+            }
+            Command::SetVolatility {
+                symbol,
+                daily_sigma_e8,
+            } => {
+                if *daily_sigma_e8 == 0 {
+                    self.st.vol_override.remove(symbol);
+                } else {
+                    self.st
+                        .vol_override
+                        .insert(symbol.clone(), (*daily_sigma_e8, self.st.now));
+                }
             }
             Command::SetTempMarkup(m) => {
                 let now = self.st.now;
@@ -3082,6 +3097,12 @@ impl Engine {
 
     /// Daily volatility (fraction) of a symbol from its EWMA state.
     pub fn volatility_daily(&self, symbol: &str) -> f64 {
+        // a warehouse figure younger than 2 days wins over the EWMA
+        if let Some((sigma, at)) = self.st.vol_override.get(symbol) {
+            if self.st.now.saturating_sub(*at) < 2 * 86_400_000_000_000 {
+                return *sigma as f64 / 1e8;
+            }
+        }
         self.st.vol.get(symbol).map_or(0.0, VolState::daily_sigma)
     }
 

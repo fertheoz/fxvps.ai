@@ -3525,3 +3525,28 @@ fn internal_matching_nets_opposite_flow_before_the_lp_sees_anything() {
     assert_eq!(sent.len(), 1);
     assert_eq!((sent[0].side, sent[0].volume), (Side::Sell, qty("2")));
 }
+
+#[test]
+fn warehouse_volatility_overrides_the_ewma_while_fresh() {
+    let mut h = H::new(EngineConfig::default());
+    assert_eq!(h.e.volatility_daily("EURUSD"), 0.0, "no samples yet");
+    h.cmd(Command::SetVolatility {
+        symbol: "EURUSD".into(),
+        daily_sigma_e8: 650_000, // 0.65 % a day
+    });
+    assert!((h.e.volatility_daily("EURUSD") - 0.0065).abs() < 1e-9);
+    // stale after two days: back to the engine's own estimate
+    h.ts += 3 * 86_400_000_000_000;
+    h.quote("EURUSD", "1.10000", "1.10010");
+    assert_eq!(h.e.volatility_daily("EURUSD"), 0.0);
+    // zero clears
+    h.cmd(Command::SetVolatility {
+        symbol: "EURUSD".into(),
+        daily_sigma_e8: 650_000,
+    });
+    h.cmd(Command::SetVolatility {
+        symbol: "EURUSD".into(),
+        daily_sigma_e8: 0,
+    });
+    assert_eq!(h.e.volatility_daily("EURUSD"), 0.0);
+}

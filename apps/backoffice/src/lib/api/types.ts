@@ -510,7 +510,7 @@ export interface HedgePreviewRow { symbol: string; bBookNetLots: number; hedgeLo
 export interface HedgePreview { symbols: HedgePreviewRow[]; varTotalUsd: number; varLimitUsd: number | null; varOver: boolean; currency: { currency: string; usd: number; limitUsd: number | null; over: boolean }[] }
 
 /** Tick-warehouse analytics (parça 13). */
-export interface LiquidityHour { hour: number; ticks: number; avgSpreadPoints: number; minSpreadPoints: number; maxSpreadPoints: number; avgBidLots: number; avgAskLots: number }
+export interface LiquidityHour { hour: number; ticks: number; avgSpreadPoints: number; minSpreadPoints: number; maxSpreadPoints: number; avgBidLots: number; avgAskLots: number; depthBidLots?: number; depthAskLots?: number }
 export interface LiquidityMap { symbol: string; day: string; ticks: number; hours: LiquidityHour[]; days: string[]; symbols: string[] }
 export interface MarkoutRow { id: string; at: string; login: number; symbol: string; side: "buy" | "sell"; entry: "in" | "out"; lots: number; price: number; m1: number | null; m5: number | null; m30: number | null }
 export interface MarkoutReport { rows: MarkoutRow[]; summary: { symbol: string; deals: number; m1: number; m5: number; m30: number }[] }
