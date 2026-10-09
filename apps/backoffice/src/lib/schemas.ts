@@ -48,6 +48,10 @@ export const Group = z
     passPriceImprovement: z.preprocess((v) => v ?? true, z.boolean()),
     /** A-book TP and pending limit entries rest at the LP as GTC limit orders. */
     lpResting: z.preprocess((v) => v ?? false, z.boolean()),
+    /** Scheduled extra markup: daily windows (minutes of the UTC day, weekdays 0 = Monday). */
+    markupWindows: z.preprocess((v) => v ?? [], z.array(z.object({ weekdays: z.array(z.number().int().min(0).max(6)), fromMin: z.number().int().min(0).max(1439), toMin: z.number().int().min(0).max(1440), addPoints: z.number().int().min(-1000).max(1000) })).max(50)),
+    /** Extra markup around high-impact calendar events. */
+    newsMarkup: z.preprocess((v) => v ?? null, z.object({ windowMin: z.number().int().min(1).max(1440), addPoints: z.number().int().min(-1000).max(1000) }).nullable()),
     /** Leverage cap Friday 20:00 - Sunday 22:00 UTC (null = none). */
     weekendLeverage: z.preprocess((v) => (v === undefined || v === 0 ? null : v), z.number().int().min(1).max(1000).nullable()),
     /** News windows: leverage cap between two instants (ms since epoch). */

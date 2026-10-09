@@ -6,8 +6,8 @@ import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, Routi
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
-  { id: "vip-a", name: "VIP → A-book", enabled: true, groups: ["pro/ecn"], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: "ABook", aBookPct: null, markupPoints: 2, maxSlippagePoints: null, partialFill: null, minToxicity: null, maxToxicity: null, platforms: [], ipPrefixes: [], minNopLots: null, maxNopLots: null, windowMinutes: null, minWindowLots: null, scalper: null, newsWindowMin: null },
-  { id: "big-split", name: "Large tickets 70/30", enabled: true, groups: [], accounts: [], symbols: [], minLots: 5, maxLots: null, kind: "market", hoursUtc: null, routing: null, aBookPct: 70, markupPoints: null, maxSlippagePoints: 10, partialFill: null, minToxicity: null, maxToxicity: null, platforms: [], ipPrefixes: [], minNopLots: null, maxNopLots: null, windowMinutes: null, minWindowLots: null, scalper: null, newsWindowMin: null },
+  { id: "vip-a", name: "VIP → A-book", enabled: true, groups: ["pro/ecn"], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: "ABook", aBookPct: null, markupPoints: 2, maxSlippagePoints: null, partialFill: null, minToxicity: null, maxToxicity: null, platforms: [], ipPrefixes: [], minNopLots: null, maxNopLots: null, windowMinutes: null, minWindowLots: null, scalper: null, newsWindowMin: null, minutesUtc: null, weekdays: [], minSpreadPoints: null },
+  { id: "big-split", name: "Large tickets 70/30", enabled: true, groups: [], accounts: [], symbols: [], minLots: 5, maxLots: null, kind: "market", hoursUtc: null, routing: null, aBookPct: 70, markupPoints: null, maxSlippagePoints: 10, partialFill: null, minToxicity: null, maxToxicity: null, platforms: [], ipPrefixes: [], minNopLots: null, maxNopLots: null, windowMinutes: null, minWindowLots: null, scalper: null, newsWindowMin: null, minutesUtc: null, weekdays: [], minSpreadPoints: null },
 ];
 
 export class ForbiddenError extends Error {

@@ -659,6 +659,9 @@ fn routing_rules_decide_book_and_override_markup() {
         min_window_centilots: None,
         scalper: None,
         news_window_min: None,
+        minutes_utc: None,
+        weekdays: vec![],
+        min_spread_points: None,
     };
     // EURUSD -> A-book with a 20-point markup; everything else stays in the B-book group.
     h.cmd(Command::SetRules(vec![rule(
@@ -1343,6 +1346,9 @@ fn toxicity_feeds_rules_and_profile() {
         min_window_centilots: None,
         scalper: None,
         news_window_min: None,
+        minutes_utc: None,
+        weekdays: vec![],
+        min_spread_points: None,
     }]));
     // five scalps: open and close within the same second, all winners
     for i in 0..5 {
@@ -2863,6 +2869,9 @@ fn abook_rule(id: &str) -> risk::RoutingRule {
         min_window_centilots: None,
         scalper: None,
         news_window_min: None,
+        minutes_utc: None,
+        weekdays: vec![],
+        min_spread_points: None,
     }
 }
 
@@ -2920,4 +2929,86 @@ fn rule_conditions_platform_ip_nop_window_news() {
     h.cmd(Command::SetNewsTimes(vec![soon]));
     h.market(1, "e2", Side::Buy, "0.1");
     assert_eq!(h.router.take().len(), 1, "event in 10 min: A");
+}
+
+#[test]
+fn rule_minutes_window_and_spread_condition() {
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "b", "100000");
+    // the harness clock starts near the epoch: 1970-01-01 is a Thursday (3), ~00:00 UTC
+    let mut r = abook_rule("night");
+    r.minutes_utc = Some((23 * 60, 30)); // 23:00 .. 00:30, wraps midnight
+    r.weekdays = vec![2]; // Wednesday's window: counts until 00:30 Thursday
+    h.cmd(Command::SetRules(vec![r]));
+    h.market(1, "m1", Side::Buy, "0.1");
+    assert_eq!(
+        h.router.take().len(),
+        1,
+        "00:00 Thursday is inside Wednesday's wrapped window"
+    );
+    h.ts += 60 * 60_000_000_000; // 01:00
+    h.market(1, "m2", Side::Buy, "0.1");
+    assert!(h.router.take().is_empty(), "01:00: outside");
+    // volatility: spread >= 5 points → A-book (quote 1.10000/1.10010 = 10 points)
+    let mut r = abook_rule("wide");
+    r.min_spread_points = Some(5);
+    h.cmd(Command::SetRules(vec![r]));
+    h.market(1, "s1", Side::Buy, "0.1");
+    assert_eq!(h.router.take().len(), 1);
+    h.quote("EURUSD", "1.10000", "1.10002");
+    h.market(1, "s2", Side::Buy, "0.1");
+    assert!(h.router.take().is_empty(), "2 points: calm, B-book");
+}
+
+#[test]
+fn scheduled_and_news_markup_add_to_the_client_price() {
+    let mut h = H::new(EngineConfig::default());
+    let mut g = GroupConfig::retail("a", USD, Routing::ABook);
+    g.esma = None;
+    g.leverage = 100;
+    g.markup_points = 5;
+    g.markup_windows = vec![risk::MarkupWindow {
+        weekdays: vec![],
+        from_min: 0,
+        to_min: 10,
+        add_points: 7,
+    }];
+    g.news_markup = Some(risk::NewsMarkup {
+        window_min: 15,
+        add_points: 20,
+    });
+    h.cmd(Command::SetGroup(g));
+    h.account(1, "a", "100000");
+    // 00:00 UTC: inside the 00:00-00:10 window → 5 + 7 = 12 points on the LP fill
+    h.market(1, "x1", Side::Buy, "1");
+    let lp = h.router.take()[0].lp_order_id;
+    h.cmd(Command::LpFill {
+        lp_order_id: lp,
+        exec_id: "a".into(),
+        volume: qty("1"),
+        price: px("1.10010"),
+    });
+    assert_eq!(h.pos(1)[0].open_price, px("1.10022"));
+    // 00:20: window over, no news → 5 points
+    h.ts += 20 * 60_000_000_000;
+    h.market(1, "x2", Side::Buy, "1");
+    let lp = h.router.take()[0].lp_order_id;
+    h.cmd(Command::LpFill {
+        lp_order_id: lp,
+        exec_id: "b".into(),
+        volume: qty("1"),
+        price: px("1.10010"),
+    });
+    assert_eq!(h.pos(1)[1].open_price, px("1.10015"));
+    // a high-impact event in 10 minutes → 5 + 20 = 25 points
+    h.cmd(Command::SetNewsTimes(vec![h.ts + 10 * 60_000_000_000]));
+    h.market(1, "x3", Side::Buy, "1");
+    let lp = h.router.take()[0].lp_order_id;
+    h.cmd(Command::LpFill {
+        lp_order_id: lp,
+        exec_id: "c".into(),
+        volume: qty("1"),
+        price: px("1.10010"),
+    });
+    assert_eq!(h.pos(1)[2].open_price, px("1.10035"));
 }

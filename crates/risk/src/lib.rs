@@ -101,6 +101,8 @@ pub struct RuleCtx<'a> {
     /// High-impact calendar events (ns), sorted.
     pub news_times: &'a [u64],
     pub now_ns: u64,
+    /// Raw LP spread in points, if quoted.
+    pub spread_points: Option<i64>,
 }
 
 /// `prefix` is an IPv4 CIDR (`10.0.0.0/8`) or a plain textual prefix (`185.43.`).
@@ -191,6 +193,16 @@ pub struct RoutingRule {
     /// Within ± this many minutes of a high-impact calendar event.
     #[serde(default)]
     pub news_window_min: Option<u32>,
+    /// Daily window in minutes of the UTC day `[from, to)` (wraps past
+    /// midnight); finer than `hours_utc`.
+    #[serde(default)]
+    pub minutes_utc: Option<(u16, u16)>,
+    /// 0 = Monday .. 6 = Sunday; empty = every day.
+    #[serde(default)]
+    pub weekdays: Vec<u8>,
+    /// Volatility: the raw LP spread is at least this many points.
+    #[serde(default)]
+    pub min_spread_points: Option<i64>,
 }
 
 impl RoutingRule {
@@ -269,6 +281,18 @@ impl RoutingRule {
             let w = u64::from(m) * 60_000_000_000;
             let near = c.news_times.iter().any(|t| t.abs_diff(c.now_ns) <= w);
             if !near {
+                return false;
+            }
+        }
+        if let Some((from, to)) = self.minutes_utc {
+            if !daily_window_active(&self.weekdays, from, to, c.now_ns) {
+                return false;
+            }
+        } else if !self.weekdays.is_empty() && !self.weekdays.contains(&weekday_mon0(c.now_ns)) {
+            return false;
+        }
+        if let Some(min) = self.min_spread_points {
+            if c.spread_points.is_none_or(|s| s < min) {
                 return false;
             }
         }
@@ -488,6 +512,11 @@ pub struct GroupConfig {
     /// never triggers them). Off = trigger on our price, then IOC at the LP.
     #[serde(default)]
     pub lp_resting: bool,
+    /// Scheduled extra markup (daily windows) and extra markup around news.
+    #[serde(default)]
+    pub markup_windows: Vec<MarkupWindow>,
+    #[serde(default)]
+    pub news_markup: Option<NewsMarkup>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -531,6 +560,51 @@ pub struct LeverageWindow {
     pub from_ns: u64,
     pub to_ns: u64,
     pub leverage: u32,
+}
+
+/// UTC weekday of `now_ns`, 0 = Monday .. 6 = Sunday (`weekday_utc` counts from Sunday).
+pub fn weekday_mon0(now_ns: u64) -> u8 {
+    (((now_ns / 1_000_000_000) / 86_400 + 3) % 7) as u8 // 1970-01-01 was a Thursday
+}
+
+/// Minute of the UTC day of `now_ns` (0..1440).
+pub fn minute_of_day_utc(now_ns: u64) -> u16 {
+    (((now_ns / 1_000_000_000) % 86_400) / 60) as u16
+}
+
+/// Daily window `[from, to)` in minutes of the day on `weekdays` (empty = every
+/// day); `from > to` wraps past midnight (the day of `from` counts).
+pub fn daily_window_active(weekdays: &[u8], from: u16, to: u16, now_ns: u64) -> bool {
+    let m = minute_of_day_utc(now_ns);
+    let d = weekday_mon0(now_ns);
+    let day_ok = |day: u8| weekdays.is_empty() || weekdays.contains(&day);
+    if from <= to {
+        day_ok(d) && m >= from && m < to
+    } else {
+        (day_ok(d) && m >= from) || (day_ok((d + 6) % 7) && m < to)
+    }
+}
+
+/// Scheduled markup: extra points on top of the group's markup inside a
+/// daily window (rollover, thin hours, a session open).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkupWindow {
+    /// 0 = Monday .. 6 = Sunday; empty = every day.
+    #[serde(default)]
+    pub weekdays: Vec<u8>,
+    pub from_min: u16,
+    pub to_min: u16,
+    pub add_points: i64,
+}
+
+/// Extra markup around high-impact calendar events.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NewsMarkup {
+    /// ± minutes around the event.
+    pub window_min: u32,
+    pub add_points: i64,
 }
 
 /// Friday 20:00 UTC .. Sunday 22:00 UTC.
@@ -582,6 +656,8 @@ impl GroupConfig {
             swap_free_fee_per_lot: 0,
             swap_free_grace_days: 0,
             lp_resting: false,
+            markup_windows: Vec::new(),
+            news_markup: None,
         }
     }
 
@@ -595,6 +671,24 @@ impl GroupConfig {
             Side::Buy => self.markup_ask_points.unwrap_or(self.markup_points),
             Side::Sell => self.markup_bid_points.unwrap_or(self.markup_points),
         }
+    }
+
+    /// Extra markup points active at `now_ns`: the scheduled windows plus the
+    /// news markup when a high-impact event (`news_times`, ns) is within reach.
+    pub fn markup_extra_points(&self, now_ns: u64, news_times: &[u64]) -> i64 {
+        let mut extra: i64 = self
+            .markup_windows
+            .iter()
+            .filter(|w| daily_window_active(&w.weekdays, w.from_min, w.to_min, now_ns))
+            .map(|w| w.add_points)
+            .sum();
+        if let Some(n) = self.news_markup {
+            let w = u64::from(n.window_min) * 60_000_000_000;
+            if news_times.iter().any(|t| t.abs_diff(now_ns) <= w) {
+                extra += n.add_points;
+            }
+        }
+        extra
     }
 
     /// Group leverage capped by the weekend / news windows active at `now_ns`.

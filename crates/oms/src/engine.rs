@@ -393,7 +393,13 @@ impl Engine {
     /// Markup on `side` of `symbol` for group `g` (ask for Buy, bid for Sell).
     fn markup(&self, g: &GroupConfig, symbol: &str, side: Side) -> Price {
         let point = self.st.symbols.get(symbol).map_or(0, |s| s.point().raw());
-        Price::from_raw(point * g.markup_points_for(symbol, side))
+        let pts = g.markup_points_for(symbol, side) + self.markup_extra(g);
+        Price::from_raw(point * pts.max(0))
+    }
+
+    /// Scheduled / news extra markup points of the group right now.
+    fn markup_extra(&self, g: &GroupConfig) -> i64 {
+        g.markup_extra_points(self.st.now, &self.st.news_times)
     }
 
     /// Markup for one order: a routing-rule override, else the group's.
@@ -405,7 +411,8 @@ impl Engine {
                     .symbols
                     .get(&o.req.symbol)
                     .map_or(0, |s| s.point().raw());
-                Price::from_raw(point * pts)
+                // a rule's markup replaces the group's base; the schedule still adds
+                Price::from_raw(point * (pts + self.markup_extra(g)).max(0))
             }
             None => self.markup(g, &o.req.symbol, side),
         }
@@ -458,6 +465,10 @@ impl Engine {
             ip: req.ip.as_deref(),
             news_times: &self.st.news_times,
             now_ns: self.st.now,
+            spread_points: self.st.quotes.get(symbol).and_then(|q| {
+                let point = self.st.symbols.get(symbol)?.point().raw().max(1);
+                Some((q.ask.raw() - q.bid.raw()) / point)
+            }),
         };
         self.st.rules.iter().find(|r| r.matches(&ctx))
     }

@@ -92,6 +92,9 @@ function GroupDialog({ group, onClose }: { group: Group; onClose: () => void }) 
         <NumField label={t("groups.maxSlippage")} value={draft.maxSlippagePoints ?? 0} onChange={(v) => set("maxSlippagePoints", v > 0 ? v : null)} step={1} />
         <NumField label={t("groups.weekendLeverage")} value={draft.weekendLeverage ?? 0} onChange={(v) => set("weekendLeverage", v > 0 ? v : null)} step={1} />
         <LeverageWindowsField value={draft.leverageWindows ?? []} onChange={(v) => set("leverageWindows", v)} />
+        <MarkupWindowsField value={draft.markupWindows ?? []} onChange={(v) => set("markupWindows", v)} />
+        <NumField label={t("groups.newsMarkupWindow")} value={draft.newsMarkup?.windowMin ?? 0} onChange={(v) => set("newsMarkup", v > 0 ? { windowMin: Math.min(1440, v), addPoints: draft.newsMarkup?.addPoints ?? 0 } : null)} step={5} />
+        <NumField label={t("groups.newsMarkupPoints")} value={draft.newsMarkup?.addPoints ?? 0} onChange={(v) => set("newsMarkup", draft.newsMarkup ? { ...draft.newsMarkup, addPoints: v } : v !== 0 ? { windowMin: 30, addPoints: v } : null)} step={1} />
         <SelectField label={t("groups.priceImprovement")} value={draft.passPriceImprovement ? "client" : "broker"} options={["client", "broker"] as const} onChange={(v) => set("passPriceImprovement", v === "client")} />
         <SelectField label={t("groups.lpResting")} value={draft.lpResting ? "lp" : "trigger"} options={["lp", "trigger"] as const} onChange={(v) => set("lpResting", v === "lp")} />
         <NumField label={t("groups.swapMult")} value={draft.swapMultiplier} onChange={(v) => set("swapMultiplier", v)} error={errors.swapMultiplier} step={0.1} />
@@ -130,6 +133,36 @@ function LeverageWindowsField({ value, onChange }: { value: { fromMs: number; to
       ))}
       <Button type="button" variant="outline" size="sm" onClick={() => { const from = Date.now() + 3_600_000; onChange([...value, { fromMs: from - (from % 60_000), toMs: from - (from % 60_000) + 1_800_000, leverage: 50 }]); }} data-testid="add-leverage-window">
         + {t("groups.newsAdd")}
+      </Button>
+    </div>
+  );
+}
+
+type MarkupWindow = { weekdays: number[]; fromMin: number; toMin: number; addPoints: number };
+const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const minutes = (s: string) => { const [h, m] = s.split(":").map(Number); return Number.isFinite(h) ? Math.min(1440, h * 60 + (Number.isFinite(m) ? m : 0)) : 0; };
+
+/** Scheduled markup windows: extra points inside a daily UTC window on the chosen weekdays. */
+function MarkupWindowsField({ value, onChange }: { value: MarkupWindow[]; onChange: (v: MarkupWindow[]) => void }) {
+  const t = useT();
+  const upd = (i: number, w: Partial<MarkupWindow>) => onChange(value.map((x, k) => (k === i ? { ...x, ...w } : x)));
+  return (
+    <div className="sm:col-span-2 space-y-2">
+      <div className="text-xs font-medium text-muted-foreground">{t("groups.markupWindows")}</div>
+      {value.map((w, i) => (
+        <div key={i} className="grid grid-cols-[1fr_6rem_6rem_6rem_auto] items-end gap-2" data-testid="markup-window">
+          <label className="grid gap-1 text-sm"><span className="text-xs text-muted-foreground">{t("groups.weekdays")}</span>
+            <input className="h-9 rounded-md border border-border bg-background px-2 text-sm" value={w.weekdays.map((d) => DAY_KEYS[d]).join(", ")} placeholder={t("groups.weekdaysHint")} onChange={(e) => upd(i, { weekdays: e.target.value.split(/[\s,]+/).map((x) => DAY_KEYS.indexOf(x.trim().toLowerCase())).filter((d) => d >= 0) })} />
+          </label>
+          <label className="grid gap-1 text-sm"><span className="text-xs text-muted-foreground">{t("groups.fromUtc")}</span><input type="time" className="h-9 rounded-md border border-border bg-background px-2 text-sm" value={hhmm(w.fromMin)} onChange={(e) => upd(i, { fromMin: minutes(e.target.value) })} /></label>
+          <label className="grid gap-1 text-sm"><span className="text-xs text-muted-foreground">{t("groups.toUtc")}</span><input type="time" className="h-9 rounded-md border border-border bg-background px-2 text-sm" value={hhmm(w.toMin % 1440)} onChange={(e) => upd(i, { toMin: minutes(e.target.value) })} /></label>
+          <NumField label={t("groups.addPoints")} value={w.addPoints} onChange={(v) => upd(i, { addPoints: v })} step={1} />
+          <Button type="button" variant="outline" size="sm" onClick={() => onChange(value.filter((_, k) => k !== i))}>×</Button>
+        </div>
+      ))}
+      <Button type="button" variant="outline" size="sm" onClick={() => onChange([...value, { weekdays: [], fromMin: 21 * 60 + 55, toMin: 22 * 60 + 10, addPoints: 5 }])} data-testid="add-markup-window">
+        + {t("groups.markupWindowAdd")}
       </Button>
     </div>
   );
