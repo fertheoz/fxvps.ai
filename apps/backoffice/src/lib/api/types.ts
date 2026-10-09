@@ -364,7 +364,11 @@ export interface LpOrderDetail {
   fills: { execId: string; lots: number; price: number; at: string; latencyMs: number }[];
   reason: string | null;
   done: boolean;
+  /** Book at send time (parça 15): aggregated top 5 and each eligible LP's; absent when no longer kept. */
+  book?: BookSnapshot;
 }
+export interface BookLevels { bids: [number, number][]; asks: [number, number][] }
+export interface BookSnapshot { symbol: string; tsNs: number; merged: BookLevels; lps: ({ lp: string; ageMs: number } & BookLevels)[] }
 
 /** One client order: what was asked, what was given. */
 export interface ClientOrderDetail {

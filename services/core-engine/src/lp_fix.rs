@@ -248,6 +248,8 @@ impl AggLpRouter {
 
 impl LpRouter for AggLpRouter {
     fn send(&mut self, req: &LpOrderRequest) {
+        // deal-moment book (parça 15): what we saw when we decided
+        self.agg.snapshot_for(req.lp_order_id, &req.symbol);
         // A resting order goes to the primary order-taking LP of the symbol
         // even before it has quoted (a fresh process): it rests there.
         let cands = if req.resting {

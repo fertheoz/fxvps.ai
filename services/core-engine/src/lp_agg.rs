@@ -280,6 +280,53 @@ pub struct Aggregator {
     cfg: RwLock<AggConfig>,
     books: RwLock<Books>,
     rr: AtomicUsize,
+    /// Deal-moment book snapshots by LP order id (parça 15), newest last;
+    /// bounded, in memory (an execution dispute is raised within hours).
+    snapshots: RwLock<std::collections::VecDeque<(u64, BookSnapshot)>>,
+}
+
+/// The book the router saw when it sent an LP order (parça 15): the
+/// aggregated top 5 and each eligible LP's top 5, core prices / lots.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookSnapshot {
+    pub symbol: String,
+    pub ts_ns: u64,
+    pub merged: BookLevels,
+    pub lps: Vec<LpLevels>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BookLevels {
+    /// (price, lots) best first.
+    pub bids: Vec<(f64, f64)>,
+    pub asks: Vec<(f64, f64)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LpLevels {
+    pub lp: String,
+    pub age_ms: u64,
+    #[serde(flatten)]
+    pub levels: BookLevels,
+}
+
+pub const SNAPSHOT_LEVELS: usize = 5;
+pub const SNAPSHOT_KEEP: usize = 5000;
+
+fn levels(b: &LpBook) -> BookLevels {
+    let f = |v: &[(Price, Qty)]| {
+        v.iter()
+            .take(SNAPSHOT_LEVELS)
+            .map(|(p, q)| (p.raw() as f64 / 1e8, q.raw() as f64 / 1e8))
+            .collect()
+    };
+    BookLevels {
+        bids: f(&b.bids),
+        asks: f(&b.asks),
+    }
 }
 
 impl std::fmt::Debug for Aggregator {
@@ -302,6 +349,7 @@ impl Aggregator {
             cfg: RwLock::new(cfg),
             books: RwLock::new(Books::default()),
             rr: AtomicUsize::new(0),
+            snapshots: RwLock::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -318,6 +366,45 @@ impl Aggregator {
             .unwrap_or_else(|e| e.into_inner())
             .sent
             .clear();
+    }
+
+    /// Records the book of `symbol` as it is now under LP order `id` (parça 15).
+    pub fn snapshot_for(&self, id: u64, symbol: &str) {
+        let cfg = self.config();
+        let now = domain::now_ns();
+        let snap = {
+            let b = self.books.read().unwrap_or_else(|e| e.into_inner());
+            let lps = eligible(&cfg, &b, symbol, None)
+                .into_iter()
+                .map(|(lp, bk)| LpLevels {
+                    lp,
+                    age_ms: now.saturating_sub(bk.ts_ns) / 1_000_000,
+                    levels: levels(&bk),
+                })
+                .collect();
+            BookSnapshot {
+                symbol: symbol.to_string(),
+                ts_ns: now,
+                merged: BookLevels::default(),
+                lps,
+            }
+        };
+        let merged = levels(&self.merged(symbol));
+        let snap = BookSnapshot { merged, ..snap };
+        let mut q = self.snapshots.write().unwrap_or_else(|e| e.into_inner());
+        if q.len() >= SNAPSHOT_KEEP {
+            q.pop_front();
+        }
+        q.push_back((id, snap));
+    }
+
+    /// The book recorded for LP order `id`, if still kept.
+    pub fn snapshot(&self, id: u64) -> Option<BookSnapshot> {
+        let q = self.snapshots.read().unwrap_or_else(|e| e.into_inner());
+        q.iter()
+            .rev()
+            .find(|(i, _)| *i == id)
+            .map(|(_, s)| s.clone())
     }
 
     /// Market-data latency of an LP as the gateway measured it (ms).
@@ -811,6 +898,31 @@ mod tests {
         agg.set_latency("LMAX", 120);
         assert_eq!(agg.choose("EURUSD", Side::Buy, qty("1"))[0], "LMAX");
         assert!(!agg.runtime().iter().any(|r| r.slow));
+    }
+
+    #[test]
+    fn snapshot_keeps_the_book_seen_at_send_time() {
+        let agg = Aggregator::new(AggConfig {
+            lps: vec![LpPolicy::new("LMAX", 1), LpPolicy::new("SIM", 2)],
+            ..AggConfig::default()
+        });
+        agg.set_point("EURUSD", px("0.00001"));
+        let at = |bid: &str, ask: &str, ts: u64| LpBook {
+            bids: vec![(px(bid), qty("10"))],
+            asks: vec![(px(ask), qty("10"))],
+            ts_ns: ts,
+        };
+        agg.update("LMAX", "EURUSD", at("1.10000", "1.10010", 1));
+        agg.update("SIM", "EURUSD", at("1.09995", "1.10020", 1));
+        agg.snapshot_for(42, "EURUSD");
+        // the book moves on; the snapshot does not
+        agg.update("LMAX", "EURUSD", at("1.10100", "1.10110", 2));
+        let s = agg.snapshot(42).unwrap();
+        assert_eq!(s.symbol, "EURUSD");
+        assert_eq!(s.lps.len(), 2);
+        assert_eq!(s.merged.bids[0], (1.1, 10.0));
+        assert_eq!(s.merged.asks[0], (1.1001, 10.0));
+        assert!(agg.snapshot(43).is_none());
     }
 
     #[test]
