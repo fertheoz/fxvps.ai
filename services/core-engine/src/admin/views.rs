@@ -388,6 +388,70 @@ pub fn hedge_policy(e: &Engine) -> Value {
         "burstWindowMin": h.burst_window_min,
         "burstAccountLots": lots(h.burst_account_lots),
         "burstSymbolLots": lots(h.burst_symbol_lots),
+        "netDelayMs": h.net_delay_ms,
+    })
+}
+
+/// Internalization (parça 14b): per symbol the client lots traded in the
+/// window against the lots that reached the LP (omnibus + hedge orders);
+/// the difference was matched inside the book. `captured` is the broker
+/// result of the window's B-book deals (minor units of the account
+/// currency, summed as reported on the deals).
+pub fn internalization(e: &Engine, since_ns: u64) -> Value {
+    #[derive(Default)]
+    struct Row {
+        client: i64,
+        b_book: i64,
+        lp: i64,
+        captured: i128,
+        deals: u32,
+    }
+    let mut m: BTreeMap<String, Row> = BTreeMap::new();
+    for d in e.deals().iter().rev().take_while(|d| d.ts >= since_ns) {
+        let r = m.entry(d.symbol.clone()).or_default();
+        r.client += d.volume.raw();
+        r.deals += 1;
+        let b_book = e
+            .order(d.order_id)
+            .is_some_and(|o| o.routing == Routing::BBook);
+        if b_book {
+            r.b_book += d.volume.raw();
+            r.captured += d.broker_pnl;
+        }
+    }
+    for o in e.lp_orders() {
+        for f in &o.fills {
+            if f.ts >= since_ns {
+                m.entry(o.symbol.clone()).or_default().lp += f.volume.raw();
+            }
+        }
+    }
+    let (mut client_all, mut lp_all) = (0i64, 0i64);
+    let rows: Vec<Value> = m
+        .into_iter()
+        .map(|(symbol, r)| {
+            client_all += r.client;
+            lp_all += r.lp;
+            let internal = (r.client - r.lp).max(0);
+            json!({
+                "symbol": symbol,
+                "deals": r.deals,
+                "clientLots": r.client as f64 / 1e8,
+                "bBookLots": r.b_book as f64 / 1e8,
+                "lpLots": r.lp as f64 / 1e8,
+                "internalLots": internal as f64 / 1e8,
+                "internalPct": if r.client > 0 { internal as f64 * 100.0 / r.client as f64 } else { 0.0 },
+                "captured": minor(r.captured),
+            })
+        })
+        .collect();
+    let internal_all = (client_all - lp_all).max(0);
+    json!({
+        "rows": rows,
+        "clientLots": client_all as f64 / 1e8,
+        "lpLots": lp_all as f64 / 1e8,
+        "internalLots": internal_all as f64 / 1e8,
+        "internalPct": if client_all > 0 { internal_all as f64 * 100.0 / client_all as f64 } else { 0.0 },
     })
 }
 

@@ -185,6 +185,10 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/analytics/liquidity", get(analytics_liquidity))
         .route("/v1/analytics/markout", get(analytics_markout))
         .route("/v1/analytics/whatif", post(analytics_whatif))
+        .route(
+            "/v1/analytics/internalization",
+            get(analytics_internalization),
+        )
         .route("/v1/audit", get(audit))
         .route("/v1/admin-users", get(list_users))
         .route("/v1/admin-users/{id}", put(save_user))
@@ -3289,6 +3293,19 @@ async fn analytics_markout(
     Ok(Json(
         ctx.q(move |e| views::markout(e, &dir, since, limit))
             .await?,
+    ))
+}
+
+async fn analytics_internalization(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Query(q): Query<MarkoutQuery>,
+) -> ApiResult {
+    need(&actor, "reports.view")?;
+    let hours = u64::from(q.hours.unwrap_or(24).clamp(1, 24 * 30));
+    let since = domain::now_ns().saturating_sub(hours * 3_600_000_000_000);
+    Ok(Json(
+        ctx.q(move |e| views::internalization(e, since)).await?,
     ))
 }
 
