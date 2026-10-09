@@ -2397,6 +2397,14 @@ struct MarkupBandDto {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SkewDto {
+    /// Points per net lot (decimal), e.g. 1.5.
+    points_per_lot: f64,
+    max_points: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct NewsMarkupDto {
     window_min: u32,
     add_points: i64,
@@ -2460,6 +2468,9 @@ struct GroupDto {
     min_spread_points: Option<i64>,
     #[serde(default)]
     max_spread_points: Option<i64>,
+    /// Inventory skew; `Some(None)` clears it.
+    #[serde(default)]
+    skew: Option<Option<SkewDto>>,
     /// A-book TP / pending limit entries rest at the LP as GTC limit orders.
     #[serde(default)]
     lp_resting: Option<bool>,
@@ -2715,6 +2726,23 @@ async fn save_group(
             return Err(ApiError::bad("maxSpreadPoints must be 0..100000"));
         }
         cfg.max_spread_points = (p > 0).then_some(p);
+    }
+    if let Some(sk) = g.skew {
+        cfg.skew = match sk {
+            Some(s)
+                if !(0.0..=1000.0).contains(&s.points_per_lot)
+                    || !(0..=100_000).contains(&s.max_points) =>
+            {
+                return Err(ApiError::bad(
+                    "skew: pointsPerLot 0..1000, maxPoints 0..100000",
+                ))
+            }
+            Some(s) if s.points_per_lot > 0.0 && s.max_points > 0 => Some(risk::SkewPolicy {
+                centipoints_per_lot: (s.points_per_lot * 100.0).round() as i64,
+                max_points: s.max_points,
+            }),
+            _ => None,
+        };
     }
     if let Some(n) = g.news_markup {
         cfg.news_markup = match n {

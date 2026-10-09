@@ -134,6 +134,7 @@ trading süreci kapalıyken gelen icra Denetçi farkı olarak görünür.
 | 12 | **Gerçek zamanlı markup API'si** | FXCubic | `/v1/pricing/markup` PUT (anahtar+MFA), TTL'li geçici markup |
 | 13 | **Tik ambarı + analitik** | oneZero/MahiFX | kotasyon/derinlik/işlem → sütunlu ambar; markout, likidite-zaman haritası, VaR girdisi, "bu ayarla dün gelir ne olurdu" |
 | 14 | **Algoritmik fiyatlama modülü** | oneZero/MahiFX | broker'ın kendi fiyat/skew algoritması, sandbox'ta, hot-swap |
+| 14b | **Dahili eşleştirme** | Your Bourse | aynı sembolde ters yönlü müşteri akışını LP'ye gitmeden içeride eşleştir; spread kârı tamamen bizde; omnibus yalnız net fazlayı taşır; Denetçi değişmezi korunur (kurucu: "bu özellikle çok güzel") |
 | 15 | **Anlaşma anı kitap anlık görüntüsü** | PrimeXM | LP emri anında birleşik 5 seviye kitap `LpOrder`'a; icra raporunda görüntüle |
 
 ## 3. Teknoloji kararları ("en ileri stack", tek kişilik işletim)
@@ -169,7 +170,8 @@ trading süreci kapalıyken gelen icra Denetçi farkı olarak görünür.
 | 2026-10-09 | 0 v2a | ✅ | #196 | Terminalde "LP" rozeti (pozisyon SL/TP ve bekleyen emirde; proto v1.3 `lp_tp/lp_sl/lp_resting`, REST aynı); ask çizgisi varsayılan açık (eski kayıtlar bir kez açılır) |
 | 2026-10-09 | 1 | ✅ | #197 | Kural değişkenleri: platform (terminal/mobile/api/bridge/copy), IP öneki/CIDR, hesap NOP, pencere hacmi (N dk'da açılan lot), scalper profili, haber penceresi (yüksek etkili olaylar motora `SetNewsTimes`); emirde platform+IP journal'da |
 | 2026-10-09 | 2 | ✅ | #198 | Profil zamanlayıcı: kurallarda dakika penceresi/haftanın günleri/min spread; gruplarda zamanlı markup pencereleri + haber markup'ı |
-| 2026-10-09 | 3 | 🔧 | #202 | Hacim bantları (emir büyüklüğüne göre ek markup), spread tabanı/hedef (simetrik genişletme), spread tavanı (üstünde yeni piyasa emri yok, bekleyenler bekler, kapanış serbest) |
+| 2026-10-09 | 3 | 🔧 | #203 | Hacim bantları (emir büyüklüğüne göre ek markup), spread tabanı/hedef (simetrik genişletme), spread tavanı (üstünde yeni piyasa emri yok, bekleyenler bekler, kapanış serbest) |
+| 2026-10-09 | 4 | 🔧 | #204 | Envanter skew: grup fiyatı B-book net pozisyonla kayar (puan/lot, tavan); bizi düzleştiren akış ödüllenir; havuza 14b dahili eşleştirme eklendi |
 | 2026-10-09 | konsol | ✅ | #199 #201 | Başlığa tek tık: sırala+süz; satır detayı (LP zaman çizelgesi, deneme/ms, kayma, değerlendirme; Mutabakat deal'leri); isteğe bağlı sütunlar (Columns'ta açılır, hatırlanır), sunucudan tarih aralığı yükleme, sayfa boyutu hatırlanır, fiyatlar sembol basamağına yuvarlı, yoğunluk sütun sayısına göre |
 | 2026-10-09 | FIX | ✅ | #200 | İşlem oturumu ham FIX çerçeveleri `fix-store/fixlog/<gün>.jsonl`; konsolda LP emri detayında "FIX mesajları" + kopyala (hazineci LP yazışması için; konsoldan hiçbir şey gönderilmez) |
 

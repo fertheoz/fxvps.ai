@@ -483,11 +483,14 @@ impl Engine {
             self.markup(g, symbol, Side::Sell),
             self.markup(g, symbol, Side::Buy),
         );
+        let point = self.st.symbols.get(symbol).map_or(0, |s| s.point().raw());
+        // inventory skew: our B-book net on the symbol moves the whole quote
+        let q = match g.skew {
+            Some(sk) => q.shifted(Price::from_raw(point * sk.points(self.b_book_net(symbol)))),
+            None => q,
+        };
         Ok(match g.min_spread_points {
-            Some(m) if m > 0 => {
-                let point = self.st.symbols.get(symbol).map_or(0, |s| s.point().raw());
-                q.floor_spread(Price::from_raw(point * m))
-            }
+            Some(m) if m > 0 => q.floor_spread(Price::from_raw(point * m)),
             _ => q,
         })
     }

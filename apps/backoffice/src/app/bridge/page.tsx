@@ -162,7 +162,7 @@ function DemoCard({ onKey }: { onKey: (k: { id: string; key: string }) => void }
         marginCallPct: 100, stopOutPct: 50, commissionType: "symbol", commissionValue: 0, markupPoints: 0,
         swapMultiplier: 1, book: "A", symbols, esma: "none", partialFill: "retry", maxAttempts: 5,
         markupBidPoints: null, markupAskPoints: null, symbolMarkups: {}, maxSlippagePoints: null,
-        passPriceImprovement: true, lpResting: false, markupWindows: [], newsMarkup: null, markupBands: [], minSpreadPoints: null, maxSpreadPoints: null, weekendLeverage: null, leverageWindows: [], leverageTiers: [], swapFreeFee: 0, swapFreeGraceDays: 0,
+        passPriceImprovement: true, lpResting: false, markupWindows: [], newsMarkup: null, markupBands: [], minSpreadPoints: null, maxSpreadPoints: null, skew: null, weekendLeverage: null, leverageWindows: [], leverageTiers: [], swapFreeFee: 0, swapFreeGraceDays: 0,
       };
       if (!(await a.listGroups()).some((g) => g.id === DEMO_GROUP)) {
         await a.saveGroup(group, actor);
