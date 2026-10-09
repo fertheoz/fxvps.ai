@@ -194,6 +194,11 @@ function HedgeForm({ initial }: { initial: HedgePolicy }) {
           {t("risk.currencyLimits")}
           <textarea className="min-h-16 rounded-md border border-border bg-background p-2 font-mono text-xs" value={ccyText} onChange={(e) => setCcyText(e.target.value)} disabled={!editable} placeholder="EUR 500000" data-testid="currency-limits" />
         </Label>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <NumField label={t("risk.burstWindow")} value={p.burstWindowMin ?? 0} onChange={(v) => set("burstWindowMin", Math.min(1440, Math.max(0, Math.round(v))))} step={5} disabled={!editable} />
+          <NumField label={t("risk.burstAccount")} value={p.burstAccountLots ?? 0} onChange={(v) => set("burstAccountLots", v > 0 ? v : null)} step={0.5} disabled={!editable} />
+          <NumField label={t("risk.burstSymbol")} value={p.burstSymbolLots ?? 0} onChange={(v) => set("burstSymbolLots", v > 0 ? v : null)} step={0.5} disabled={!editable} />
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <NumField label={t("risk.newsWindow")} value={p.newsWindowMin ?? 0} onChange={(v) => set("newsWindowMin", Math.min(1440, Math.max(0, Math.round(v))))} step={5} disabled={!editable} />
           <Label>

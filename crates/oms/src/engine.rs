@@ -1040,6 +1040,15 @@ impl Engine {
             routing = Routing::ABook;
             rule_tag = Some("hedge:currency".into());
         }
+        // warehouse volume cap: a burst over the window cap goes A-book
+        if routing == Routing::BBook
+            && close.is_none()
+            && self.st.hedge.enabled
+            && self.burst_over_limit(req.account, &req.symbol, req.volume)
+        {
+            routing = Routing::ABook;
+            rule_tag = Some("hedge:burst".into());
+        }
         // news window: new flow A-book while the event is near
         if routing == Routing::BBook
             && close.is_none()
@@ -2687,6 +2696,55 @@ impl Engine {
             }
         }
         false
+    }
+
+    /// B-book lots opened in the last `window_ns` by `account` (all symbols)
+    /// and on `symbol` (all accounts), from the deal tape.
+    fn b_book_opened_recently(
+        &self,
+        account: AccountNo,
+        symbol: &str,
+        window_ns: u64,
+    ) -> (i64, i64) {
+        let from = self.st.now.saturating_sub(window_ns);
+        let (mut by_account, mut by_symbol) = (0i64, 0i64);
+        for d in self.st.deals.iter().rev().take_while(|d| d.ts >= from) {
+            if d.entry != DealEntry::In {
+                continue;
+            }
+            let b_book = self
+                .st
+                .orders
+                .get(&d.order_id)
+                .is_some_and(|o| o.routing == Routing::BBook);
+            if !b_book {
+                continue;
+            }
+            if d.account == account {
+                by_account += d.volume.raw();
+            }
+            if d.symbol == symbol {
+                by_symbol += d.volume.raw();
+            }
+        }
+        (by_account, by_symbol)
+    }
+
+    /// Would this B-book open push the account's or the symbol's lots opened
+    /// in the burst window over the cap?
+    fn burst_over_limit(&self, account: AccountNo, symbol: &str, volume: Qty) -> bool {
+        let h = &self.st.hedge;
+        if h.burst_window_min == 0
+            || (h.burst_account_lots.is_none() && h.burst_symbol_lots.is_none())
+        {
+            return false;
+        }
+        let window = u64::from(h.burst_window_min) * 60_000_000_000;
+        let (acc, sym) = self.b_book_opened_recently(account, symbol, window);
+        h.burst_account_lots
+            .is_some_and(|l| acc + volume.raw() > l.raw())
+            || h.burst_symbol_lots
+                .is_some_and(|l| sym + volume.raw() > l.raw())
     }
 
     /// Inside ± `news_window_min` of a high-impact event (hedge policy).

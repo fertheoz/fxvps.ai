@@ -61,6 +61,10 @@ export interface HedgePolicy {
   newsAction?: NewsAction;
   /** Read-only: an event is near right now. */
   inNewsWindow?: boolean;
+  /** Warehouse volume caps: B-book lots opened in the last N minutes per account / per symbol. */
+  burstWindowMin?: number;
+  burstAccountLots?: number | null;
+  burstSymbolLots?: number | null;
 }
 
 export type NewsAction = "none" | "a_book" | "reject";
