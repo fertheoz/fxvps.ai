@@ -414,6 +414,7 @@ mod tests {
             session: SessionKind::Trading,
             in_seq: 5,
             last_msg_ms: 9,
+            latency_ms: 12,
         };
         let j = serde_json::to_vec(&st).unwrap();
         assert_eq!(serde_json::from_slice::<GatewayEvent>(&j).unwrap(), st);

@@ -792,6 +792,11 @@ mod tests {
             lps: vec![LpPolicy::new("LMAX", 1), LpPolicy::new("SIM", 2)],
             ..AggConfig::default()
         });
+        let at = |bid: &str, ask: &str, ts: u64| LpBook {
+            bids: vec![(px(bid), qty("10"))],
+            asks: vec![(px(ask), qty("10"))],
+            ts_ns: ts,
+        };
         agg.update("LMAX", "EURUSD", at("1.10000", "1.10010", 1));
         agg.update("SIM", "EURUSD", at("1.09995", "1.10020", 1));
         assert_eq!(agg.choose("EURUSD", Side::Buy, qty("1"))[0], "LMAX");
@@ -837,6 +842,7 @@ mod tests {
             lps: vec![LpPolicy::new("LMAX", 1), LpPolicy::new("SIM", 2)],
             max_deviation_points: 100,
             max_quote_age_ms: 30_000,
+            max_latency_ms: 0,
         });
         agg.set_point("EURUSD", px("0.00001"));
         let at = |bid: &str, ask: &str, ts: u64| LpBook {
