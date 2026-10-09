@@ -9,7 +9,7 @@ import { api, useApiMutation, useApiQuery, useMfaOk } from "@/lib/queries";
 import { useToast } from "@/components/shell/providers";
 import { useActor, useFormat, useT } from "@/lib/hooks";
 import type { Trade } from "@/lib/schemas";
-import type { BestExecutionRow, ClientFlowRow, ClientOrderDetail, IbRow, ExecutionRow, ExecutionSummary, LpExecution, LpOrderDetail, ReconciliationRow, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
+import type { BestExecutionRow, ClientFlowRow, ClientOrderDetail, IbRow, ExecutionRow, ExecutionSummary, LpExecution, LpOrderDetail, MarkoutRow, ReconciliationRow, RevenueRow, RevenueTotals, Statement, TransactionRow } from "@/lib/api";
 import { formatMinorPlain } from "@/lib/money";
 import { downloadCsv, toCsv } from "@/lib/utils";
 
@@ -24,7 +24,7 @@ const txc = createColumnHelper<TransactionRow>();
 const bxc = createColumnHelper<BestExecutionRow>();
 const ibc = createColumnHelper<IbRow>();
 const mc = createColumnHelper<ReconciliationRow>();
-type Tab = "trades" | "statements" | "lp" | "execution" | "revenue" | "flow" | "transactions" | "bestexec" | "ib" | "reconciliation";
+type Tab = "trades" | "statements" | "lp" | "execution" | "revenue" | "flow" | "transactions" | "bestexec" | "ib" | "reconciliation" | "analytics";
 
 const pts = (v: number | null | undefined, digits = 1) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(digits)}`);
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
@@ -302,7 +302,7 @@ export default function ReportsPage() {
         {actor.can("reports.export") && <Button variant="outline" onClick={exportCsv} data-testid="export-csv"><Download className="h-4 w-4" />{t("common.export")}</Button>}
       </PageHeader>
       <div className="mb-3">
-        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }, { value: "flow", label: t("reports.flow") }, { value: "transactions", label: t("reports.transactions") }, { value: "bestexec", label: t("reports.bestExec") }, { value: "ib", label: t("reports.ib") }, { value: "reconciliation", label: t("reports.recon") }]} />
+        <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }, { value: "flow", label: t("reports.flow") }, { value: "transactions", label: t("reports.transactions") }, { value: "bestexec", label: t("reports.bestExec") }, { value: "ib", label: t("reports.ib") }, { value: "reconciliation", label: t("reports.recon") }, { value: "analytics", label: t("reports.analytics") }]} />
       </div>
       {tab === "statements" && <DataTable data={statements.data ?? []} columns={stmtCols} getRowId={(x) => String(x.login)} />}
       {tab === "execution" && (
@@ -366,6 +366,7 @@ export default function ReportsPage() {
           <DataTable data={flow.data ?? []} columns={flowCols} getRowId={(x) => String(x.login)} />
         </div>
       )}
+      {tab === "analytics" && <AnalyticsTab />}
       {tab === "revenue" && (
         <div data-testid="revenue-report">
           <div className="mb-3 grid grid-cols-2 gap-3 xl:grid-cols-4">{totals(revenue.data?.last24h, t("reports.last24h"))}</div>
@@ -373,6 +374,100 @@ export default function ReportsPage() {
           <DataTable data={revenue.data?.rows ?? []} columns={revCols} getRowId={(x) => x.id} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** Parça 13: liquidity-by-hour map, deal markout from the tick warehouse, what-if markup replay. */
+function AnalyticsTab() {
+  const t = useT();
+  const f = useFormat();
+  const actor = useActor();
+  const [symbol, setSymbol] = React.useState("");
+  const [day, setDay] = React.useState("");
+  const liq = useApiQuery("liquidity", [{ symbol: symbol || undefined, day: day || undefined }], { live: 30000 });
+  const [hours, setHours] = React.useState(24);
+  const mo = useApiQuery("markout", [{ hours, limit: 500 }], { live: 30000 });
+  const [delta, setDelta] = React.useState(2);
+  const [group, setGroup] = React.useState("");
+  const [wi, setWi] = React.useState<import("@/lib/api").WhatIfReport | null>(null);
+  const run = useApiMutation((v: { hours: number; deltaPoints: number; group: string | null }) => api().whatIf(v, actor), setWi);
+  const mc = createColumnHelper<MarkoutRow>();
+  const moCols = React.useMemo(() => [
+    mc.accessor("at", { header: t("reports.at"), cell: (c) => <span className="whitespace-nowrap text-xs">{f.date(c.getValue())}</span> }),
+    mc.accessor("login", { header: t("clients.login"), cell: (c) => <span className="tabular-nums">{c.getValue()}</span> }),
+    mc.accessor("symbol", { header: t("positions.symbol") }),
+    mc.accessor("side", { header: t("positions.side"), cell: (c) => <SideBadge side={c.getValue()} /> }),
+    mc.accessor("entry", { header: t("reports.entry"), cell: (c) => <Badge tone="muted">{c.getValue()}</Badge> }),
+    mc.accessor("lots", { header: t("positions.lots"), cell: (c) => <span className="tabular-nums">{f.num(c.getValue())}</span> }),
+    mc.accessor("price", { header: t("positions.price"), cell: (c) => <span className="tabular-nums">{c.getValue()}</span> }),
+    ...(["m1", "m5", "m30"] as const).map((k) => mc.accessor(k, { header: t(`reports.${k}`), cell: (c) => { const v = c.getValue(); return v == null ? <span className="text-muted-foreground">—</span> : <span className={`tabular-nums ${v > 0 ? "text-emerald-600 dark:text-emerald-400" : v < 0 ? "text-red-600 dark:text-red-400" : ""}`}>{v > 0 ? "+" : ""}{f.num(v, 1)}</span>; } })),
+  ], [t, f, mc]);
+  const shade = (v: number, max: number) => `rgba(245, 158, 11, ${Math.min(1, max > 0 ? v / max : 0) * 0.6})`;
+  const maxSpread = Math.max(1, ...(liq.data?.hours ?? []).map((h) => h.avgSpreadPoints || 0));
+  return (
+    <div className="grid gap-4" data-testid="analytics">
+      <p className="text-xs text-muted-foreground">{t("reports.analyticsHint")}</p>
+      <div className="rounded-md border border-border p-3">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="font-medium">{t("reports.liquidityMap")}</span>
+          <select className="rounded-md border border-border bg-background p-1 text-sm" value={symbol || liq.data?.symbol || ""} onChange={(e) => setSymbol(e.target.value)} aria-label={t("positions.symbol")} data-testid="liq-symbol">
+            {(liq.data?.symbols ?? []).map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select className="rounded-md border border-border bg-background p-1 text-sm" value={day || liq.data?.day || ""} onChange={(e) => setDay(e.target.value)} aria-label={t("reports.day")} data-testid="liq-day">
+            {(liq.data?.days ?? []).map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+          <span className="text-xs text-muted-foreground">{liq.data ? `${liq.data.ticks} ${t("reports.ticks")}` : t("common.loading")}</span>
+        </div>
+        {liq.data && liq.data.ticks === 0 && <div className="text-sm text-muted-foreground">{t("reports.noTicks")}</div>}
+        {liq.data && liq.data.ticks > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs tabular-nums">
+              <thead><tr>{[t("reports.hourUtc"), t("reports.ticks"), t("reports.spreadAvg"), t("reports.spreadMin"), t("reports.spreadMax"), t("reports.topBid"), t("reports.topAsk")].map((h, i) => <th key={i} className="px-2 py-1 text-left font-medium text-muted-foreground">{h}</th>)}</tr></thead>
+              <tbody>
+                {liq.data.hours.map((h) => (
+                  <tr key={h.hour} className="border-t border-border/60">
+                    <td className="px-2 py-0.5">{String(h.hour).padStart(2, "0")}:00</td>
+                    <td className="px-2 py-0.5">{h.ticks}</td>
+                    <td className="px-2 py-0.5" style={{ background: h.ticks ? shade(h.avgSpreadPoints, maxSpread) : undefined }}>{h.ticks ? f.num(h.avgSpreadPoints, 1) : "—"}</td>
+                    <td className="px-2 py-0.5">{h.ticks ? f.num(h.minSpreadPoints, 1) : "—"}</td>
+                    <td className="px-2 py-0.5">{h.ticks ? f.num(h.maxSpreadPoints, 1) : "—"}</td>
+                    <td className="px-2 py-0.5">{h.ticks ? f.num(h.avgBidLots, 1) : "—"}</td>
+                    <td className="px-2 py-0.5">{h.ticks ? f.num(h.avgAskLots, 1) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <div className="rounded-md border border-border p-3">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="font-medium">{t("reports.markout")}</span>
+          <select className="rounded-md border border-border bg-background p-1 text-sm" value={String(hours)} onChange={(e) => setHours(Number(e.target.value))} aria-label={t("platform.window")}>
+            {[6, 24, 72, 168].map((h) => <option key={h} value={h}>{t("platform.lastHours", { n: h })}</option>)}
+          </select>
+          {(mo.data?.summary ?? []).map((s) => <Badge key={s.symbol} tone={s.m5 > 0 ? "danger" : "success"}>{s.symbol} · {s.deals} · 5s {s.m5 > 0 ? "+" : ""}{f.num(s.m5, 1)} pt</Badge>)}
+        </div>
+        <p className="mb-2 text-xs text-muted-foreground">{t("reports.markoutHint")}</p>
+        <DataTable data={mo.data?.rows ?? []} columns={moCols} getRowId={(x) => x.id} storageKey="analytics-markout" />
+      </div>
+      <div className="rounded-md border border-border p-3" data-testid="whatif">
+        <div className="mb-2 font-medium">{t("reports.whatIf")}</div>
+        <p className="mb-2 text-xs text-muted-foreground">{t("reports.whatIfHint")}</p>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="grid gap-1 text-xs">{t("reports.deltaPoints")}<input type="number" className="w-24 rounded-md border border-border bg-background p-1 text-sm" value={delta} onChange={(e) => setDelta(Number(e.target.value))} data-testid="whatif-delta" /></label>
+          <label className="grid gap-1 text-xs">{t("clients.group")}<input className="w-32 rounded-md border border-border bg-background p-1 text-sm" value={group} onChange={(e) => setGroup(e.target.value)} placeholder="*" /></label>
+          <Button onClick={() => run.mutate({ hours, deltaPoints: Math.round(delta), group: group.trim() || null })} disabled={run.isPending || !Number.isFinite(delta) || Math.round(delta) === 0} data-testid="whatif-run">{t("reports.whatIfRun")}</Button>
+          {wi && <span className="text-sm">{t("reports.whatIfResult", { n: wi.deltaPoints })} <strong className={wi.totalUsd >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>{wi.totalUsd >= 0 ? "+" : ""}{f.num(wi.totalUsd, 0)} USD</strong></span>}
+        </div>
+        {wi && wi.rows.length > 0 && (
+          <table className="mt-2 w-full text-xs tabular-nums">
+            <thead><tr>{[t("positions.symbol"), t("reports.legs"), t("positions.lots"), t("reports.delta"), "USD"].map((h, i) => <th key={i} className="px-2 py-1 text-left font-medium text-muted-foreground">{h}</th>)}</tr></thead>
+            <tbody>{wi.rows.map((r) => <tr key={r.symbol} className="border-t border-border/60"><td className="px-2 py-0.5">{r.symbol}</td><td className="px-2 py-0.5">{r.legs}</td><td className="px-2 py-0.5">{f.num(r.lots)}</td><td className="px-2 py-0.5">{f.num(r.delta)} {r.currency}</td><td className="px-2 py-0.5">{r.deltaUsd == null ? "—" : f.num(r.deltaUsd, 0)}</td></tr>)}</tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }

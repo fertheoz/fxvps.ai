@@ -1638,6 +1638,149 @@ pub fn account_activity(e: &Engine, account: u64, since_ns: u64) -> Value {
     })
 }
 
+/// Liquidity map of `symbol` on `day` from the tick warehouse (parça 13):
+/// per hour spread avg / min / max in points and average top-of-book lots.
+pub fn liquidity(e: &Engine, dir: &std::path::Path, symbol: &str, day: &str) -> Value {
+    let point = e.symbol_spec(symbol).map_or(1, |s| s.point().raw().max(1)) as f64;
+    let ticks = crate::ticks::read(dir, symbol, day);
+    let hours: Vec<Value> = crate::ticks::hourly(&ticks)
+        .iter()
+        .map(|h| {
+            json!({
+                "hour": h.hour,
+                "ticks": h.ticks,
+                "avgSpreadPoints": if h.ticks > 0 { h.avg_spread / point } else { Value::Null.as_f64().unwrap_or(0.0) },
+                "minSpreadPoints": h.min_spread as f64 / point,
+                "maxSpreadPoints": h.max_spread as f64 / point,
+                "avgBidLots": h.avg_bid_lots / 1e8,
+                "avgAskLots": h.avg_ask_lots / 1e8,
+            })
+        })
+        .collect();
+    json!({
+        "symbol": symbol,
+        "day": day,
+        "ticks": ticks.len(),
+        "hours": hours,
+        "days": crate::ticks::days(dir, symbol),
+        "symbols": crate::ticks::symbols(dir),
+    })
+}
+
+/// Markout of the deals of the last `since_ns` from the warehouse: the mid
+/// 1 s / 5 s / 30 s after the fill against the fill price, in points, signed
+/// in the client's favour (positive = the client was right).
+pub fn markout(e: &Engine, dir: &std::path::Path, since_ns: u64, limit: usize) -> Value {
+    let mut cache: BTreeMap<(String, String), Vec<crate::ticks::Tick>> = BTreeMap::new();
+    let mut rows = Vec::new();
+    let mut by_symbol: BTreeMap<String, (u32, f64, f64, f64)> = BTreeMap::new();
+    for d in e.deals().iter().rev().take_while(|d| d.ts >= since_ns) {
+        if rows.len() >= limit {
+            break;
+        }
+        let Some(spec) = e.symbol_spec(&d.symbol) else {
+            continue;
+        };
+        let point = spec.point().raw().max(1) as f64;
+        let day = crate::ticks::day_of(d.ts);
+        let ticks = cache
+            .entry((d.symbol.clone(), day.clone()))
+            .or_insert_with(|| crate::ticks::read(dir, &d.symbol, &day));
+        let sign = d.side.sign() as f64;
+        let m = |secs: u64| -> Option<f64> {
+            let t = crate::ticks::price_at(ticks, d.ts + secs * 1_000_000_000)?;
+            if t.ts_ns <= d.ts {
+                return None;
+            }
+            let mid = (t.bid + t.ask) as f64 / 2.0;
+            Some(sign * (mid - d.price.raw() as f64) / point)
+        };
+        let (m1, m5, m30) = (m(1), m(5), m(30));
+        if let Some(v) = m5 {
+            let s = by_symbol.entry(d.symbol.clone()).or_default();
+            s.0 += 1;
+            s.1 += m1.unwrap_or(0.0);
+            s.2 += v;
+            s.3 += m30.unwrap_or(0.0);
+        }
+        rows.push(json!({
+            "id": d.id.to_string(),
+            "at": iso(d.ts),
+            "login": d.account,
+            "symbol": d.symbol,
+            "side": side_str(d.side),
+            "entry": if d.entry == oms::DealEntry::In { "in" } else { "out" },
+            "lots": qty_f(d.volume),
+            "price": price_f(d.price),
+            "m1": m1,
+            "m5": m5,
+            "m30": m30,
+        }));
+    }
+    let summary: Vec<Value> = by_symbol
+        .into_iter()
+        .map(|(symbol, (n, a1, a5, a30))| {
+            let n_f = f64::from(n);
+            json!({ "symbol": symbol, "deals": n, "m1": a1 / n_f, "m5": a5 / n_f, "m30": a30 / n_f })
+        })
+        .collect();
+    json!({ "rows": rows, "summary": summary })
+}
+
+/// What-if (parça 13): had every deal of the window been priced with
+/// `delta_points` more markup, the broker's extra revenue per symbol (quote
+/// currency and USD). Flow assumed unchanged; A- and B-book alike (the
+/// markup is the broker's either way).
+pub fn whatif_markup(e: &Engine, since_ns: u64, delta_points: i64, group: Option<&str>) -> Value {
+    let mut per: BTreeMap<String, (f64, u32)> = BTreeMap::new();
+    for d in e.deals().iter().rev().take_while(|d| d.ts >= since_ns) {
+        if let Some(g) = group {
+            if e.account(d.account).is_none_or(|a| a.group != g) {
+                continue;
+            }
+        }
+        let p = per.entry(d.symbol.clone()).or_default();
+        p.0 += qty_f(d.volume);
+        p.1 += 1;
+    }
+    let mut total_usd = 0i128;
+    let rows: Vec<Value> = per
+        .into_iter()
+        .filter_map(|(symbol, (lots, legs))| {
+            let spec = e.symbol_spec(&symbol)?;
+            // delta points × point × contract × lots, in the quote currency
+            let minor_exp = spec.quote.minor_exponent();
+            let value = delta_points as f64
+                * (spec.point().raw() as f64 / 1e8)
+                * spec.contract_size as f64
+                * lots;
+            let minor = (value * 10f64.powi(minor_exp as i32)).round() as i128;
+            let usd = e.to_usd_minor(spec.quote, minor);
+            if let Some(u) = usd {
+                total_usd += u;
+            }
+            Some(json!({
+                "symbol": symbol,
+                "legs": legs,
+                "lots": lots,
+                "currency": spec.quote.as_str(),
+                "delta": minor_f(minor, minor_exp),
+                "deltaUsd": usd.map(|u| u as f64 / 100.0),
+            }))
+        })
+        .collect();
+    json!({
+        "deltaPoints": delta_points,
+        "group": group,
+        "rows": rows,
+        "totalUsd": total_usd as f64 / 100.0,
+    })
+}
+
+fn minor_f(minor: i128, exp: u32) -> f64 {
+    minor as f64 / 10f64.powi(exp as i32)
+}
+
 pub fn revenue(e: &Engine, since_ns: u64) -> Value {
     let (mut all, mut recent) = (RevenueTotals::default(), RevenueTotals::default());
     let mut rows = Vec::new();

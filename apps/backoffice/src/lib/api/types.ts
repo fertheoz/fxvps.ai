@@ -503,6 +503,14 @@ export interface AlertRulesView { rules: AlertRule[]; metrics: string[]; evals: 
 export interface HedgePreviewRow { symbol: string; bBookNetLots: number; hedgeLots: number; targetLots: number; deltaLots: number; firstOrder: { side: "buy" | "sell"; lots: number } | null; limitLots: number | null; varUsd: number | null }
 export interface HedgePreview { symbols: HedgePreviewRow[]; varTotalUsd: number; varLimitUsd: number | null; varOver: boolean; currency: { currency: string; usd: number; limitUsd: number | null; over: boolean }[] }
 
+/** Tick-warehouse analytics (parça 13). */
+export interface LiquidityHour { hour: number; ticks: number; avgSpreadPoints: number; minSpreadPoints: number; maxSpreadPoints: number; avgBidLots: number; avgAskLots: number }
+export interface LiquidityMap { symbol: string; day: string; ticks: number; hours: LiquidityHour[]; days: string[]; symbols: string[] }
+export interface MarkoutRow { id: string; at: string; login: number; symbol: string; side: "buy" | "sell"; entry: "in" | "out"; lots: number; price: number; m1: number | null; m5: number | null; m30: number | null }
+export interface MarkoutReport { rows: MarkoutRow[]; summary: { symbol: string; deals: number; m1: number; m5: number; m30: number }[] }
+export interface WhatIfRow { symbol: string; legs: number; lots: number; currency: string; delta: number; deltaUsd: number | null }
+export interface WhatIfReport { deltaPoints: number; group: string | null; rows: WhatIfRow[]; totalUsd: number }
+
 /** Temporary markup set through the pricing API (parça 12). */
 export interface TempMarkup { id: string; group: string; symbol: string | null; points: number; from: string; until: string; reason: string; active: boolean }
 
@@ -927,6 +935,10 @@ export interface AdminApi {
   execution(): Promise<ExecutionReport>;
   /** Realized broker revenue from the ledger (markup, B-book, commission). */
   revenue(): Promise<RevenueReport>;
+  /** Parça 13: tick warehouse analytics. */
+  liquidity(q?: { symbol?: string; day?: string }): Promise<LiquidityMap>;
+  markout(q?: { hours?: number; limit?: number }): Promise<MarkoutReport>;
+  whatIf(req: { hours?: number; deltaPoints: number; group?: string | null }, actor: Actor): Promise<WhatIfReport>;
   reconciliation(from?: string, to?: string): Promise<ReconciliationRow[]>;
 
   listAudit(): Promise<AuditEntry[]>;

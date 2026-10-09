@@ -347,6 +347,8 @@ impl CoreStack {
                 }
             }
         }
+        // tick warehouse (parça 13): sampled top of book per symbol / day
+        let ticks = Some(crate::ticks::TickStore::open(cfg.data_dir.join("ticks")));
         let bridges = subs
             .into_iter()
             .map(|(lp, rx, symbols)| {
@@ -358,6 +360,7 @@ impl CoreStack {
                     events.clone(),
                     lp,
                     agg.clone(),
+                    ticks.clone(),
                 ))
             })
             .collect();
