@@ -95,6 +95,9 @@ function GroupDialog({ group, onClose }: { group: Group; onClose: () => void }) 
         <MarkupWindowsField value={draft.markupWindows ?? []} onChange={(v) => set("markupWindows", v)} />
         <NumField label={t("groups.newsMarkupWindow")} value={draft.newsMarkup?.windowMin ?? 0} onChange={(v) => set("newsMarkup", v > 0 ? { windowMin: Math.min(1440, v), addPoints: draft.newsMarkup?.addPoints ?? 0 } : null)} step={5} />
         <NumField label={t("groups.newsMarkupPoints")} value={draft.newsMarkup?.addPoints ?? 0} onChange={(v) => set("newsMarkup", draft.newsMarkup ? { ...draft.newsMarkup, addPoints: v } : v !== 0 ? { windowMin: 30, addPoints: v } : null)} step={1} />
+        <MarkupBandsField value={draft.markupBands ?? []} onChange={(v) => set("markupBands", v)} />
+        <NumField label={t("groups.minSpread")} value={draft.minSpreadPoints ?? 0} onChange={(v) => set("minSpreadPoints", v > 0 ? Math.trunc(v) : null)} step={1} />
+        <NumField label={t("groups.maxSpread")} value={draft.maxSpreadPoints ?? 0} onChange={(v) => set("maxSpreadPoints", v > 0 ? Math.trunc(v) : null)} step={1} />
         <SelectField label={t("groups.priceImprovement")} value={draft.passPriceImprovement ? "client" : "broker"} options={["client", "broker"] as const} onChange={(v) => set("passPriceImprovement", v === "client")} />
         <SelectField label={t("groups.lpResting")} value={draft.lpResting ? "lp" : "trigger"} options={["lp", "trigger"] as const} onChange={(v) => set("lpResting", v === "lp")} />
         <NumField label={t("groups.swapMult")} value={draft.swapMultiplier} onChange={(v) => set("swapMultiplier", v)} error={errors.swapMultiplier} step={0.1} />
@@ -163,6 +166,27 @@ function MarkupWindowsField({ value, onChange }: { value: MarkupWindow[]; onChan
       ))}
       <Button type="button" variant="outline" size="sm" onClick={() => onChange([...value, { weekdays: [], fromMin: 21 * 60 + 55, toMin: 22 * 60 + 10, addPoints: 5 }])} data-testid="add-markup-window">
         + {t("groups.markupWindowAdd")}
+      </Button>
+    </div>
+  );
+}
+
+/** Volume bands: orders of at least `fromLots` get `addPoints` more markup. */
+function MarkupBandsField({ value, onChange }: { value: { fromLots: number; addPoints: number }[]; onChange: (v: { fromLots: number; addPoints: number }[]) => void }) {
+  const t = useT();
+  const upd = (i: number, w: Partial<{ fromLots: number; addPoints: number }>) => onChange(value.map((x, k) => (k === i ? { ...x, ...w } : x)));
+  return (
+    <div className="sm:col-span-2 space-y-2">
+      <div className="text-xs font-medium text-muted-foreground">{t("groups.markupBands")}</div>
+      {value.map((w, i) => (
+        <div key={i} className="grid grid-cols-[8rem_8rem_auto] items-end gap-2" data-testid="markup-band">
+          <NumField label={t("groups.bandFrom")} value={w.fromLots} onChange={(v) => upd(i, { fromLots: v })} step={0.1} />
+          <NumField label={t("groups.addPoints")} value={w.addPoints} onChange={(v) => upd(i, { addPoints: v })} step={1} />
+          <Button type="button" variant="outline" size="sm" onClick={() => onChange(value.filter((_, k) => k !== i))}>×</Button>
+        </div>
+      ))}
+      <Button type="button" variant="outline" size="sm" onClick={() => onChange([...value, { fromLots: 1, addPoints: 2 }])} data-testid="add-markup-band">
+        + {t("groups.bandAdd")}
       </Button>
     </div>
   );

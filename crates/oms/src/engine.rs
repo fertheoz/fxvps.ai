@@ -404,17 +404,17 @@ impl Engine {
 
     /// Markup for one order: a routing-rule override, else the group's.
     fn order_markup(&self, o: &Order, g: &GroupConfig, side: Side) -> Price {
+        let point = self
+            .st
+            .symbols
+            .get(&o.req.symbol)
+            .map_or(0, |s| s.point().raw());
+        // volume band: the order's size adds to whatever base applies
+        let band = point * g.band_points(o.req.volume.raw() / 1_000_000);
         match o.markup_override {
-            Some(pts) => {
-                let point = self
-                    .st
-                    .symbols
-                    .get(&o.req.symbol)
-                    .map_or(0, |s| s.point().raw());
-                // a rule's markup replaces the group's base; the schedule still adds
-                Price::from_raw(point * (pts + self.markup_extra(g)).max(0))
-            }
-            None => self.markup(g, &o.req.symbol, side),
+            // a rule's markup replaces the group's base; the schedule still adds
+            Some(pts) => Price::from_raw((point * (pts + self.markup_extra(g)) + band).max(0)),
+            None => Price::from_raw((self.markup(g, &o.req.symbol, side).raw() + band).max(0)),
         }
     }
 
@@ -479,10 +479,30 @@ impl Engine {
             .quotes
             .get(symbol)
             .ok_or_else(|| RiskError::NoQuote(symbol.into()))?;
-        Ok(q.with_markups(
+        let q = q.with_markups(
             self.markup(g, symbol, Side::Sell),
             self.markup(g, symbol, Side::Buy),
-        ))
+        );
+        Ok(match g.min_spread_points {
+            Some(m) if m > 0 => {
+                let point = self.st.symbols.get(symbol).map_or(0, |s| s.point().raw());
+                q.floor_spread(Price::from_raw(point * m))
+            }
+            _ => q,
+        })
+    }
+
+    /// The raw LP spread is above the group's cap: no new market orders,
+    /// pending orders wait (volatility guard).
+    fn spread_too_wide(&self, g: &GroupConfig, symbol: &str) -> bool {
+        let Some(max) = g.max_spread_points.filter(|m| *m > 0) else {
+            return false;
+        };
+        let point = self.st.symbols.get(symbol).map_or(0, |s| s.point().raw());
+        self.st
+            .quotes
+            .get(symbol)
+            .is_some_and(|q| q.ask.raw() - q.bid.raw() > point * max)
     }
 
     // ------------------------------------------------------------------
@@ -1066,6 +1086,13 @@ impl Engine {
         }
         if r.expire_at.is_some_and(|t| t <= self.st.now) {
             return Err("already expired".into());
+        }
+        if r.order_type == OrderType::Market
+            && o.close_position.is_none()
+            && matches!(o.origin, OrderOrigin::Client | OrderOrigin::Copy)
+            && self.spread_too_wide(g, &r.symbol)
+        {
+            return Err("spread too wide".into());
         }
         let cq = self.client_quote(g, &r.symbol).map_err(e2s)?;
         let entry = match r.side {
@@ -2508,6 +2535,9 @@ impl Engine {
                 continue; // the LP decides: it rests there
             }
             let g = self.st.groups[&self.st.accounts[&o.req.account].group].clone();
+            if self.spread_too_wide(&g, symbol) {
+                continue; // volatility guard: the pending waits for a normal spread
+            }
             let Ok(q) = self.client_quote(&g, symbol) else {
                 continue;
             };
