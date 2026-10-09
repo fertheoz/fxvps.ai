@@ -691,3 +691,43 @@ pub enum Event {
         reason: String,
     },
 }
+
+/// EWMA volatility state of one symbol, integers only (replay-safe): mid
+/// returns sampled at most once a minute, in 1e-8 units; `var` is the
+/// EWMA (λ = 0.94) of their squares, 1e-16 units.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+pub struct VolState {
+    pub last_mid: i64,
+    pub last_ts: u64,
+    pub var: i128,
+    pub samples: u32,
+}
+
+impl VolState {
+    pub const SAMPLE_NS: u64 = 60_000_000_000;
+
+    /// Feeds a mid price at `now`; a new sample only after a minute.
+    pub fn observe(&mut self, mid: i64, now: u64) {
+        if self.last_ts == 0 || mid <= 0 {
+            self.last_mid = mid;
+            self.last_ts = now;
+            return;
+        }
+        if now.saturating_sub(self.last_ts) < Self::SAMPLE_NS || self.last_mid <= 0 {
+            return;
+        }
+        let r = ((mid as i128 - self.last_mid as i128) * 100_000_000) / self.last_mid as i128;
+        self.var = (self.var * 94 + r * r * 6) / 100;
+        self.samples += 1;
+        self.last_mid = mid;
+        self.last_ts = now;
+    }
+
+    /// Daily volatility (fraction) from per-minute samples: σ_min × √1440.
+    pub fn daily_sigma(&self) -> f64 {
+        if self.samples < 5 {
+            return 0.0;
+        }
+        (self.var as f64 * 1440.0).sqrt() / 1e8
+    }
+}

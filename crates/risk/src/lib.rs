@@ -1364,6 +1364,16 @@ pub struct HedgePolicy {
     /// HedgeExcess: the hedge is unwound once |net| ≤ limit × release %.
     #[serde(default = "eighty")]
     pub release_pct: u8,
+    /// Time-limited hedging: at most this many lots per hedge order, one
+    /// order every `slice_interval_s` seconds (TWAP); `None` = all at once.
+    #[serde(default)]
+    pub slice_lots: Option<Qty>,
+    #[serde(default)]
+    pub slice_interval_s: u32,
+    /// 1-day 95% parametric VaR cap of the whole B-book, USD; above it the
+    /// book is hedged down (HedgeExcess) until the VaR fits.
+    #[serde(default)]
+    pub var_limit_usd: Option<i64>,
 }
 
 fn hundred() -> u8 {
@@ -1384,6 +1394,9 @@ impl Default for HedgePolicy {
             account_limit: None,
             hedge_ratio_pct: 100,
             release_pct: 80,
+            slice_lots: None,
+            slice_interval_s: 0,
+            var_limit_usd: None,
         }
     }
 }
@@ -1421,6 +1434,13 @@ impl HedgePolicy {
         }
         if self.release_pct > 100 {
             return Err("releasePct must be 0..100".into());
+        }
+        pos(self.slice_lots, "sliceLots")?;
+        if self.slice_interval_s > 86_400 {
+            return Err("sliceIntervalS must be 0..86400".into());
+        }
+        if self.var_limit_usd.is_some_and(|v| v <= 0) {
+            return Err("varLimitUsd must be positive".into());
         }
         Ok(())
     }

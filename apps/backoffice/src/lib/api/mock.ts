@@ -80,7 +80,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
     { id: "al-3", kind: "lp_down", target: "LMAX-TRADING", severity: "critical", title: "LMAX TRADING session down", detail: "heartbeat timeout", raisedAt: Date.now() * 1e6 - 8e12, resolvedAt: Date.now() * 1e6 - 7.6e12, acked: true },
   ];
   let swapCfg: SwapConfig = { enabled: true, rolloverHourUtc: 22, skipWeekend: true, lastRolloverAt: null };
-  let hedge: HedgePolicy = { enabled: true, mode: "switch_to_a_book", defaultSymbolLimit: 25, symbolLimits: { XAUUSD: 5 }, totalLimit: 100, accountLimit: 10, hedgeRatioPct: 100, releasePct: 80 };
+  let hedge: HedgePolicy = { enabled: true, mode: "switch_to_a_book", defaultSymbolLimit: 25, symbolLimits: { XAUUSD: 5 }, totalLimit: 100, accountLimit: 10, hedgeRatioPct: 100, releasePct: 80, sliceLots: null, sliceIntervalS: 0, varLimitUsd: null };
   const lpRuntime = (p: LpPolicyRuntime): LpPolicyRuntime => p;
   let lpAgg: LpAggregation = {
     mode: "best_price",

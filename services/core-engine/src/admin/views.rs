@@ -245,6 +245,8 @@ pub fn exposure(e: &Engine) -> Value {
                 "hedgeRealized": e.hedge_realized(&sym) as f64
                     / 10f64.powi(e.symbol_spec(&sym).map_or(2, |s| s.quote.minor_exponent() as i32)),
                 "hedgeCurrency": e.symbol_spec(&sym).map(|s| s.quote.to_string()),
+                "volDailyPct": e.volatility_daily(&sym) * 100.0,
+                "varUsd": e.var_symbol_usd(&sym).map(|m| m.minor as f64 / 100.0),
             })
         })
         .collect();
@@ -265,6 +267,10 @@ pub fn hedge_policy(e: &Engine) -> Value {
         "accountLimit": lots(h.account_limit),
         "hedgeRatioPct": h.hedge_ratio_pct,
         "releasePct": h.release_pct,
+        "sliceLots": lots(h.slice_lots),
+        "sliceIntervalS": h.slice_interval_s,
+        "varLimitUsd": h.var_limit_usd,
+        "varTotalUsd": e.var_total_usd().minor as f64 / 100.0,
     })
 }
 

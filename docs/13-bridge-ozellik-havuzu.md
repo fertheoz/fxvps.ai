@@ -172,6 +172,7 @@ trading süreci kapalıyken gelen icra Denetçi farkı olarak görünür.
 | 2026-10-09 | 2 | ✅ | #198 | Profil zamanlayıcı: kurallarda dakika penceresi/haftanın günleri/min spread; gruplarda zamanlı markup pencereleri + haber markup'ı |
 | 2026-10-09 | 3 | 🔧 | #203 | Hacim bantları (emir büyüklüğüne göre ek markup), spread tabanı/hedef (simetrik genişletme), spread tavanı (üstünde yeni piyasa emri yok, bekleyenler bekler, kapanış serbest) |
 | 2026-10-09 | 4 | 🔧 | #204 | Envanter skew: grup fiyatı B-book net pozisyonla kayar (puan/lot, tavan); bizi düzleştiren akış ödüllenir; havuza 14b dahili eşleştirme eklendi |
+| 2026-10-09 | 5 | 🔧 | #205 | Süre sınırlı hedge (TWAP: dilim lot + aralık) ve parametrik VaR (EWMA σ, tamsayı durum; sembol/toplam VaR Risk sayfasında) + VaR tavanı → kitabı hedge ile küçültür |
 | 2026-10-09 | konsol | ✅ | #199 #201 | Başlığa tek tık: sırala+süz; satır detayı (LP zaman çizelgesi, deneme/ms, kayma, değerlendirme; Mutabakat deal'leri); isteğe bağlı sütunlar (Columns'ta açılır, hatırlanır), sunucudan tarih aralığı yükleme, sayfa boyutu hatırlanır, fiyatlar sembol basamağına yuvarlı, yoğunluk sütun sayısına göre |
 | 2026-10-09 | FIX | ✅ | #200 | İşlem oturumu ham FIX çerçeveleri `fix-store/fixlog/<gün>.jsonl`; konsolda LP emri detayında "FIX mesajları" + kopyala (hazineci LP yazışması için; konsoldan hiçbir şey gönderilmez) |
 

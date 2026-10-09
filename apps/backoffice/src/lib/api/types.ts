@@ -26,6 +26,9 @@ export interface SymbolExposure {
   hedgePendingLots?: number;
   unhedgedBLots?: number;
   limitLots?: number | null;
+  /** EWMA daily volatility (%) and 1-day 95% VaR of the B-book net (USD). */
+  volDailyPct?: number;
+  varUsd?: number | null;
   overLimit?: boolean;
   hedgeRealized?: number;
   hedgeCurrency?: string | null;
@@ -44,6 +47,13 @@ export interface HedgePolicy {
   accountLimit: number | null;
   hedgeRatioPct: number;
   releasePct: number;
+  /** TWAP: at most this many lots per hedge order, one per interval (null = all at once). */
+  sliceLots?: number | null;
+  sliceIntervalS?: number;
+  /** 1-day 95% VaR cap of the B-book (USD); null = off. */
+  varLimitUsd?: number | null;
+  /** Live total VaR (USD), read-only. */
+  varTotalUsd?: number;
 }
 
 export interface ClientFlowRow {
