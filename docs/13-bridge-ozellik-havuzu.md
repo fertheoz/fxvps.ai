@@ -24,7 +24,7 @@ gösterir (08-bridge-yol-haritasi.md, 12-eksik-parcalar-plan.md).
 | Gerçek zamanlı panolar, LP/bağlayıcı durumu, geçmiş log erişimi | ✅ Etap 9 + nöbet |
 | **Özel otomatik alarm kuralları** (e-posta) | 🟡 sabit alarm seti + Telegram; kural tanımı yok |
 | **Yapılandırma değişikliği doğrulaması** | 🟡 denetim izi var; önizleme/doğrulama yok |
-| Drill-down raporlar: kayma, icra süresi, pozisyon, ret analizi; **anlaşma anı kitap anlık görüntüsü** | 🟡 Etap 1-2 (sent_bid/ask); tam kitap yok |
+| Drill-down raporlar: kayma, icra süresi, pozisyon, ret analizi; **anlaşma anı kitap anlık görüntüsü** | ✅ #218 gönderim anı kitabı (ilk 5, LP başına) + #199 satır detayı |
 | Düzenleyici raporlama dışa aktarımı | ✅ Etap 11 |
 | MT Analytics: VaR, para birimi maruziyeti, müşteri profili | 🟡 profil/toksisite var; **VaR yok** |
 
@@ -33,22 +33,22 @@ gösterir (08-bridge-yol-haritasi.md, 12-eksik-parcalar-plan.md).
 |---|---|
 | Kural koşul değişkenleri: hesap, grup, sembol, yön/büyüklük/tip, **hesap NOP**, **zaman penceresinde toplam hacim**, **ağ adresi (IP)**, **scalper bayrağı**, **platform bayrağı (mobil/web/API/EA/sinyal)** | 🟡 hesap/grup/sembol/lot/tip/saat/toksisite var; NOP, pencere hacmi, IP, platform, scalper yok |
 | **Zamanlanmış profil geçişi** (ör. 14:30'da volatilite kipi) ve **koşula bağlı dinamik geçiş** | ⬜ |
-| **Gerçek zamanlı markup API'si** (dışarıdan anlık markup/spread) | ⬜ |
-| Maksimum spread kontrolü, kayma kontrolü | 🟡 kayma var; **maks spread kapısı yok** |
+| **Gerçek zamanlı markup API'si** (dışarıdan anlık markup/spread) | ✅ #213 `PUT /v1/pricing/markup` (TTL) |
+| Maksimum spread kontrolü, kayma kontrolü | ✅ #203 maks spread kapısı + kayma |
 | Toksik işlem koruması, B-book zarar koruması | ✅ Etap 7 toksisite + limitler |
-| **Arızalı LP beslentisi tespiti**: gecikme ölçümü, otomatik askıya alma, akış değiştirme | 🟡 sessiz-LP + sapma koruması var; **gecikme tespiti yok** |
-| LP fiyat geçmişini görsel karşılaştırma | ⬜ |
-| Sağlayıcı QoS izleme, performans alarmı | 🟡 LP performans raporu var; canlı QoS alarmı yok |
+| **Arızalı LP beslentisi tespiti**: gecikme ölçümü, otomatik askıya alma, akış değiştirme | ✅ #209 gecikme ölçümü + askıya alma; sessiz-LP + sapma |
+| LP fiyat geçmişini görsel karşılaştırma | 🟡 #214 tik ambarı + likidite haritası (LP başına karşılaştırma grafiği yok) |
+| Sağlayıcı QoS izleme, performans alarmı | ✅ #209 `lp_slow` alarmı + LP performans raporu |
 | Yatay ölçek, failover tatbikatı, paralel göç | ✅ Etap 10 + mavi/yeşil |
 
 ### oneZero Hub (fiyatlama/spread kontrolleri + depo yönetimi + veri)
 | Özellik | Bizde |
 |---|---|
-| **Hacim bantları (Volume Bands)**, **hedef spread**, **min/maks spread** kontrolleri | ⬜ |
+| **Hacim bantları (Volume Bands)**, **hedef spread**, **min/maks spread** kontrolleri | ✅ #203 |
 | Auto Hedge (mikro/makro, sembol+grup+limit bazlı tetik) | ✅ Etap 7 |
 | Quote Filtering (piyasa dışı kotasyon süzme) | ✅ sapma koruması |
-| **Depo hacim kontrolleri** (işlem/dönem başına B-book hacim tavanı; ani toksik dalga) | 🟡 net limit var; **hacim/dönem tavanı yok** |
-| **Algoritmik Fiyatlama Modülü** (kendi algoritman Hub içinde koşar) | ⬜ |
+| **Depo hacim kontrolleri** (işlem/dönem başına B-book hacim tavanı; ani toksik dalga) | ✅ #207 patlama tavanı (hesap/sembol, N dk) |
+| **Algoritmik Fiyatlama Modülü** (kendi algoritman Hub içinde koşar) | ✅ #215 formül dili + sandbox + hot swap |
 | **Data Source**: kotasyon+işlem verisi ambarı → analitik/BI | ⬜ (journal var, analitik ambar yok) |
 | EcoSystem: 200+ LP/bağlayıcı, DMA, takas | ⬜ (LMAX + SIM; bağlayıcı sayısı iş geliştirme konusu) |
 | Margin Engine, MetaTrader barındırma | ✅ / ✅ (10-11 MT5 köprü) |
@@ -57,8 +57,8 @@ gösterir (08-bridge-yol-haritasi.md, 12-eksik-parcalar-plan.md).
 | Özellik | Bizde |
 |---|---|
 | **Fiyat oluşturma**: başkasının likiditesini toplamak değil, **kendi oranını** üretmek | ⬜ (markup = agregasyon + puan) |
-| **Portföy bazlı skew**: envanteri azaltan yöne fiyatı kaydırma | ⬜ |
-| **Last look** (tutma süresi + ret eşiği) — API/kurumsal müşteriye karşı | ⬜ |
+| **Portföy bazlı skew**: envanteri azaltan yöne fiyatı kaydırma | ✅ #204 |
+| **Last look** (tutma süresi + ret eşiği) — API/kurumsal müşteriye karşı | ✅ #208 |
 | **VaR bazlı ve süre sınırlı hedge** (riski kademeli, iştah kadar çıkar) | 🟡 eşik hedge var; VaR/süreli yok |
 | Öngörücü sinyal: **koordineli işlem (sürü) tespiti**, oranı savunma | ⬜ |
 | MFX Echo: tik "firehose", **likiditeyi zamanda 2D/3D görselleştirme**, işlem simülasyonu (CSV yükle) | ⬜ |
@@ -170,21 +170,21 @@ trading süreci kapalıyken gelen icra Denetçi farkı olarak görünür.
 | 2026-10-09 | 0 v2a | ✅ | #196 | Terminalde "LP" rozeti (pozisyon SL/TP ve bekleyen emirde; proto v1.3 `lp_tp/lp_sl/lp_resting`, REST aynı); ask çizgisi varsayılan açık (eski kayıtlar bir kez açılır) |
 | 2026-10-09 | 1 | ✅ | #197 | Kural değişkenleri: platform (terminal/mobile/api/bridge/copy), IP öneki/CIDR, hesap NOP, pencere hacmi (N dk'da açılan lot), scalper profili, haber penceresi (yüksek etkili olaylar motora `SetNewsTimes`); emirde platform+IP journal'da |
 | 2026-10-09 | 2 | ✅ | #198 | Profil zamanlayıcı: kurallarda dakika penceresi/haftanın günleri/min spread; gruplarda zamanlı markup pencereleri + haber markup'ı |
-| 2026-10-09 | 3 | 🔧 | #203 | Hacim bantları (emir büyüklüğüne göre ek markup), spread tabanı/hedef (simetrik genişletme), spread tavanı (üstünde yeni piyasa emri yok, bekleyenler bekler, kapanış serbest) |
-| 2026-10-09 | 4 | 🔧 | #204 | Envanter skew: grup fiyatı B-book net pozisyonla kayar (puan/lot, tavan); bizi düzleştiren akış ödüllenir; havuza 14b dahili eşleştirme eklendi |
-| 2026-10-09 | 15 | 🔧 | #218 | Anlaşma anı kitap görüntüsü: yönlendirici LP emrini gönderirken birleşik ilk 5 seviye + uygun LP'lerin ilk 5'i (yaş ms) agregatörde tutulur (son 5000 emir, bellek); LP icra detayında "Gönderim anındaki kitap" paneli (hangi seviye hangi LP'den) |
-| 2026-10-09 | 14b | 🔧 | #216 | Dahili eşleştirme: `HedgePolicy.net_delay_ms` (B-book dolumundan sonra netleştirme gecikmesi; ters akış içeride netleşir, LP'ye yalnız net fazlalık omnibus hedge olarak gider; sembol limiti 0 = tüm neti hedge et); Risk sayfasında ön ayar düğmesi + rozet; Raporlar → Analitik "Dahili eşleştirme" (müşteri lot vs LP lot, içeride eşleşen %, yakalanan) |
-| 2026-10-09 | 14 | 🔧 | #215 | Algoritmik fiyatlama: grup başına alış/satış kayma formülü (`risk::algo` mini dil: değişkenler spread/net/lots/vol/hour/news/markup, min/max/abs/clamp/if, and/or/not; toplam, yan etkisiz), her kotasyonda markup+skew sonrası; kaydet = hot swap; `POST /v1/pricing/algo/test` sandbox (canlı kitapta sonuç tablosu); Gruplar formunda alanlar |
-| 2026-10-09 | 13 | 🔧 | #214 | Tik ambarı + analitik: `<data>/ticks/<SYM>/<gün>.tick` (40 B/tik, sn'de 1 örnek, 30 gün; `CORE_TICK_SAMPLE_MS`/`CORE_TICK_KEEP_DAYS`), Raporlar → Analitik: saat bazında likidite haritası, dolum sonrası markout (+1/5/30 sn, ambardan), what-if markup geri oynatma (`/v1/analytics/*`) |
-| 2026-10-09 | 12 | 🔧 | #213 | Gerçek zamanlı markup API'si: `PUT /v1/pricing/markup` (grup/sembol, ± puan, TTL, sebep; groups.edit + MFA), `GET`, `DELETE /{id}`; motorda journallanan `SetTempMarkup`/`ClearTempMarkup`, grup markup'ı + zamanlayıcı + bantların üstüne eklenir, süresi dolunca düşer; Risk sayfasında kart |
-| 2026-10-09 | 11 | 🔧 | #212 | Sürü tespiti: aynı sembol+yönde N saniyede ≥K farklı hesap → kural değişkeni (`herdAccounts`/`herdWindowS`, örn. A-book'a zorla), `herd` uyarısı (Ayarlar → davranış eşikleri), Platform sayfasında sürü sinyalleri; motor `herd_signals()` |
-| 2026-10-09 | 10b | 🔧 | #211 | Elle risk atma: Risk → "LP'ye at" (sembol/yön/lot, MFA, iki aşamalı onay) → `Command::ManualHedge` hedge defterine; hedge politikası "etkiyi önizle" (sembol başına hedef/değişim/ilk emir, VaR ve para birimi limitleri); Ayarlar → Uyarı kuralları (11 ölçüt, hedef, eşik, önem; canlı okuma + kaydetmeden önizleme; `rule:<id>` uyarıları) |
-| 2026-10-09 | 10a | 🔧 | #210 | Hesap davranışı + platform kullanıcıları: geçit bağlantı/kimlik olay halkası (terminal WS + köprü), scalper/patlama/döngü/kaba kuvvet/IP bayrakları, `account_abuse`/`brute_force` uyarıları, pano kartı; `PlatformUser` sicili (köprü `{"t":"users"}` + JSON içe aktarma), yeni "Platform kullanıcıları" sayfası (kullanıcılar/hesap uyarıları/IP sekmeleri, satır detayı) |
-| 2026-10-09 | 9 | 🔧 | #209 | Beslenti QoS: gateway MD gecikmesi (alım − SendingTime, EWMA) → lp_status/LP sayfası "Besleme gecikmesi"; agregatör `maxLatencyMs` kapısı (yavaş LP askıda); `lp_slow` uyarısı (ayar: besleme yavaş eşiği, varsayılan 2000 ms) |
-| 2026-10-09 | 8 | 🔧 | #208 | Last look (yalnız API/bridge piyasa emirleri): tutma süresi + müşteri lehine kayma eşiği → ret; terminal/mobil/copy asla tutulmaz; tutulan emir iptal edilebilir |
-| 2026-10-09 | 7 | 🔧 | #207 | Depo hacim tavanı: N dakikada hesap/sembol başına açılan B-book lot; aşan akış A-book (`hedge:burst`) |
-| 2026-10-09 | 6 | 🔧 | #206 | Para birimi maruziyeti (bacak bazında A/B, USD) + para birimi tavanı (aşan akış A-book); haber penceresi (A-book'a zorla / yeni emirleri durdur, kapanış serbest) |
-| 2026-10-09 | 5 | 🔧 | #205 | Süre sınırlı hedge (TWAP: dilim lot + aralık) ve parametrik VaR (EWMA σ, tamsayı durum; sembol/toplam VaR Risk sayfasında) + VaR tavanı → kitabı hedge ile küçültür |
+| 2026-10-09 | 3 | ✅ | #203 | Hacim bantları (emir büyüklüğüne göre ek markup), spread tabanı/hedef (simetrik genişletme), spread tavanı (üstünde yeni piyasa emri yok, bekleyenler bekler, kapanış serbest) |
+| 2026-10-09 | 4 | ✅ | #204 | Envanter skew: grup fiyatı B-book net pozisyonla kayar (puan/lot, tavan); bizi düzleştiren akış ödüllenir; havuza 14b dahili eşleştirme eklendi |
+| 2026-10-09 | 15 | ✅ | #218 | Anlaşma anı kitap görüntüsü: yönlendirici LP emrini gönderirken birleşik ilk 5 seviye + uygun LP'lerin ilk 5'i (yaş ms) agregatörde tutulur (son 5000 emir, bellek); LP icra detayında "Gönderim anındaki kitap" paneli (hangi seviye hangi LP'den) |
+| 2026-10-09 | 14b | ✅ | #216 | Dahili eşleştirme: `HedgePolicy.net_delay_ms` (B-book dolumundan sonra netleştirme gecikmesi; ters akış içeride netleşir, LP'ye yalnız net fazlalık omnibus hedge olarak gider; sembol limiti 0 = tüm neti hedge et); Risk sayfasında ön ayar düğmesi + rozet; Raporlar → Analitik "Dahili eşleştirme" (müşteri lot vs LP lot, içeride eşleşen %, yakalanan) |
+| 2026-10-09 | 14 | ✅ | #215 | Algoritmik fiyatlama: grup başına alış/satış kayma formülü (`risk::algo` mini dil: değişkenler spread/net/lots/vol/hour/news/markup, min/max/abs/clamp/if, and/or/not; toplam, yan etkisiz), her kotasyonda markup+skew sonrası; kaydet = hot swap; `POST /v1/pricing/algo/test` sandbox (canlı kitapta sonuç tablosu); Gruplar formunda alanlar |
+| 2026-10-09 | 13 | ✅ | #214 | Tik ambarı + analitik: `<data>/ticks/<SYM>/<gün>.tick` (40 B/tik, sn'de 1 örnek, 30 gün; `CORE_TICK_SAMPLE_MS`/`CORE_TICK_KEEP_DAYS`), Raporlar → Analitik: saat bazında likidite haritası, dolum sonrası markout (+1/5/30 sn, ambardan), what-if markup geri oynatma (`/v1/analytics/*`) |
+| 2026-10-09 | 12 | ✅ | #213 | Gerçek zamanlı markup API'si: `PUT /v1/pricing/markup` (grup/sembol, ± puan, TTL, sebep; groups.edit + MFA), `GET`, `DELETE /{id}`; motorda journallanan `SetTempMarkup`/`ClearTempMarkup`, grup markup'ı + zamanlayıcı + bantların üstüne eklenir, süresi dolunca düşer; Risk sayfasında kart |
+| 2026-10-09 | 11 | ✅ | #212 | Sürü tespiti: aynı sembol+yönde N saniyede ≥K farklı hesap → kural değişkeni (`herdAccounts`/`herdWindowS`, örn. A-book'a zorla), `herd` uyarısı (Ayarlar → davranış eşikleri), Platform sayfasında sürü sinyalleri; motor `herd_signals()` |
+| 2026-10-09 | 10b | ✅ | #211 | Elle risk atma: Risk → "LP'ye at" (sembol/yön/lot, MFA, iki aşamalı onay) → `Command::ManualHedge` hedge defterine; hedge politikası "etkiyi önizle" (sembol başına hedef/değişim/ilk emir, VaR ve para birimi limitleri); Ayarlar → Uyarı kuralları (11 ölçüt, hedef, eşik, önem; canlı okuma + kaydetmeden önizleme; `rule:<id>` uyarıları) |
+| 2026-10-09 | 10a | ✅ | #210 | Hesap davranışı + platform kullanıcıları: geçit bağlantı/kimlik olay halkası (terminal WS + köprü), scalper/patlama/döngü/kaba kuvvet/IP bayrakları, `account_abuse`/`brute_force` uyarıları, pano kartı; `PlatformUser` sicili (köprü `{"t":"users"}` + JSON içe aktarma), yeni "Platform kullanıcıları" sayfası (kullanıcılar/hesap uyarıları/IP sekmeleri, satır detayı) |
+| 2026-10-09 | 9 | ✅ | #209 | Beslenti QoS: gateway MD gecikmesi (alım − SendingTime, EWMA) → lp_status/LP sayfası "Besleme gecikmesi"; agregatör `maxLatencyMs` kapısı (yavaş LP askıda); `lp_slow` uyarısı (ayar: besleme yavaş eşiği, varsayılan 2000 ms) |
+| 2026-10-09 | 8 | ✅ | #208 | Last look (yalnız API/bridge piyasa emirleri): tutma süresi + müşteri lehine kayma eşiği → ret; terminal/mobil/copy asla tutulmaz; tutulan emir iptal edilebilir |
+| 2026-10-09 | 7 | ✅ | #207 | Depo hacim tavanı: N dakikada hesap/sembol başına açılan B-book lot; aşan akış A-book (`hedge:burst`) |
+| 2026-10-09 | 6 | ✅ | #206 | Para birimi maruziyeti (bacak bazında A/B, USD) + para birimi tavanı (aşan akış A-book); haber penceresi (A-book'a zorla / yeni emirleri durdur, kapanış serbest) |
+| 2026-10-09 | 5 | ✅ | #205 | Süre sınırlı hedge (TWAP: dilim lot + aralık) ve parametrik VaR (EWMA σ, tamsayı durum; sembol/toplam VaR Risk sayfasında) + VaR tavanı → kitabı hedge ile küçültür |
 | 2026-10-09 | konsol | ✅ | #199 #201 | Başlığa tek tık: sırala+süz; satır detayı (LP zaman çizelgesi, deneme/ms, kayma, değerlendirme; Mutabakat deal'leri); isteğe bağlı sütunlar (Columns'ta açılır, hatırlanır), sunucudan tarih aralığı yükleme, sayfa boyutu hatırlanır, fiyatlar sembol basamağına yuvarlı, yoğunluk sütun sayısına göre |
 | 2026-10-09 | FIX | ✅ | #200 | İşlem oturumu ham FIX çerçeveleri `fix-store/fixlog/<gün>.jsonl`; konsolda LP emri detayında "FIX mesajları" + kopyala (hazineci LP yazışması için; konsoldan hiçbir şey gönderilmez) |
 
