@@ -36,6 +36,9 @@ pub struct EngineConfig {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
 struct State {
+    /// High-impact calendar events (ns, sorted) for the rules' news window.
+    #[serde(default)]
+    news_times: Vec<u64>,
     config: EngineConfig,
     symbols: BTreeMap<String, SymbolSpec>,
     groups: BTreeMap<String, GroupConfig>,
@@ -414,21 +417,49 @@ impl Engine {
     }
 
     /// First enabled rule matching an order of `account` (in `group`) on `symbol`.
-    pub fn match_rule(
-        &self,
-        group: &str,
-        account: AccountNo,
-        symbol: &str,
-        volume: Qty,
-        pending: bool,
-    ) -> Option<&RoutingRule> {
+    pub fn match_rule(&self, group: &str, req: &NewOrder, pending: bool) -> Option<&RoutingRule> {
+        let account = req.account;
+        let symbol = req.symbol.as_str();
         let hour = ((self.st.now / 1_000_000_000) % 86_400 / 3_600) as u8;
-        let centilots = volume.raw() / 1_000_000;
-        let tox = self.toxicity(account);
-        self.st
-            .rules
+        let nop: i64 = self
+            .st
+            .positions
+            .values()
+            .filter(|p| p.account == account && p.symbol == symbol)
+            .map(|p| p.side.sign() * p.volume.raw())
+            .sum();
+        // the account's opening fills of the last 24 h (deals are in time order)
+        let since = self.st.now.saturating_sub(24 * 3_600_000_000_000);
+        let recent: Vec<(u64, i64)> = self
+            .st
+            .deals
             .iter()
-            .find(|r| r.matches(group, account, symbol, centilots, pending, hour, tox))
+            .rev()
+            .take_while(|d| d.ts >= since)
+            .filter(|d| d.account == account && d.entry == DealEntry::In)
+            .map(|d| (d.ts, d.volume.raw() / 1_000_000))
+            .collect();
+        let ctx = risk::RuleCtx {
+            group,
+            account,
+            symbol,
+            centilots: req.volume.raw() / 1_000_000,
+            pending,
+            hour_utc: hour,
+            toxicity: self.toxicity(account),
+            nop_centilots: nop.abs() / 1_000_000,
+            recent_opens: &recent,
+            scalper: self
+                .st
+                .flow
+                .get(&account)
+                .is_some_and(FlowStats::is_scalper),
+            platform: req.platform,
+            ip: req.ip.as_deref(),
+            news_times: &self.st.news_times,
+            now_ns: self.st.now,
+        };
+        self.st.rules.iter().find(|r| r.matches(&ctx))
     }
 
     fn client_quote(&self, g: &GroupConfig, symbol: &str) -> Result<Quote, RiskError> {
@@ -553,6 +584,12 @@ impl Engine {
             }
             Command::SetCalendar(c) => {
                 self.st.calendar = c.clone();
+            }
+            Command::SetNewsTimes(t) => {
+                let mut t = t.clone();
+                t.sort_unstable();
+                t.dedup();
+                self.st.news_times = t;
             }
             Command::SetHedge(policy) => {
                 self.st.hedge = policy.clone();
@@ -920,9 +957,7 @@ impl Engine {
         self.st.client_ids.insert(key, id);
         // First matching routing rule decides the book and may override group levers.
         let pending = req.order_type != OrderType::Market;
-        let rule = self
-            .match_rule(&acc.group, req.account, &req.symbol, req.volume, pending)
-            .cloned();
+        let rule = self.match_rule(&acc.group, &req, pending).cloned();
         let mut routing = rule
             .as_ref()
             .map_or(g.routing, |r| r.book_for(id, g.routing));
@@ -3002,7 +3037,8 @@ impl Engine {
     /// or at the LP takes the unfilled part back off through the hook).
     fn copy_open(&mut self, follower: AccountNo, src: CopySrc, symbol: &str, side: Side, v: Qty) {
         let clid = self.copy_order_id(src);
-        let o = NewOrder::market(follower, &clid, symbol, side, v);
+        let mut o = NewOrder::market(follower, &clid, symbol, side, v);
+        o.platform = risk::Platform::Copy;
         self.st.pending_copy = Some(src);
         let r = self.place_order(o, None, OrderOrigin::Copy);
         self.st.pending_copy = None;
@@ -3029,13 +3065,14 @@ impl Engine {
             let take = free.min(v);
             v -= take;
             let clid = self.copy_order_id(src);
-            let o = NewOrder::market(
+            let mut o = NewOrder::market(
                 follower,
                 &clid,
                 &symbol,
                 side.opposite(),
                 Qty::from_raw(take),
             );
+            o.platform = risk::Platform::Copy;
             self.st.pending_copy = Some(src);
             let r = self.place_order(o, Some(pid), OrderOrigin::Copy);
             self.st.pending_copy = None;

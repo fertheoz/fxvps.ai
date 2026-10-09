@@ -2075,6 +2075,18 @@ async fn save_rules(
         if r.min_toxicity.is_some_and(|t| t > 100) || r.max_toxicity.is_some_and(|t| t > 100) {
             return Err(ApiError::bad("toxicity must be 0..100"));
         }
+        if r.ip_prefixes.len() > 50 || r.ip_prefixes.iter().any(|p| p.is_empty() || p.len() > 43) {
+            return Err(ApiError::bad(
+                "ipPrefixes: at most 50 entries, 1-43 characters",
+            ));
+        }
+        if r.window_minutes.is_some_and(|w| w == 0 || w > 1440)
+            || r.news_window_min.is_some_and(|w| w == 0 || w > 1440)
+        {
+            return Err(ApiError::bad(
+                "windowMinutes / newsWindowMin must be 1..1440",
+            ));
+        }
     }
     let n = rules.len();
     let mut store = ctx.store.lock().await;

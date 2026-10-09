@@ -3,14 +3,25 @@ import type { AdminApi, Actor, ApprovalRequest, RoutingRule } from "./types";
 /** Error returned by the admin API: `{ error: { code, message, permission? } }`. */
 
 /** Wire form of a routing rule: lots travel as centi-lots. */
-type WireRule = Omit<RoutingRule, "minLots" | "maxLots"> & { minCentilots: number | null; maxCentilots: number | null };
+type WireRule = Omit<RoutingRule, "minLots" | "maxLots" | "minNopLots" | "maxNopLots" | "minWindowLots"> & {
+  minCentilots: number | null; maxCentilots: number | null;
+  minNopCentilots: number | null; maxNopCentilots: number | null; minWindowCentilots: number | null;
+};
+const cl = (lots: number | null | undefined) => (lots === null || lots === undefined ? null : Math.round(lots * 100));
+const lots = (c: number | null | undefined) => (c === null || c === undefined ? null : c / 100);
 const toWireRule = (r: RoutingRule): WireRule => {
   const { minLots, maxLots, ...rest } = r;
-  return { ...rest, minCentilots: minLots === null ? null : Math.round(minLots * 100), maxCentilots: maxLots === null ? null : Math.round(maxLots * 100) };
+  const { minNopLots, maxNopLots, minWindowLots, ...r2 } = rest as typeof rest & { minNopLots?: number | null; maxNopLots?: number | null; minWindowLots?: number | null };
+  return { ...r2, minCentilots: cl(minLots), maxCentilots: cl(maxLots), minNopCentilots: cl(minNopLots), maxNopCentilots: cl(maxNopLots), minWindowCentilots: cl(minWindowLots) };
 };
 const fromWireRule = (w: WireRule): RoutingRule => {
   const { minCentilots, maxCentilots, ...rest } = w;
-  return { ...rest, minLots: minCentilots === null ? null : minCentilots / 100, maxLots: maxCentilots === null ? null : maxCentilots / 100 };
+  const { minNopCentilots, maxNopCentilots, minWindowCentilots, ...r2 } = rest;
+  return {
+    ...r2,
+    platforms: r2.platforms ?? [], ipPrefixes: r2.ipPrefixes ?? [], windowMinutes: r2.windowMinutes ?? null, scalper: r2.scalper ?? null, newsWindowMin: r2.newsWindowMin ?? null,
+    minLots: lots(minCentilots), maxLots: lots(maxCentilots), minNopLots: lots(minNopCentilots), maxNopLots: lots(maxNopCentilots), minWindowLots: lots(minWindowCentilots),
+  };
 };
 
 export class ApiError extends Error {

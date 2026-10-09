@@ -167,6 +167,9 @@ pub struct NewOrder {
     pub expire_at_ns: Option<u64>,
     /// Market orders: client slippage tolerance in points.
     pub max_deviation_points: Option<u32>,
+    /// Source and client IP (rule conditions).
+    pub platform: core_engine::api::Platform,
+    pub ip: Option<String>,
 }
 
 impl NewOrder {
@@ -194,6 +197,8 @@ impl NewOrder {
             oco_group: None,
             expire_at_ns: None,
             max_deviation_points: None,
+            platform: core_engine::api::Platform::Unknown,
+            ip: None,
         }
     }
 }
@@ -714,6 +719,8 @@ impl Hub {
                 oco_group: o.oco_group,
                 expire_at_ns: o.expire_at_ns,
                 max_deviation_points: o.max_deviation_points,
+                platform: o.platform,
+                ip: o.ip,
             })
             .await?;
         Ok(ack.order_id)
