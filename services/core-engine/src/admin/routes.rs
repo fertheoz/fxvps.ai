@@ -2204,6 +2204,7 @@ async fn alert_settings_put(
         || a.lp_slow_ms > 60_000
         || !(1..=168).contains(&a.behavior.window_h)
         || a.behavior.scalper_pct > 100
+        || a.behavior.herd_window_s > 3600
     {
         return Err(ApiError::bad("invalid thresholds"));
     }
@@ -3684,9 +3685,15 @@ async fn activity_accounts(
             super::activity::account_activity(e, &st, &events, now_ns, &th, &resolve)
         })
         .await?;
+    let herd_window = u64::from(th_herd_window(&ctx).await) * 1_000_000_000;
+    let herd = ctx.q(move |e| e.herd_signals(herd_window)).await?;
     Ok(Json(
-        json!({ "windowH": window_h, "accounts": accounts, "ips": ips }),
+        json!({ "windowH": window_h, "accounts": accounts, "ips": ips, "herd": herd }),
     ))
+}
+
+async fn th_herd_window(ctx: &AdminCtx) -> u32 {
+    ctx.view_state().await.alerts.behavior.herd_window_s.max(1)
 }
 
 /// Raw connection / auth events, newest first; filter by `login` or `ip`.

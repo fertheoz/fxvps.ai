@@ -243,6 +243,31 @@ pub fn engine_conditions(
             }
         }
     }
+    // herd: many accounts, same symbol and side, within seconds (parça 11)
+    let th = &cfg.behavior;
+    if th.herd_accounts > 0 {
+        for s in e.herd_signals(u64::from(th.herd_window_s.max(1)) * 1_000_000_000) {
+            if s.accounts >= th.herd_accounts {
+                let side = if s.side == oms::Side::Buy {
+                    "buy"
+                } else {
+                    "sell"
+                };
+                out.push(Condition {
+                    kind: "herd",
+                    target: format!("{}/{side}", s.symbol),
+                    severity: Severity::Warning,
+                    title: format!("Herd: {} accounts {side} {}", s.accounts, s.symbol),
+                    detail: format!(
+                        "{} lots from {} accounts within {} s",
+                        s.lots.raw() as f64 / 1e8,
+                        s.accounts,
+                        th.herd_window_s
+                    ),
+                });
+            }
+        }
+    }
     // accounts in stop-out
     if let Value::Array(rows) = views::margin_calls(e, admin) {
         let so = rows.iter().filter(|r| r["state"] == "stop_out").count();

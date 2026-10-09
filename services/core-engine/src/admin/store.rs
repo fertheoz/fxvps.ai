@@ -158,6 +158,9 @@ pub struct BehaviorThresholds {
     pub auth_fails: u32,
     /// Distinct IPs in the window.
     pub ip_count: u32,
+    /// Herd: distinct accounts sending the same symbol and side within `herd_window_s`.
+    pub herd_accounts: u32,
+    pub herd_window_s: u32,
 }
 
 impl Default for BehaviorThresholds {
@@ -171,6 +174,8 @@ impl Default for BehaviorThresholds {
             churn_connects: 30,
             auth_fails: 10,
             ip_count: 5,
+            herd_accounts: 5,
+            herd_window_s: 60,
         }
     }
 }

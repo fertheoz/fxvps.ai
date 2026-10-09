@@ -100,6 +100,9 @@ pub struct RuleCtx<'a> {
     pub ip: Option<&'a str>,
     /// High-impact calendar events (ns), sorted.
     pub news_times: &'a [u64],
+    /// Other accounts' client orders on the same symbol and side in the
+    /// last 10 minutes: (ns, account). Herd detection.
+    pub same_side: &'a [(u64, u64)],
     pub now_ns: u64,
     /// Raw LP spread in points, if quoted.
     pub spread_points: Option<i64>,
@@ -203,6 +206,12 @@ pub struct RoutingRule {
     /// Volatility: the raw LP spread is at least this many points.
     #[serde(default)]
     pub min_spread_points: Option<i64>,
+    /// Herd: at least this many distinct accounts (this one included) sent
+    /// the same symbol and side within `herd_window_s` (default 60 s).
+    #[serde(default)]
+    pub herd_accounts: Option<u32>,
+    #[serde(default)]
+    pub herd_window_s: Option<u32>,
 }
 
 impl RoutingRule {
@@ -293,6 +302,22 @@ impl RoutingRule {
         }
         if let Some(min) = self.min_spread_points {
             if c.spread_points.is_none_or(|s| s < min) {
+                return false;
+            }
+        }
+        if let Some(min) = self.herd_accounts {
+            let w = u64::from(self.herd_window_s.unwrap_or(60)) * 1_000_000_000;
+            let from = c.now_ns.saturating_sub(w);
+            let mut accounts: Vec<u64> = c
+                .same_side
+                .iter()
+                .filter(|(ts, _)| *ts >= from)
+                .map(|(_, a)| *a)
+                .collect();
+            accounts.push(c.account);
+            accounts.sort_unstable();
+            accounts.dedup();
+            if (accounts.len() as u32) < min {
                 return false;
             }
         }

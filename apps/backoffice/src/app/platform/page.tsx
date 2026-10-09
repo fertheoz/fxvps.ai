@@ -224,6 +224,12 @@ export default function PlatformPage() {
           <CardHeader><CardTitle>{t("platform.alertsTitle")}</CardTitle></CardHeader>
           <CardContent>
             <p className="mb-2 text-xs text-muted-foreground">{t("platform.alertsHint")}</p>
+            {(act.data?.herd ?? []).length > 0 && (
+              <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs" data-testid="herd-signals">
+                <span className="font-medium">{t("platform.herd")}:</span>
+                {(act.data?.herd ?? []).map((h) => <Badge key={`${h.symbol}-${h.side}`} tone={h.accounts >= 5 ? "danger" : "warning"}>{h.symbol} {h.side === "Buy" ? "BUY" : "SELL"} · {h.accounts} {t("platform.accounts").toLowerCase()} · {f.num(h.lots)} lot</Badge>)}
+              </div>
+            )}
             <DataTable data={actRows} columns={actCols} getRowId={(a) => String(a.login)} renderDetail={(a) => <AccountDetail row={a} hours={hours} />} storageKey="platform-alerts" testId="platform-alerts" />
           </CardContent>
         </Card>

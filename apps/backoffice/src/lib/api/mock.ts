@@ -7,8 +7,8 @@ import { RULE_METRICS } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
-  { id: "vip-a", name: "VIP → A-book", enabled: true, groups: ["pro/ecn"], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: "ABook", aBookPct: null, markupPoints: 2, maxSlippagePoints: null, partialFill: null, minToxicity: null, maxToxicity: null, platforms: [], ipPrefixes: [], minNopLots: null, maxNopLots: null, windowMinutes: null, minWindowLots: null, scalper: null, newsWindowMin: null, minutesUtc: null, weekdays: [], minSpreadPoints: null },
-  { id: "big-split", name: "Large tickets 70/30", enabled: true, groups: [], accounts: [], symbols: [], minLots: 5, maxLots: null, kind: "market", hoursUtc: null, routing: null, aBookPct: 70, markupPoints: null, maxSlippagePoints: 10, partialFill: null, minToxicity: null, maxToxicity: null, platforms: [], ipPrefixes: [], minNopLots: null, maxNopLots: null, windowMinutes: null, minWindowLots: null, scalper: null, newsWindowMin: null, minutesUtc: null, weekdays: [], minSpreadPoints: null },
+  { id: "vip-a", name: "VIP → A-book", enabled: true, groups: ["pro/ecn"], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: "ABook", aBookPct: null, markupPoints: 2, maxSlippagePoints: null, partialFill: null, minToxicity: null, maxToxicity: null, platforms: [], ipPrefixes: [], minNopLots: null, maxNopLots: null, windowMinutes: null, minWindowLots: null, scalper: null, newsWindowMin: null, minutesUtc: null, weekdays: [], minSpreadPoints: null, herdAccounts: null, herdWindowS: null },
+  { id: "big-split", name: "Large tickets 70/30", enabled: true, groups: [], accounts: [], symbols: [], minLots: 5, maxLots: null, kind: "market", hoursUtc: null, routing: null, aBookPct: 70, markupPoints: null, maxSlippagePoints: 10, partialFill: null, minToxicity: null, maxToxicity: null, platforms: [], ipPrefixes: [], minNopLots: null, maxNopLots: null, windowMinutes: null, minWindowLots: null, scalper: null, newsWindowMin: null, minutesUtc: null, weekdays: [], minSpreadPoints: null, herdAccounts: null, herdWindowS: null },
 ];
 
 export class ForbiddenError extends Error {
@@ -526,7 +526,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
         { login: s.clients[1]?.login ?? 1002, name: s.clients[1]?.name ?? "", group: s.clients[1]?.group ?? "demo-retail", platforms: ["terminal"], ips: ["31.1.1.1"], orders: 12, cancels: 1, maxPerMin: 3, closes: 8, medianHoldS: 3600, scalpPct: 0, connects: 2, disconnects: 1, authFails: 12, flags: ["brute_force"], score: 25 },
         { login: s.clients[2]?.login ?? 1003, name: s.clients[2]?.name ?? "", group: s.clients[2]?.group ?? "demo-retail", platforms: ["api"], ips: ["10.0.0.4"], orders: 5, cancels: 0, maxPerMin: 2, closes: 4, medianHoldS: 14400, scalpPct: 0, connects: 1, disconnects: 0, authFails: 0, flags: [], score: 0 },
       ];
-      return delay({ windowH: hours, accounts: rows, ips: [{ ip: "31.1.1.1", authFails: 12, keyFails: 0, connRejects: 0, accounts: [s.clients[1]?.login ?? 1002], flags: ["brute_force"] }, { ip: "203.0.113.7", authFails: 0, keyFails: 6, connRejects: 40, accounts: [], flags: ["flood"] }] });
+      return delay({ windowH: hours, herd: [{ symbol: "XAUUSD", side: "Buy", accounts: 6, lots: 4.2, firstTs: Date.now() * 1e6 - 40e9, lastTs: Date.now() * 1e6 - 2e9 }], accounts: rows, ips: [{ ip: "31.1.1.1", authFails: 12, keyFails: 0, connRejects: 0, accounts: [s.clients[1]?.login ?? 1002], flags: ["brute_force"] }, { ip: "203.0.113.7", authFails: 0, keyFails: 6, connRejects: 40, accounts: [], flags: ["flood"] }] });
     },
     async activityEvents(q) {
       const now = Date.now();
