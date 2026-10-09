@@ -221,6 +221,17 @@ export const Trade = z.object({
   swap: MinorAmount,
   book: Book,
   closedAt: z.string(),
+  /** Optional columns (hidden by default). */
+  positionId: z.string().optional(),
+  orderId: z.string().optional(),
+  openAt: z.string().nullable().optional(),
+  holdSecs: z.number().nullable().optional(),
+  reason: z.string().optional(),
+  lpOpenPrice: z.number().nullable().optional(),
+  platform: z.string().nullable().optional(),
+  origin: z.string().nullable().optional(),
+  rule: z.string().nullable().optional(),
+  commissionOpen: MinorAmount.optional(),
 });
 export type Trade = z.infer<typeof Trade>;
 

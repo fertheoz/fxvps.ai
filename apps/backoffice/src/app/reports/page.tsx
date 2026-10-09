@@ -36,14 +36,17 @@ export default function ReportsPage() {
   const f = useFormat();
   const actor = useActor();
   const [tab, setTab] = React.useState<Tab>("trades");
-  const trades = useApiQuery("listTrades");
+  const [range, setRange] = React.useState<{ from: string; to: string }>({ from: "", to: "" });
+  const ranged = !!(range.from || range.to);
+  const rangeArgs: [string | undefined, string | undefined] = [range.from || undefined, range.to || undefined];
+  // Live refresh only on the default (newest rows) view; a chosen range is a one-off load.
+  const trades = useApiQuery("listTrades", rangeArgs);
   const statements = useApiQuery("statements");
-  const lp = useApiQuery("listLpExecutions", [], { live: 5000 });
+  const lp = useApiQuery("listLpExecutions", rangeArgs, { live: ranged ? undefined : 5000 });
   const revenue = useApiQuery("revenue", [], { live: 5000 });
-  const recon = useApiQuery("reconciliation", [], { live: 5000, enabled: tab === "reconciliation" });
+  const recon = useApiQuery("reconciliation", rangeArgs, { live: ranged ? undefined : 5000, enabled: tab === "reconciliation" });
   const execution = useApiQuery("execution", [], { live: 5000 });
   const flow = useApiQuery("clientFlow", [], { live: 10000, enabled: tab === "flow" });
-  const [range, setRange] = React.useState<{ from: string; to: string }>({ from: "", to: "" });
   const tx = useApiQuery("transactions", [range.from || undefined, range.to || undefined], { enabled: tab === "transactions" });
   const bx = useApiQuery("bestExecution", [range.from || undefined, range.to || undefined], { enabled: tab === "bestexec" });
   const ib = useApiQuery("ibReport", [range.from || undefined, range.to || undefined], { enabled: tab === "ib" });
@@ -97,6 +100,21 @@ export default function ReportsPage() {
     lc.display({ id: "clients", header: t("reports.clients"), cell: (c) => c.row.original.clients.map((x) => `${x.login} · ${x.lots}`).join(", ") }),
     lc.accessor("status", { header: t("reports.status"), cell: (c) => <span className={c.getValue() === "rejected" ? "text-red-600 dark:text-red-400" : undefined} title={c.row.original.reason ?? undefined}>{c.getValue()}</span> }),
     lc.display({ id: "execId", header: t("reports.execId"), cell: (c) => <span className="font-mono text-xs">{c.row.original.fills.map((x) => x.execId).join(", ")}</span> }),
+    lc.accessor("clOrdId", { header: t("reports.clOrdId"), cell: (c) => <span className="font-mono text-xs">{c.getValue() ?? "—"}</span>, meta: { defaultHidden: true } }),
+    lc.accessor("kind", { header: t("reports.kind"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    lc.accessor("attempt", { header: t("reports.attempts"), cell: (c) => (c.getValue() === undefined ? "—" : `${c.getValue()} / ${c.row.original.attempts ?? 1}`), meta: { defaultHidden: true } }),
+    lc.accessor("firstFillMs", { header: t("reports.lpLatency"), cell: (c) => ms(c.getValue()), meta: { defaultHidden: true } }),
+    lc.accessor("lastFillMs", { header: t("reports.lastFill"), cell: (c) => ms(c.getValue()), meta: { defaultHidden: true } }),
+    lc.accessor("lpSlipPts", { header: t("reports.lpSlip"), cell: (c) => <span className={`tabular-nums ${slipTone(c.getValue() ?? null) ?? ""}`}>{pts(c.getValue())}</span>, meta: { defaultHidden: true } }),
+    lc.accessor("sentBid", { header: t("reports.sentBid"), cell: (c) => <span className="tabular-nums">{c.getValue() ?? "—"}</span>, meta: { defaultHidden: true } }),
+    lc.accessor("sentAsk", { header: t("reports.sentAsk"), cell: (c) => <span className="tabular-nums">{c.getValue() ?? "—"}</span>, meta: { defaultHidden: true } }),
+    lc.accessor("limit", { header: t("detail.limit"), cell: (c) => <span className="tabular-nums">{c.getValue() ?? "—"}</span>, meta: { defaultHidden: true } }),
+    lc.accessor("stop", { header: t("detail.stop"), cell: (c) => <span className="tabular-nums">{c.getValue() ?? "—"}</span>, meta: { defaultHidden: true } }),
+    lc.accessor("revision", { header: t("reports.revision"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    lc.accessor("fillCount", { header: t("reports.lpFills"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    lc.accessor("login", { header: t("clients.login"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    lc.accessor("orderIds", { header: t("reports.orderId"), cell: (c) => <span className="font-mono text-xs">{c.getValue() || "—"}</span>, meta: { defaultHidden: true } }),
+    lc.accessor("reason", { header: t("detail.reason"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
   ];
   const leg = (k: "client" | "broker" | "lp", label: "reports.clientLeg" | "reports.brokerLeg" | "reports.lpLeg") =>
     rc.accessor(k, { header: t(label), cell: (c) => <Pnl value={c.getValue()}>{f.money(c.getValue())}</Pnl> });
@@ -119,6 +137,20 @@ export default function ReportsPage() {
     gain("markup"), gain("commission"), gain("swapFee"), gain("broker"),
     mc.accessor("ok", { header: t("reports.recon.ok"), cell: (c) => <Badge tone={c.getValue() ? "success" : "danger"}>{c.getValue() ? "✓" : "✗"}</Badge> }),
     mc.accessor("reason", { header: t("reports.recon.reason"), cell: (c) => <span className="text-xs text-muted-foreground">{c.getValue()}</span> }),
+    mc.accessor("openAt", { header: t("reports.openAt"), cell: (c) => (c.getValue() ? f.date(c.getValue()!) : "—"), meta: { defaultHidden: true } }),
+    mc.accessor("holdSecs", { header: t("reports.hold"), cell: (c) => hold(c.getValue()), meta: { defaultHidden: true } }),
+    mc.accessor("position", { header: t("reports.positionId"), cell: (c) => <span className="font-mono text-xs">{c.getValue()}</span>, meta: { defaultHidden: true } }),
+    mc.accessor("orderId", { header: t("reports.orderId"), cell: (c) => <span className="font-mono text-xs">{c.getValue() ?? "—"}</span>, meta: { defaultHidden: true } }),
+    mc.accessor("platform", { header: t("reports.platform"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    mc.accessor("origin", { header: t("reports.origin"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    mc.accessor("rule", { header: t("rules.title"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    mc.accessor("clientSlipPts", { header: t("reports.clientSlip"), cell: (c) => <span className={`tabular-nums ${slipTone(c.getValue() ?? null) ?? ""}`}>{pts(c.getValue())}</span>, meta: { defaultHidden: true } }),
+    mc.accessor("lpSlipPts", { header: t("reports.lpSlip"), cell: (c) => <span className={`tabular-nums ${slipTone(c.getValue() ?? null) ?? ""}`}>{pts(c.getValue())}</span>, meta: { defaultHidden: true } }),
+    mc.accessor("attempts", { header: t("reports.attempts"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    mc.accessor("latencyMs", { header: t("reports.lpLatency"), cell: (c) => ms(c.getValue()), meta: { defaultHidden: true } }),
+    mc.accessor("lpKind", { header: t("detail.kind"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    mc.accessor("lpOrderIds", { header: t("reports.clOrdId"), cell: (c) => <span className="font-mono text-xs">{c.getValue() || "—"}</span>, meta: { defaultHidden: true } }),
+    mc.accessor("swap", { header: t("reports.swap"), cell: (c) => (c.getValue() === undefined ? "—" : f.money(c.getValue()!)), meta: { defaultHidden: true } }),
   ];
   const reconTotals = React.useMemo(() => {
     const rows = recon.data ?? [];
@@ -217,6 +249,15 @@ export default function ReportsPage() {
     tc.accessor("commission", { header: t("reports.commission"), cell: (c) => f.money(c.getValue()) }),
     tc.accessor("swap", { header: t("reports.swap"), cell: (c) => f.money(c.getValue()) }),
     tc.accessor("book", { header: t("groups.book"), cell: (c) => <BookBadge book={c.getValue()} /> }),
+    tc.accessor("openAt", { header: t("reports.openAt"), cell: (c) => (c.getValue() ? f.date(c.getValue()!) : "—"), meta: { defaultHidden: true } }),
+    tc.accessor("holdSecs", { header: t("reports.hold"), cell: (c) => hold(c.getValue()), meta: { defaultHidden: true } }),
+    tc.accessor("reason", { header: t("reports.recon.reason"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    tc.accessor("origin", { header: t("reports.origin"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    tc.accessor("platform", { header: t("reports.platform"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    tc.accessor("rule", { header: t("rules.title"), cell: (c) => c.getValue() ?? "—", meta: { defaultHidden: true } }),
+    tc.accessor("commissionOpen", { header: t("reports.commissionOpen"), cell: (c) => (c.getValue() === undefined ? "—" : f.money(c.getValue()!)), meta: { defaultHidden: true } }),
+    tc.accessor("positionId", { header: t("reports.positionId"), cell: (c) => <span className="font-mono text-xs">{c.getValue() ?? "—"}</span>, meta: { defaultHidden: true } }),
+    tc.accessor("orderId", { header: t("reports.orderId"), cell: (c) => <span className="font-mono text-xs">{c.getValue() ?? "—"}</span>, meta: { defaultHidden: true } }),
   ];
   const m = (k: keyof Statement) => sc.accessor(k, { header: t(`reports.${k}` as "reports.opening"), cell: (c) => <span className="tabular-nums">{f.money(c.getValue() as number, c.row.original.currency)}</span> });
   const stmtCols = [
@@ -263,9 +304,7 @@ export default function ReportsPage() {
       <div className="mb-3">
         <Tabs value={tab} onChange={setTab} items={[{ value: "trades", label: t("reports.trades") }, { value: "statements", label: t("reports.statements") }, { value: "lp", label: t("reports.lp") }, { value: "execution", label: t("reports.execution") }, { value: "revenue", label: t("reports.revenue") }, { value: "flow", label: t("reports.flow") }, { value: "transactions", label: t("reports.transactions") }, { value: "bestexec", label: t("reports.bestExec") }, { value: "ib", label: t("reports.ib") }, { value: "reconciliation", label: t("reports.recon") }]} />
       </div>
-      {tab === "trades" && <DataTable data={trades.data ?? []} columns={tradeCols} getRowId={(x) => x.id} />}
       {tab === "statements" && <DataTable data={statements.data ?? []} columns={stmtCols} getRowId={(x) => String(x.login)} />}
-      {tab === "lp" && <DataTable data={lp.data ?? []} columns={lpCols} getRowId={(x) => x.id} renderDetail={(x) => <LpExecutionDetail row={x} />} />}
       {tab === "execution" && (
         <div data-testid="execution-report">
           <p className="mb-2 text-xs text-muted-foreground">{t("reports.slipHint")}</p>
@@ -280,11 +319,33 @@ export default function ReportsPage() {
           <DataTable data={ib.data?.rows ?? []} columns={ibCols} getRowId={(x) => String(x.ib)} />
         </div>
       )}
-      {(tab === "transactions" || tab === "bestexec" || tab === "ib") && (
+      {(tab === "transactions" || tab === "bestexec" || tab === "ib" || tab === "trades" || tab === "lp" || tab === "reconciliation") && (
         <div className="mb-3 flex flex-wrap items-end gap-2 text-sm">
+          {(tab === "trades" || tab === "lp" || tab === "reconciliation") && (
+            <span className="text-xs text-muted-foreground">
+              {t("reports.rangeHint")}
+              {(tab === "trades" ? trades : tab === "lp" ? lp : recon).isFetching && <span className="ml-2 text-primary">{t("common.loadingRange")}</span>}
+            </span>
+          )}
           <label className="grid gap-1 text-xs text-muted-foreground">{t("reports.range")}
             <span className="flex gap-1"><input type="date" className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /><input type="date" className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} /></span>
           </label>
+        </div>
+      )}
+      {tab === "trades" && <DataTable data={trades.data ?? []} columns={tradeCols} getRowId={(x) => x.id} storageKey="reports-trades" />}
+      {tab === "lp" && <DataTable data={lp.data ?? []} columns={lpCols} getRowId={(x) => x.id} renderDetail={(x) => <LpExecutionDetail row={x} />} storageKey="reports-lp" />}
+      {tab === "reconciliation" && (
+        <div data-testid="reconciliation-report">
+          <p className="mb-2 text-xs text-muted-foreground">{t("reports.recon.hint")}</p>
+          <div className="mb-3 grid grid-cols-2 gap-3 xl:grid-cols-6">
+            <Stat label={t("reports.recon.clientPnl")} value={<Pnl value={reconTotals.clientPnl}>{f.money(reconTotals.clientPnl)}</Pnl>} sub={`${reconTotals.n} ${t("reports.recon.deals")}`} />
+            <Stat label={t("reports.recon.lpPnl")} value={<Pnl value={reconTotals.lpPnl}>{f.money(reconTotals.lpPnl)}</Pnl>} sub="A-book" />
+            <Stat label={t("reports.recon.markup")} value={<Pnl value={reconTotals.markup}>{f.money(reconTotals.markup)}</Pnl>} sub={t("reports.brokerLeg")} />
+            <Stat label={t("reports.recon.commission")} value={<Pnl value={reconTotals.commission}>{f.money(reconTotals.commission)}</Pnl>} sub={t("reports.brokerLeg")} />
+            <Stat label={t("reports.recon.broker")} value={<Pnl value={reconTotals.broker}>{f.money(reconTotals.broker)}</Pnl>} sub={t("reports.recon.expected")} />
+            <Stat label={t("reports.recon.ok")} value={<Badge tone={reconTotals.bad === 0 ? "success" : "danger"}>{reconTotals.bad === 0 ? t("reports.recon.allOk") : `${reconTotals.bad} ✗`}</Badge>} sub={t("reports.recon.invariant")} />
+          </div>
+          <DataTable data={recon.data ?? []} columns={reconCols} getRowId={(x) => x.id} renderDetail={(x) => <ReconciliationDetail row={x} />} storageKey="reports-reconciliation" />
         </div>
       )}
       {tab === "transactions" && (
@@ -303,20 +364,6 @@ export default function ReportsPage() {
         <div data-testid="flow-report">
           <p className="mb-2 text-xs text-muted-foreground">{t("reports.flowHint")}</p>
           <DataTable data={flow.data ?? []} columns={flowCols} getRowId={(x) => String(x.login)} />
-        </div>
-      )}
-      {tab === "reconciliation" && (
-        <div data-testid="reconciliation-report">
-          <p className="mb-2 text-xs text-muted-foreground">{t("reports.recon.hint")}</p>
-          <div className="mb-3 grid grid-cols-2 gap-3 xl:grid-cols-6">
-            <Stat label={t("reports.recon.clientPnl")} value={<Pnl value={reconTotals.clientPnl}>{f.money(reconTotals.clientPnl)}</Pnl>} sub={`${reconTotals.n} ${t("reports.recon.deals")}`} />
-            <Stat label={t("reports.recon.lpPnl")} value={<Pnl value={reconTotals.lpPnl}>{f.money(reconTotals.lpPnl)}</Pnl>} sub="A-book" />
-            <Stat label={t("reports.recon.markup")} value={<Pnl value={reconTotals.markup}>{f.money(reconTotals.markup)}</Pnl>} sub={t("reports.brokerLeg")} />
-            <Stat label={t("reports.recon.commission")} value={<Pnl value={reconTotals.commission}>{f.money(reconTotals.commission)}</Pnl>} sub={t("reports.brokerLeg")} />
-            <Stat label={t("reports.recon.broker")} value={<Pnl value={reconTotals.broker}>{f.money(reconTotals.broker)}</Pnl>} sub={t("reports.recon.expected")} />
-            <Stat label={t("reports.recon.ok")} value={<Badge tone={reconTotals.bad === 0 ? "success" : "danger"}>{reconTotals.bad === 0 ? t("reports.recon.allOk") : `${reconTotals.bad} ✗`}</Badge>} sub={t("reports.recon.invariant")} />
-          </div>
-          <DataTable data={recon.data ?? []} columns={reconCols} getRowId={(x) => x.id} renderDetail={(x) => <ReconciliationDetail row={x} />} />
         </div>
       )}
       {tab === "revenue" && (
@@ -392,6 +439,14 @@ function IbPayButton({ row, to }: { row: IbRow; to: string }) {
 // Row detail panels: everything under the tab's heading, for one row.
 
 const ms = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `${v < 10 ? v.toFixed(1) : Math.round(v)} ms`);
+/** Hold time in seconds → "4d 3h", "2h 05m", "48s". */
+const hold = (s: number | null | undefined) => {
+  if (s === null || s === undefined) return "—";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+};
 const ptsStr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}`);
 const Kv = ({ k, v, tone }: { k: string; v: React.ReactNode; tone?: "good" | "bad" }) => (
   <div className="flex items-baseline justify-between gap-3 border-b border-border/60 py-0.5 text-xs">

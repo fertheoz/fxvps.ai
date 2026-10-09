@@ -3,6 +3,8 @@ import type { AdminApi, Actor, ApprovalRequest, RoutingRule } from "./types";
 /** Error returned by the admin API: `{ error: { code, message, permission? } }`. */
 
 /** Wire form of a routing rule: lots travel as centi-lots. */
+const rangeQs = (from?: string, to?: string) => (from || to ? `?from=${from ?? ""}&to=${to ?? ""}` : "");
+
 type WireRule = Omit<RoutingRule, "minLots" | "maxLots" | "minNopLots" | "maxNopLots" | "minWindowLots"> & {
   minCentilots: number | null; maxCentilots: number | null;
   minNopCentilots: number | null; maxNopCentilots: number | null; minWindowCentilots: number | null;
@@ -186,12 +188,12 @@ export function createHttpApi(baseUrl: string, getToken: () => string | null | P
     getLpAggregation: () => call("GET", "/v1/lp/aggregation"),
     saveLpAggregation: (c, actor) => call("PUT", "/v1/lp/aggregation", c, actor),
     lpReport: () => call("GET", "/v1/reports/lp"),
-    listTrades: () => call("GET", "/v1/reports/trades"),
+    listTrades: (from, to) => call("GET", `/v1/reports/trades${rangeQs(from, to)}`),
     statements: () => call("GET", "/v1/reports/statements"),
-    listLpExecutions: () => call("GET", "/v1/reports/lp-executions"),
+    listLpExecutions: (from, to) => call("GET", `/v1/reports/lp-executions${rangeQs(from, to)}`),
     execution: () => call("GET", "/v1/reports/execution"),
     revenue: () => call("GET", "/v1/reports/revenue"),
-    reconciliation: () => call("GET", "/v1/reports/reconciliation"),
+    reconciliation: (from, to) => call("GET", `/v1/reports/reconciliation${rangeQs(from, to)}`),
     listAudit: () => call("GET", "/v1/audit"),
     listApprovals: (status = "pending_approval") => call<ApprovalRequest[]>("GET", `/v1/approvals?status=${enc(status)}`),
     approve: (id, actor) => call("POST", `/v1/approvals/${enc(id)}/approve`, {}, actor),

@@ -9,6 +9,27 @@ import { Button, Input } from "./primitives";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/hooks";
 
+declare module "@tanstack/react-table" {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  interface ColumnMeta<TData, TValue> {
+    /** Start hidden; the user turns it on in Columns and the choice is remembered. */
+    defaultHidden?: boolean;
+  }
+}
+
+const PAGE_SIZES = [15, 30, 50, 100, 200, 500];
+
+function readPageSize(key: string | undefined, fallback: number): number {
+  if (!key) return fallback;
+  try {
+    const raw = localStorage.getItem(`dt:${key}:pageSize`);
+    const n = raw ? Number(raw) : NaN;
+    return PAGE_SIZES.includes(n) ? n : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 /** Columns holding a timestamp (ISO string) get a from/to filter instead of a text one. */
 const isDateColumn = (id: string) => /(^|[a-z])(at|time|date)$/i.test(id) || /^(at|time|date)$/i.test(id);
 
@@ -33,18 +54,18 @@ const dateRangeFilter: FilterFn<unknown> = (row, id, value: DateRange) => {
 
 const columnId = (c: ColumnDef<unknown, unknown>): string => c.id ?? (c as { accessorKey?: string }).accessorKey ?? "";
 
-function readVisibility(key: string | undefined): VisibilityState {
-  if (!key) return {};
+function readVisibility(key: string | undefined): VisibilityState | null {
+  if (!key) return null;
   try {
     const raw = localStorage.getItem(`dt:${key}:cols`);
-    return raw ? (JSON.parse(raw) as VisibilityState) : {};
+    return raw ? (JSON.parse(raw) as VisibilityState) : null;
   } catch {
-    return {};
+    return null;
   }
 }
 
 export function DataTable<T>({
-  data, columns, onRowClick, pageSize = 15, toolbar, selectable, onSelectionChange, getRowId, searchable = true, testId, renderDetail,
+  data, columns, onRowClick, pageSize = 15, toolbar, selectable, onSelectionChange, getRowId, searchable = true, testId, renderDetail, storageKey,
 }: {
   data: T[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -59,12 +80,25 @@ export function DataTable<T>({
   testId?: string;
   /** Rows expand on click into this panel (full detail of the row under the tab's heading). */
   renderDetail?: (row: T) => React.ReactNode;
+  /** Remembers column visibility and page size under this key (defaults to testId). */
+  storageKey?: string;
 }) {
+  const key = storageKey ?? testId;
   const t = useT();
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [filter, setFilter] = React.useState("");
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(() => readVisibility(testId));
+  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(() => {
+    const saved = readVisibility(key);
+    if (saved) return saved;
+    const hidden: VisibilityState = {};
+    for (const c of columns) {
+      const id = columnId(c as ColumnDef<unknown, unknown>);
+      if (id && c.meta?.defaultHidden) hidden[id] = false;
+    }
+    return hidden;
+  });
+  const [size, setSize] = React.useState<number>(() => readPageSize(key, pageSize));
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   /** Column whose inline filter editor is open (double-click on its header). */
   const [editing, setEditing] = React.useState<string | null>(null);
@@ -72,13 +106,21 @@ export function DataTable<T>({
   const [open, setOpen] = React.useState<Record<string, boolean>>({});
 
   React.useEffect(() => {
-    if (!testId) return;
+    if (!key) return;
     try {
-      localStorage.setItem(`dt:${testId}:cols`, JSON.stringify(columnVisibility));
+      localStorage.setItem(`dt:${key}:cols`, JSON.stringify(columnVisibility));
     } catch {
       /* private mode */
     }
-  }, [columnVisibility, testId]);
+  }, [columnVisibility, key]);
+  React.useEffect(() => {
+    if (!key) return;
+    try {
+      localStorage.setItem(`dt:${key}:pageSize`, String(size));
+    } catch {
+      /* private mode */
+    }
+  }, [size, key]);
 
   const cols = React.useMemo<ColumnDef<T>[]>(() => {
     // Every column gets a filter: a date range on timestamp columns, "contains" elsewhere.
@@ -136,9 +178,13 @@ export function DataTable<T>({
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize } },
+    initialState: { pagination: { pageSize: size } },
     autoResetPageIndex: false,
   });
+  React.useEffect(() => {
+    table.setPageSize(size);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size]);
 
   const headerText = (id: string) => {
     const h = table.getColumn(id)?.columnDef.header;
@@ -312,7 +358,15 @@ export function DataTable<T>({
         </table>
       </div>
       <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>{table.getFilteredRowModel().rows.length} {t("common.rows")}</span>
+        <span className="flex items-center gap-2">
+          {table.getFilteredRowModel().rows.length} {t("common.rows")}
+          <label className="flex items-center gap-1">
+            {t("common.perPage")}
+            <select className="rounded border border-border bg-background px-1 py-0.5 text-xs" value={size} onChange={(e) => setSize(Number(e.target.value))} data-testid="dt-page-size">
+              {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+        </span>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>‹</Button>
           <span>{table.getState().pagination.pageIndex + 1} / {Math.max(1, table.getPageCount())}</span>

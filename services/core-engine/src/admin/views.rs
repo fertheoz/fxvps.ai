@@ -806,21 +806,24 @@ pub fn presets() -> Value {
 /// `client P&L + markup = LP P&L` (the invariant the row's `ok` checks); the
 /// commission of the closed part (its share of the opening deals' commission
 /// plus the closing deal's) and the swap-free fee are the broker's too.
-pub fn reconciliation(e: &Engine) -> Value {
+/// Closing deals in `[from, to)`, newest first, at most `limit`.
+pub fn reconciliation(e: &Engine, from: u64, to: u64, limit: usize) -> Value {
     let deals = e.deals();
     let chain = lp_chain(e);
     let mut rows: Vec<Value> = deals
         .iter()
         .rev()
-        .filter(|d| d.entry == oms::DealEntry::Out)
-        .take(100)
+        .filter(|d| d.entry == oms::DealEntry::Out && d.ts >= from && d.ts < to)
+        .take(limit)
         .map(|d| {
             let (mut vol, mut notional, mut lp_notional, mut in_comm) = (0f64, 0f64, 0f64, 0i128);
             let mut lp_open = true;
+            let mut opened = u64::MAX;
             for i in deals
                 .iter()
                 .filter(|i| i.position_id == d.position_id && i.entry == oms::DealEntry::In)
             {
+                opened = opened.min(i.ts);
                 let v = qty_f(i.volume);
                 vol += v;
                 notional += v * price_f(i.price);
@@ -899,7 +902,27 @@ pub fn reconciliation(e: &Engine) -> Value {
                     c
                 })
                 .collect();
+            // the closing order's own story for the (optional) columns
+            let closing = orders.iter().find(|o| o["orderId"].as_str() == Some(&d.order_id.to_string()));
+            let lp_last = closing.and_then(|o| o["lpOrders"].as_array()).and_then(|v| v.last().cloned());
+            let lp_ids: Vec<String> = closing
+                .and_then(|o| o["lpOrders"].as_array())
+                .map(|v| v.iter().filter_map(|l| l["clOrdId"].as_str().map(String::from)).collect())
+                .unwrap_or_default();
             json!({
+                "openAt": (opened != u64::MAX).then(|| iso(opened)),
+                "holdSecs": (opened != u64::MAX).then(|| d.ts.saturating_sub(opened) / 1_000_000_000),
+                "orderId": d.order_id.to_string(),
+                "platform": closing.map(|o| o["platform"].clone()).unwrap_or(Value::Null),
+                "origin": closing.map(|o| o["origin"].clone()).unwrap_or(Value::Null),
+                "rule": closing.map(|o| o["rule"].clone()).unwrap_or(Value::Null),
+                "clientSlipPts": closing.map(|o| o["clientSlipPts"].clone()).unwrap_or(Value::Null),
+                "attempts": closing.and_then(|o| o["lpOrders"].as_array().map(|v| v.len())).unwrap_or(0),
+                "latencyMs": lp_last.as_ref().map(|l| l["firstFillMs"].clone()).unwrap_or(Value::Null),
+                "lpSlipPts": lp_last.as_ref().map(|l| l["lpSlipPts"].clone()).unwrap_or(Value::Null),
+                "lpKind": lp_last.as_ref().map(|l| l["kind"].clone()).unwrap_or(Value::Null),
+                "lpOrderIds": lp_ids.join(", "),
+                "swap": minor(d.swap),
                 "detail": { "deals": position_deals, "orders": orders },
                 "id": d.id.to_string(),
                 "at": iso(d.ts),
@@ -928,20 +951,25 @@ pub fn reconciliation(e: &Engine) -> Value {
     Value::Array(rows)
 }
 
-pub fn trades(e: &Engine) -> Value {
+/// Closed trades (closing deals) in `[from, to)`, newest first, at most `limit`.
+pub fn trades(e: &Engine, from: u64, to: u64, limit: usize) -> Value {
     let deals = e.deals();
-    let mut rows: Vec<Value> = deals
+    let rows: Vec<Value> = deals
         .iter()
-        .filter(|d| d.entry == oms::DealEntry::Out)
+        .rev()
+        .filter(|d| d.entry == oms::DealEntry::Out && d.ts >= from && d.ts < to)
+        .take(limit)
         .map(|d| {
-            let (mut vol, mut notional) = (0f64, 0f64);
+            let (mut vol, mut notional, mut opened) = (0f64, 0f64, u64::MAX);
             for i in deals
                 .iter()
                 .filter(|i| i.position_id == d.position_id && i.entry == oms::DealEntry::In)
             {
                 vol += qty_f(i.volume);
                 notional += qty_f(i.volume) * price_f(i.price);
+                opened = opened.min(i.ts);
             }
+            let order = e.order(d.order_id);
             let close = price_f(d.price);
             let open = if vol > 0.0 { notional / vol } else { close };
             let routing = e
@@ -963,10 +991,19 @@ pub fn trades(e: &Engine) -> Value {
                 "swap": minor(d.swap),
                 "book": routing,
                 "closedAt": iso(d.ts),
+                "positionId": d.position_id.to_string(),
+                "orderId": d.order_id.to_string(),
+                "openAt": (opened != u64::MAX).then(|| iso(opened)),
+                "holdSecs": (opened != u64::MAX).then(|| d.ts.saturating_sub(opened) / 1_000_000_000),
+                "reason": format!("{:?}", d.reason),
+                "lpOpenPrice": d.lp_price.map(|_| price_f(d.lp_price.unwrap_or(d.price))),
+                "platform": order.map(|o| format!("{:?}", o.req.platform).to_lowercase()),
+                "origin": order.map(|o| format!("{:?}", o.origin)),
+                "rule": order.and_then(|o| o.rule.clone()),
+                "commissionOpen": minor(deals.iter().filter(|i| i.position_id == d.position_id && i.entry == oms::DealEntry::In).map(|i| i.commission.minor).sum::<i128>()),
             })
         })
         .collect();
-    rows.reverse();
     Value::Array(rows)
 }
 
@@ -1287,10 +1324,17 @@ fn lp_chain(e: &Engine) -> BTreeMap<oms::OrderId, Vec<oms::LpOrderId>> {
     m
 }
 
-pub fn lp_executions(e: &Engine) -> Value {
+/// LP orders created in `[from, to)`, newest first, at most `limit`.
+pub fn lp_executions(e: &Engine, from: u64, to: u64, limit: usize) -> Value {
     let chain = lp_chain(e);
-    let mut rows: Vec<Value> = e
+    let mut all: Vec<&oms::LpOrder> = e
         .lp_orders()
+        .filter(|l| l.created_ts >= from && l.created_ts < to)
+        .collect();
+    all.reverse();
+    all.truncate(limit);
+    let rows: Vec<Value> = all
+        .into_iter()
         .map(|l| {
             let (mut lots, mut notional) = (0f64, 0f64);
             for f in &l.fills {
@@ -1344,6 +1388,9 @@ pub fn lp_executions(e: &Engine) -> Value {
                     })
                 })
                 .collect();
+            let detail = lp_order_detail(e, l, attempt);
+            let login = clients.first().and_then(|c| c["login"].as_u64());
+            let order_ids: Vec<String> = l.children.iter().map(|c| c.to_string()).collect();
             json!({
                 "id": l.id.to_string(),
                 "lp": l.lp,
@@ -1357,11 +1404,25 @@ pub fn lp_executions(e: &Engine) -> Value {
                 "createdAt": iso(l.created_ts),
                 "fills": fills,
                 "clients": clients,
-                "detail": lp_order_detail(e, l, attempt),
+                "clOrdId": detail["clOrdId"].clone(),
+                "kind": detail["kind"].clone(),
+                "attempt": detail["attempt"].clone(),
+                "attempts": detail["attempts"].clone(),
+                "firstFillMs": detail["firstFillMs"].clone(),
+                "lastFillMs": detail["lastFillMs"].clone(),
+                "lpSlipPts": detail["lpSlipPts"].clone(),
+                "sentBid": detail["sentBid"].clone(),
+                "sentAsk": detail["sentAsk"].clone(),
+                "limit": detail["limit"].clone(),
+                "stop": detail["stop"].clone(),
+                "revision": l.revision,
+                "login": login,
+                "orderIds": order_ids.join(", "),
+                "fillCount": l.fills.len(),
+                "detail": detail,
             })
         })
         .collect();
-    rows.reverse();
     Value::Array(rows)
 }
 

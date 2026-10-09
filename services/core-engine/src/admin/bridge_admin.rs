@@ -471,7 +471,7 @@ pub async fn partner_overview(State(ctx): State<AdminCtx>, actor: Actor) -> ApiR
                 .flat_map(|id| e.positions_of(*id))
                 .map(|p| super::views::position(e, p))
                 .collect();
-            let deals: Vec<Value> = match super::views::trades(e) {
+            let deals: Vec<Value> = match super::views::trades(e, 0, u64::MAX, 5_000) {
                 Value::Array(rows) => rows
                     .into_iter()
                     .filter(|r| r["login"].as_u64().is_some_and(|l| accounts.contains(&l)))
