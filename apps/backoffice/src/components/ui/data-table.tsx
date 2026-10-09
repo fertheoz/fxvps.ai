@@ -244,7 +244,7 @@ export function DataTable<T>({
         </div>
       )}
       <div className="overflow-x-auto rounded-lg border border-border bg-card">
-        <table className="w-full text-sm">
+        <table className="w-full text-[13px]">
           <thead className="bg-muted/50 text-xs text-muted-foreground">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
@@ -257,7 +257,7 @@ export function DataTable<T>({
                   return (
                     <th
                       key={h.id}
-                      className={cn("relative whitespace-nowrap px-3 py-2 text-left font-medium", active && "text-foreground")}
+                      className={cn("relative whitespace-nowrap px-1.5 py-1.5 text-left font-medium", active && "text-foreground")}
                       title={canFilter || canSort ? t("common.clickFilter") : undefined}
                     >
                       {h.isPlaceholder ? null : canFilter || canSort ? (
@@ -344,7 +344,7 @@ export function DataTable<T>({
                   data-testid={renderDetail ? `dt-row-${row.id}` : undefined}
                 >
                   {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="whitespace-nowrap px-3 py-1.5">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                    <td key={cell.id} className="whitespace-nowrap px-1.5 py-1">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
                   ))}
                 </tr>
                 {renderDetail && open[row.id] && (
