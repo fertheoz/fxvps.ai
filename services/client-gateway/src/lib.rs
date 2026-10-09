@@ -192,7 +192,7 @@ async fn ws_handler(
     let max = hub.cfg.max_frame_bytes;
     ws.max_message_size(max)
         .max_frame_size(max)
-        .on_upgrade(move |socket| conn::run(hub, socket, slot))
+        .on_upgrade(move |socket| conn::run(hub, socket, slot, ip))
 }
 
 async fn metrics_handler(State(hub): State<Arc<Hub>>) -> impl IntoResponse {

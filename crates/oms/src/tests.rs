@@ -651,6 +651,14 @@ fn routing_rules_decide_book_and_override_markup() {
         partial_fill: None,
         min_toxicity: None,
         max_toxicity: None,
+        platforms: vec![],
+        ip_prefixes: vec![],
+        min_nop_centilots: None,
+        max_nop_centilots: None,
+        window_minutes: None,
+        min_window_centilots: None,
+        scalper: None,
+        news_window_min: None,
     };
     // EURUSD -> A-book with a 20-point markup; everything else stays in the B-book group.
     h.cmd(Command::SetRules(vec![rule(
@@ -1327,6 +1335,14 @@ fn toxicity_feeds_rules_and_profile() {
         partial_fill: None,
         min_toxicity: Some(50),
         max_toxicity: None,
+        platforms: vec![],
+        ip_prefixes: vec![],
+        min_nop_centilots: None,
+        max_nop_centilots: None,
+        window_minutes: None,
+        min_window_centilots: None,
+        scalper: None,
+        news_window_min: None,
     }]));
     // five scalps: open and close within the same second, all winners
     for i in 0..5 {
@@ -2818,4 +2834,90 @@ fn retry_chain_exhausted_shows_the_partial_once_and_cancels_the_rest() {
     assert_eq!((o.status, o.filled), (OrderStatus::Cancelled, qty("4")));
     assert_eq!(h.pos(1)[0].volume, qty("4"));
     assert!(h.router.take().is_empty());
+}
+
+fn abook_rule(id: &str) -> risk::RoutingRule {
+    risk::RoutingRule {
+        id: id.into(),
+        name: id.into(),
+        enabled: true,
+        groups: vec![],
+        accounts: vec![],
+        symbols: vec![],
+        min_centilots: None,
+        max_centilots: None,
+        kind: risk::OrderKindFilter::Any,
+        hours_utc: None,
+        routing: Some(Routing::ABook),
+        a_book_pct: None,
+        markup_points: None,
+        max_slippage_points: None,
+        partial_fill: None,
+        min_toxicity: None,
+        max_toxicity: None,
+        platforms: vec![],
+        ip_prefixes: vec![],
+        min_nop_centilots: None,
+        max_nop_centilots: None,
+        window_minutes: None,
+        min_window_centilots: None,
+        scalper: None,
+        news_window_min: None,
+    }
+}
+
+#[test]
+fn rule_conditions_platform_ip_nop_window_news() {
+    use risk::Platform;
+    let mut h = H::new(EngineConfig::default());
+    h.account(1, "b", "100000");
+    // platform + IP: API orders from 10.0.0.0/8 go A-book
+    let mut r = abook_rule("api-lan");
+    r.platforms = vec![Platform::Api];
+    r.ip_prefixes = vec!["10.0.0.0/8".into()];
+    h.cmd(Command::SetRules(vec![r]));
+    let mut o = NewOrder::market(1, "t1", "EURUSD", Side::Buy, qty("0.1"));
+    o.platform = Platform::Terminal;
+    o.ip = Some("10.1.2.3".into());
+    h.order(o);
+    assert!(h.router.take().is_empty(), "terminal: B-book");
+    let mut o = NewOrder::market(1, "a1", "EURUSD", Side::Buy, qty("0.1"));
+    o.platform = Platform::Api;
+    o.ip = Some("10.1.2.3".into());
+    h.order(o);
+    assert_eq!(h.router.take().len(), 1, "API from the LAN: A-book");
+    let mut o = NewOrder::market(1, "a2", "EURUSD", Side::Buy, qty("0.1"));
+    o.platform = Platform::Api;
+    o.ip = Some("185.43.1.1".into());
+    h.order(o);
+    assert!(h.router.take().is_empty(), "API from elsewhere: B-book");
+    // NOP: once the account holds >= 0.25 lots net, new flow goes A-book
+    let mut r = abook_rule("nop");
+    r.min_nop_centilots = Some(25);
+    h.cmd(Command::SetRules(vec![r]));
+    h.market(1, "n1", Side::Buy, "0.1"); // net 0.3 → B (checked before this fill: 0.2)
+    assert!(h.router.take().is_empty());
+    h.market(1, "n2", Side::Buy, "0.1"); // net was 0.3 ≥ 0.25 → A
+    assert_eq!(h.router.take().len(), 1);
+    // window: 0.5 lots opened within 10 minutes → A-book
+    let mut r = abook_rule("burst");
+    r.window_minutes = Some(10);
+    r.min_window_centilots = Some(50);
+    h.cmd(Command::SetRules(vec![r]));
+    h.market(1, "w1", Side::Sell, "0.1"); // 0.3 opened before this one
+    assert!(h.router.take().is_empty());
+    h.market(1, "w2", Side::Sell, "0.1"); // 0.4 opened before this one
+    assert!(h.router.take().is_empty(), "under 0.5 in the window: B");
+    h.market(1, "w3", Side::Sell, "0.1"); // 0.5 opened → A
+    assert_eq!(h.router.take().len(), 1);
+    // news: within 30 min of a high-impact event
+    let mut r = abook_rule("news");
+    r.news_window_min = Some(30);
+    h.cmd(Command::SetRules(vec![r]));
+    h.market(1, "e1", Side::Buy, "0.1");
+    assert!(h.router.take().is_empty(), "no event: B");
+    let soon = h.ts + 10 * 60_000_000_000;
+    h.cmd(Command::SetNewsTimes(vec![soon]));
+    h.market(1, "e2", Side::Buy, "0.1");
+    assert_eq!(h.router.take().len(), 1, "event in 10 min: A");
 }

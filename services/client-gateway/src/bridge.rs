@@ -617,6 +617,7 @@ impl Session {
             )];
         }
         let mut o = NewOrder::market(&id, &self.inst.account, &symbol, side, units);
+        o.platform = core_engine::api::Platform::Bridge;
         match v["kind"].as_str().unwrap_or("market") {
             "market" => {
                 o.max_deviation_points = v["deviation"]

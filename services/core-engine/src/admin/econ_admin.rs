@@ -178,6 +178,7 @@ pub async fn create(
     }
     store.append(&actor, AdminCmd::EconEventSaved { event: ev.clone() })?;
     drop(store);
+    push_news_times(&ctx).await;
     ctx.notify(&["listEconEvents", "listAudit"]);
     Ok(Json(event_json(&ev)))
 }
@@ -204,6 +205,7 @@ pub async fn update(
     }
     store.append(&actor, AdminCmd::EconEventSaved { event: ev.clone() })?;
     drop(store);
+    push_news_times(&ctx).await;
     ctx.notify(&["listEconEvents", "listAudit"]);
     Ok(Json(event_json(&ev)))
 }
@@ -220,6 +222,7 @@ pub async fn remove(
     }
     store.append(&actor, AdminCmd::EconEventDeleted { id })?;
     drop(store);
+    push_news_times(&ctx).await;
     ctx.notify(&["listEconEvents", "listAudit"]);
     Ok(Json(json!({ "ok": true })))
 }
@@ -278,6 +281,7 @@ pub async fn import(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
     }
     drop(store);
     if m.added + m.updated > 0 {
+        push_news_times(&ctx).await;
         ctx.notify(&["listEconEvents", "listAudit"]);
     }
     Ok(Json(json!({
@@ -331,5 +335,28 @@ mod tests {
             Some(vec!["EUR".to_string(), "USD".to_string()])
         );
         assert_eq!(currencies(&q(None, None, Some(" , "))), None);
+    }
+}
+
+/// Hands the engine the high-impact events around now (2 h back, 7 days
+/// ahead) for the routing rules' news window.
+pub async fn push_news_times(ctx: &AdminCtx) {
+    let now = domain::now_ns();
+    let (from, to) = (
+        now.saturating_sub(2 * 3_600_000_000_000),
+        now + 7 * 24 * 3_600_000_000_000,
+    );
+    let times: Vec<u64> = {
+        let store = ctx.store.lock().await;
+        store
+            .state
+            .econ_events
+            .values()
+            .filter(|e| e.impact == Impact::High && (from..=to).contains(&e.time_ns))
+            .map(|e| e.time_ns)
+            .collect()
+    };
+    if let Err(e) = ctx.cmd(oms::Command::SetNewsTimes(times)).await {
+        tracing::warn!(error = ?e, "news times not handed to the engine");
     }
 }

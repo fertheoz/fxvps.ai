@@ -88,6 +88,8 @@ impl From<OrderType> for OrderKind {
     }
 }
 
+pub use risk::Platform;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlaceOrderRequest {
     pub account: String,
@@ -112,6 +114,9 @@ pub struct PlaceOrderRequest {
     pub expire_at_ns: Option<u64>,
     /// Market orders: client slippage tolerance in points (MT5 deviation).
     pub max_deviation_points: Option<u32>,
+    /// Source of the order and the client's IP (rule conditions).
+    pub platform: risk::Platform,
+    pub ip: Option<String>,
 }
 
 impl PlaceOrderRequest {
@@ -138,6 +143,8 @@ impl PlaceOrderRequest {
             oco_group: None,
             expire_at_ns: None,
             max_deviation_points: None,
+            platform: risk::Platform::Unknown,
+            ip: None,
         }
     }
 }
@@ -646,6 +653,8 @@ impl CoreApi for InProcessCore {
             if req.kind == OrderKind::Market {
                 o.max_deviation_points = req.max_deviation_points.map(i64::from);
             }
+            o.platform = req.platform;
+            o.ip = req.ip.clone();
             if req.kind != OrderKind::Market {
                 o.oco_group = req.oco_group.filter(|g| *g != 0);
                 o.expire_at = req.expire_at_ns.filter(|t| *t != 0);

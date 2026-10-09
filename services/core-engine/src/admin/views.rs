@@ -1798,13 +1798,7 @@ pub fn rules_dry_run(e: &Engine, admin: &AdminState, since_ns: u64) -> Value {
             continue;
         };
         let pending = o.req.order_type != OrderType::Market;
-        let rule = e.match_rule(
-            &acc.group,
-            o.req.account,
-            &o.req.symbol,
-            o.req.volume,
-            pending,
-        );
+        let rule = e.match_rule(&acc.group, &o.req, pending);
         let lots = qty_f(o.req.volume);
         match rule {
             Some(r) => {

@@ -84,6 +84,12 @@ pub struct NewOrder {
     pub oco_group: Option<u64>,
     /// Expiry timestamp (ns) for pending orders.
     pub expire_at: Option<u64>,
+    /// Where the order came from and the client's IP (rule conditions;
+    /// journaled with the order).
+    #[serde(default)]
+    pub platform: risk::Platform,
+    #[serde(default)]
+    pub ip: Option<String>,
     /// Market orders: client slippage tolerance in points (MT5 deviation);
     /// the tighter of this and the group cap / circuit breaker applies.
     #[serde(default)]
@@ -113,6 +119,8 @@ impl NewOrder {
             trailing_points: None,
             oco_group: None,
             expire_at: None,
+            platform: risk::Platform::Unknown,
+            ip: None,
             max_deviation_points: None,
         }
     }
@@ -547,6 +555,8 @@ pub enum Command {
     SetSwapConfig(SwapConfig),
     /// Holiday calendar (stage 13).
     SetCalendar(TradingCalendar),
+    /// High-impact calendar events (ns) for the rules' news window.
+    SetNewsTimes(Vec<u64>),
     /// Sends aggregated A-book orders (when aggregation is enabled).
     FlushLp,
     /// Daily rollover: charge/credit swaps.

@@ -114,7 +114,13 @@ fn close_msg(code: u16, reason: &str) -> Message {
 
 /// Runs a connection to completion. `slot` is the connection's reservation in
 /// [`crate::limits::ConnLimits`], released when the connection ends.
-pub async fn run(hub: Arc<Hub>, socket: WebSocket, mut slot: crate::limits::Slot) {
+pub async fn run(
+    hub: Arc<Hub>,
+    socket: WebSocket,
+    mut slot: crate::limits::Slot,
+    peer_ip: Option<std::net::IpAddr>,
+) {
+    let peer_ip = peer_ip.map(|ip| ip.to_string());
     hub.metrics.connections.inc();
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<Message>(hub.cfg.queue_capacity);
@@ -151,7 +157,7 @@ pub async fn run(hub: Arc<Hub>, socket: WebSocket, mut slot: crate::limits::Slot
         let _ = sink.close().await;
     });
 
-    let outcome = session(&hub, &mut stream, tx, &mut slot).await;
+    let outcome = session(&hub, &mut stream, tx, &mut slot, &peer_ip).await;
     drop(slot);
     if let Some((code, reason)) = outcome {
         if code == close_code::SLOW_CONSUMER {
@@ -185,6 +191,7 @@ async fn session(
     stream: &mut Stream,
     tx: mpsc::Sender<Message>,
     slot: &mut crate::limits::Slot,
+    peer_ip: &Option<String>,
 ) -> Option<(u16, String)> {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(hub.cfg.auth_timeout_ms);
     let slow = || Some((close_code::SLOW_CONSUMER, "slow consumer".to_string()));
@@ -343,7 +350,7 @@ async fn session(
                             }
                             continue;
                         }
-                        match handle(hub, &mut state, &mut out, body).await {
+                        match handle(hub, &mut state, &mut out, body, peer_ip).await {
                             Ok(()) => {}
                             Err(SlowConsumer) => return slow(),
                         }
@@ -460,6 +467,7 @@ async fn handle(
     st: &mut ConnState,
     out: &mut Outbox,
     body: Body,
+    peer_ip: &Option<String>,
 ) -> Result<(), SlowConsumer> {
     match body {
         Body::Subscribe(s) => {
@@ -559,6 +567,8 @@ async fn handle(
                     expire_at_ns: (p.expire_at_ns != 0).then_some(p.expire_at_ns),
                     max_deviation_points: (p.max_deviation_points != 0)
                         .then_some(p.max_deviation_points),
+                    platform: core_engine::api::Platform::Terminal,
+                    ip: peer_ip.clone(),
                 })
             });
             let r = match r {

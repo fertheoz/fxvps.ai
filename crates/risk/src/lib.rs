@@ -65,6 +65,67 @@ pub enum OrderKindFilter {
     Pending,
 }
 
+/// Where an order came from (journaled on the order; a rule condition).
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Platform {
+    #[default]
+    Unknown,
+    /// Web terminal (WebSocket).
+    Terminal,
+    Mobile,
+    /// REST / personal API key.
+    Api,
+    /// MT5 bridge (server plugin).
+    Bridge,
+    /// Copy trading follower order.
+    Copy,
+}
+
+/// Everything a rule may look at for one order.
+pub struct RuleCtx<'a> {
+    pub group: &'a str,
+    pub account: u64,
+    pub symbol: &'a str,
+    pub centilots: i64,
+    pub pending: bool,
+    pub hour_utc: u8,
+    pub toxicity: u8,
+    /// |net open position| of the account on the symbol, centi-lots.
+    pub nop_centilots: i64,
+    /// The account's opening fills of the last 24 h: (ns, centi-lots).
+    pub recent_opens: &'a [(u64, i64)],
+    pub scalper: bool,
+    pub platform: Platform,
+    pub ip: Option<&'a str>,
+    /// High-impact calendar events (ns), sorted.
+    pub news_times: &'a [u64],
+    pub now_ns: u64,
+}
+
+/// `prefix` is an IPv4 CIDR (`10.0.0.0/8`) or a plain textual prefix (`185.43.`).
+pub fn ip_matches(prefix: &str, ip: &str) -> bool {
+    if let Some((net, bits)) = prefix.split_once('/') {
+        let (Ok(net), Ok(bits), Ok(ip)) = (
+            net.parse::<std::net::Ipv4Addr>(),
+            bits.parse::<u32>(),
+            ip.parse::<std::net::Ipv4Addr>(),
+        ) else {
+            return false;
+        };
+        if bits > 32 {
+            return false;
+        }
+        let mask = if bits == 0 {
+            0
+        } else {
+            u32::MAX << (32 - bits)
+        };
+        return (u32::from(net) & mask) == (u32::from(ip) & mask);
+    }
+    ip.starts_with(prefix)
+}
+
 /// One row of the routing rule table: the first enabled rule whose filters all
 /// match an order decides its book and may override the group's markup,
 /// slippage cap and partial-fill policy. Empty lists match everything.
@@ -107,55 +168,107 @@ pub struct RoutingRule {
     pub min_toxicity: Option<u8>,
     #[serde(default)]
     pub max_toxicity: Option<u8>,
+    /// Order sources; empty = any.
+    #[serde(default)]
+    pub platforms: Vec<Platform>,
+    /// Client IP prefixes / IPv4 CIDRs; empty = any. An order without an IP
+    /// never matches a rule that lists prefixes.
+    #[serde(default)]
+    pub ip_prefixes: Vec<String>,
+    /// |net open position| of the account on the symbol (centi-lots) window.
+    #[serde(default)]
+    pub min_nop_centilots: Option<i64>,
+    #[serde(default)]
+    pub max_nop_centilots: Option<i64>,
+    /// Burst: at least `min_window_centilots` opened in the last `window_minutes`.
+    #[serde(default)]
+    pub window_minutes: Option<u32>,
+    #[serde(default)]
+    pub min_window_centilots: Option<i64>,
+    /// Scalper profile (≥ half of the closed trades held under 60 s, enough evidence).
+    #[serde(default)]
+    pub scalper: Option<bool>,
+    /// Within ± this many minutes of a high-impact calendar event.
+    #[serde(default)]
+    pub news_window_min: Option<u32>,
 }
 
 impl RoutingRule {
-    /// Does the rule apply to an order of `account` in `group` on `symbol`?
-    pub fn matches(
-        &self,
-        group: &str,
-        account: u64,
-        symbol: &str,
-        centilots: i64,
-        pending: bool,
-        hour_utc: u8,
-        toxicity: u8,
-    ) -> bool {
+    /// Does the rule apply to the order described by `c`?
+    pub fn matches(&self, c: &RuleCtx) -> bool {
         if !self.enabled {
             return false;
         }
-        if self.min_toxicity.is_some_and(|m| toxicity < m)
-            || self.max_toxicity.is_some_and(|m| toxicity > m)
+        if self.min_toxicity.is_some_and(|m| c.toxicity < m)
+            || self.max_toxicity.is_some_and(|m| c.toxicity > m)
         {
             return false;
         }
-        if !self.groups.is_empty() && !self.groups.iter().any(|g| g == group) {
+        if !self.groups.is_empty() && !self.groups.iter().any(|g| g == c.group) {
             return false;
         }
-        if !self.accounts.is_empty() && !self.accounts.contains(&account) {
+        if !self.accounts.is_empty() && !self.accounts.contains(&c.account) {
             return false;
         }
-        if !self.symbols.is_empty() && !self.symbols.iter().any(|s| s == symbol) {
+        if !self.symbols.is_empty() && !self.symbols.iter().any(|s| s == c.symbol) {
             return false;
         }
-        if self.min_centilots.is_some_and(|m| centilots < m)
-            || self.max_centilots.is_some_and(|m| centilots > m)
+        if self.min_centilots.is_some_and(|m| c.centilots < m)
+            || self.max_centilots.is_some_and(|m| c.centilots > m)
         {
             return false;
         }
         match self.kind {
             OrderKindFilter::Any => {}
-            OrderKindFilter::Market if pending => return false,
-            OrderKindFilter::Pending if !pending => return false,
+            OrderKindFilter::Market if c.pending => return false,
+            OrderKindFilter::Pending if !c.pending => return false,
             _ => {}
         }
         if let Some((from, to)) = self.hours_utc {
             let inside = if from <= to {
-                hour_utc >= from && hour_utc < to
+                c.hour_utc >= from && c.hour_utc < to
             } else {
-                hour_utc >= from || hour_utc < to
+                c.hour_utc >= from || c.hour_utc < to
             };
             if !inside {
+                return false;
+            }
+        }
+        if !self.platforms.is_empty() && !self.platforms.contains(&c.platform) {
+            return false;
+        }
+        if !self.ip_prefixes.is_empty() {
+            let Some(ip) = c.ip else {
+                return false;
+            };
+            if !self.ip_prefixes.iter().any(|p| ip_matches(p, ip)) {
+                return false;
+            }
+        }
+        if self.min_nop_centilots.is_some_and(|m| c.nop_centilots < m)
+            || self.max_nop_centilots.is_some_and(|m| c.nop_centilots > m)
+        {
+            return false;
+        }
+        if let (Some(min), Some(w)) = (self.min_window_centilots, self.window_minutes) {
+            let from = c.now_ns.saturating_sub(u64::from(w) * 60_000_000_000);
+            let opened: i64 = c
+                .recent_opens
+                .iter()
+                .filter(|(ts, _)| *ts >= from)
+                .map(|(_, v)| *v)
+                .sum();
+            if opened < min {
+                return false;
+            }
+        }
+        if self.scalper.is_some_and(|s| s != c.scalper) {
+            return false;
+        }
+        if let Some(m) = self.news_window_min {
+            let w = u64::from(m) * 60_000_000_000;
+            let near = c.news_times.iter().any(|t| t.abs_diff(c.now_ns) <= w);
+            if !near {
                 return false;
             }
         }
@@ -957,6 +1070,11 @@ impl FlowStats {
         self.hold_secs_sum = self.hold_secs_sum.saturating_add(hold_secs);
         self.pnl_minor += pnl_minor;
         self.broker_pnl_minor += broker_pnl_minor;
+    }
+
+    /// Scalper: enough closed trades and at least half of them held under 60 s.
+    pub fn is_scalper(&self) -> bool {
+        self.trades >= Self::MIN_TRADES && self.short_hold_ratio() >= 0.5
     }
 
     pub fn short_hold_ratio(&self) -> f64 {

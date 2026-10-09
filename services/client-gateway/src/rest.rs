@@ -1053,6 +1053,7 @@ async fn replay(
 async fn place_order(
     State(hub): State<Arc<Hub>>,
     Authed(c): Authed,
+    crate::PeerIp(ip): crate::PeerIp,
     headers: HeaderMap,
     bytes: Bytes,
 ) -> ApiResult {
@@ -1081,6 +1082,8 @@ async fn place_order(
         oco_group: b.oco_group.filter(|g| *g != 0),
         expire_at_ns: b.expire_at.map(|t| t.0),
         max_deviation_points: b.max_deviation_points.filter(|d| *d != 0),
+        platform: core_engine::api::Platform::Api,
+        ip: ip.map(|i| i.to_string()),
     };
     let symbol = order.symbol.clone();
     let (qty, limit, stop, kind) = (

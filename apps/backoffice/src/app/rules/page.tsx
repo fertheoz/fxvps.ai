@@ -5,6 +5,7 @@ import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Dialog, PageHe
 import { BookBadge } from "@/components/badges";
 import { NumField, SelectField, TextField } from "@/components/form";
 import { useToast } from "@/components/shell/providers";
+import { RULE_PLATFORMS, type RulePlatform } from "@/lib/api";
 import { api, useApiMutation, useApiQuery } from "@/lib/queries";
 import { useActor, useT } from "@/lib/hooks";
 import type { RoutingRule } from "@/lib/api";
@@ -17,7 +18,7 @@ const list = (v: string) => v.split(/[,\s]+/).map((x) => x.trim()).filter(Boolea
 const uid = () => Math.random().toString(36).slice(2, 8);
 
 function blank(): RoutingRule {
-  return { id: uid(), name: "", enabled: true, groups: [], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: null, aBookPct: null, markupPoints: null, maxSlippagePoints: null, partialFill: null, minToxicity: null, maxToxicity: null };
+  return { id: uid(), name: "", enabled: true, groups: [], accounts: [], symbols: [], minLots: null, maxLots: null, kind: "any", hoursUtc: null, routing: null, aBookPct: null, markupPoints: null, maxSlippagePoints: null, partialFill: null, minToxicity: null, maxToxicity: null, platforms: [], ipPrefixes: [], minNopLots: null, maxNopLots: null, windowMinutes: null, minWindowLots: null, scalper: null, newsWindowMin: null };
 }
 
 /** Partial-fill override as a select value (+ attempts). */
@@ -63,6 +64,12 @@ export default function RulesPage() {
     if (r.kind !== "any") parts.push(t(`rules.kind.${r.kind}`));
     if (r.hoursUtc) parts.push(`${r.hoursUtc[0]}:00–${r.hoursUtc[1]}:00 UTC`);
     if (r.minToxicity !== null || r.maxToxicity !== null) parts.push(`${t("flow.toxicity")} ${r.minToxicity ?? 0}–${r.maxToxicity ?? 100}`);
+    if (r.platforms?.length) parts.push(`${t("rules.platforms")}: ${r.platforms.join(", ")}`);
+    if (r.ipPrefixes?.length) parts.push(`IP: ${r.ipPrefixes.join(", ")}`);
+    if (r.minNopLots !== null || r.maxNopLots !== null) parts.push(`NOP ${r.minNopLots ?? 0}–${r.maxNopLots ?? "∞"} lot`);
+    if (r.windowMinutes !== null && r.minWindowLots !== null) parts.push(`≥ ${r.minWindowLots} lot / ${r.windowMinutes} min`);
+    if (r.scalper !== null) parts.push(r.scalper ? t("rules.scalperYes") : t("rules.scalperNo"));
+    if (r.newsWindowMin !== null) parts.push(`${t("rules.news")} ±${r.newsWindowMin} min`);
     return parts.length ? parts.join(" · ") : t("rules.matchAll");
   };
   const action = (r: RoutingRule) => {
@@ -210,6 +217,14 @@ function RuleDialog({ rule, onClose, onSave }: { rule: RoutingRule; onClose: () 
         <NumField label={t("rules.maxSlippage")} value={r.maxSlippagePoints ?? -1} onChange={(v) => set("maxSlippagePoints", v >= 0 ? v : null)} step={1} />
         <NumField label={t("rules.minToxicity")} value={r.minToxicity ?? -1} onChange={(v) => set("minToxicity", v >= 0 ? Math.min(100, v) : null)} step={5} />
         <NumField label={t("rules.maxToxicity")} value={r.maxToxicity ?? -1} onChange={(v) => set("maxToxicity", v >= 0 ? Math.min(100, v) : null)} step={5} />
+        <TextField label={`${t("rules.platforms")} (${t("rules.platformsHint")})`} value={(r.platforms ?? []).join(", ")} onChange={(v) => set("platforms", list(v).map((s) => s.toLowerCase()).filter((s): s is RulePlatform => (RULE_PLATFORMS as string[]).includes(s)))} />
+        <TextField label={`${t("rules.ipPrefixes")} (${t("rules.listHint")})`} value={(r.ipPrefixes ?? []).join(", ")} onChange={(v) => set("ipPrefixes", list(v))} />
+        <NumField label={t("rules.minNop")} value={r.minNopLots ?? 0} onChange={(v) => set("minNopLots", v > 0 ? v : null)} step={0.1} />
+        <NumField label={t("rules.maxNop")} value={r.maxNopLots ?? 0} onChange={(v) => set("maxNopLots", v > 0 ? v : null)} step={0.1} />
+        <NumField label={t("rules.windowMinutes")} value={r.windowMinutes ?? 0} onChange={(v) => set("windowMinutes", v > 0 ? Math.min(1440, v) : null)} step={5} />
+        <NumField label={t("rules.minWindowLots")} value={r.minWindowLots ?? 0} onChange={(v) => set("minWindowLots", v > 0 ? v : null)} step={0.1} />
+        <SelectField label={t("rules.scalper")} value={r.scalper === null ? "any" : r.scalper ? "yes" : "no"} options={["any", "yes", "no"] as const} onChange={(v) => set("scalper", v === "any" ? null : v === "yes")} />
+        <NumField label={t("rules.newsWindow")} value={r.newsWindowMin ?? 0} onChange={(v) => set("newsWindowMin", v > 0 ? Math.min(1440, v) : null)} step={5} />
         <SelectField label={t("groups.partialFillShort")} value={p.kind} options={PARTIALS} onChange={(v) => setPartial(v)} />
         <NumField label={t("groups.maxAttempts")} value={p.attempts} onChange={(v) => setPartial("retry", Math.min(10, Math.max(1, v)))} step={1} disabled={p.kind !== "retry"} />
       </div>

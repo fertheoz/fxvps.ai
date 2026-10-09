@@ -160,7 +160,24 @@ export interface RoutingRule {
   /** Client toxicity window 0..100 (stage 7 flow profile); null = any. */
   minToxicity: number | null;
   maxToxicity: number | null;
+  /** Order sources; empty = any. */
+  platforms: RulePlatform[];
+  /** Client IP prefixes / IPv4 CIDRs; empty = any. */
+  ipPrefixes: string[];
+  /** |net open position| of the account on the symbol, lots; null = any. */
+  minNopLots: number | null;
+  maxNopLots: number | null;
+  /** Burst: at least minWindowLots opened in the last windowMinutes. */
+  windowMinutes: number | null;
+  minWindowLots: number | null;
+  /** Scalper profile; null = any. */
+  scalper: boolean | null;
+  /** Within ± minutes of a high-impact calendar event; null = any. */
+  newsWindowMin: number | null;
 }
+
+export type RulePlatform = "unknown" | "terminal" | "mobile" | "api" | "bridge" | "copy";
+export const RULE_PLATFORMS: RulePlatform[] = ["terminal", "mobile", "api", "bridge", "copy", "unknown"];
 
 export interface RulesDryRun {
   since: string;
