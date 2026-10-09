@@ -3204,10 +3204,10 @@ fn currency_leg_cap_and_news_window_route_or_pause_new_flow() {
     h.market(1, "e1", Side::Buy, "1"); // +100k EUR ≈ 110k USD: under the cap, B-book
     assert!(h.router.take().is_empty());
     let x = h.e.currency_exposure();
-    assert_eq!(x[&money::Currency::EUR].1, 100_000_00);
+    assert_eq!(x[&money::Currency::EUR].1, 10_000_000);
     assert_eq!(
         x[&money::Currency::USD].1,
-        -110_010_00,
+        -11_001_000,
         "short the quote leg at the open price (ask)"
     );
     let id = h.market(1, "e2", Side::Buy, "1"); // would be 220k USD of EUR: A-book
