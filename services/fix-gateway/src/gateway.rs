@@ -90,6 +90,12 @@ pub enum OrderCommand {
         orig_cl_ord_id: String,
         order: Order,
     },
+    /// ListStatusRequest (M): venues without PositionReport (Solid FX)
+    /// answer with ListStatus (N) listing the open orders, published as
+    /// [`GatewayEvent::LpMessage`] (reconciliation of resting orders).
+    ListStatus {
+        list_id: String,
+    },
     /// RequestForPositions (AN): the LP answers with PositionReports (AP),
     /// published as [`GatewayEvent::LpMessage`] (omnibus reconciliation).
     Positions {
@@ -116,6 +122,7 @@ impl OrderCommand {
             OrderCommand::Submit(o) | OrderCommand::Replace { order: o, .. } => &o.cl_ord_id,
             OrderCommand::Cancel { cl_ord_id, .. } => cl_ord_id,
             OrderCommand::Positions { req_id, .. } => req_id,
+            OrderCommand::ListStatus { list_id } => list_id,
             OrderCommand::Trades { req_id, .. } => req_id,
         }
     }
@@ -284,6 +291,7 @@ fn store_for(cfg: &GatewayConfig, name: &str) -> Result<Store, GatewayError> {
 
 fn session_for(cfg: &GatewayConfig, ep: &SessionEndpoint, store: Store) -> Session<Store> {
     let mut c = SessionConfig::new(Role::Initiator, &ep.sender_comp_id, &ep.target_comp_id);
+    c.begin_string = cfg.begin_string.clone();
     c.heartbeat_interval = Duration::from_secs(cfg.heartbeat_secs.max(1));
     c.reset_on_logon = ep.reset_on_logon;
     c.username = ep.username.clone();
@@ -526,6 +534,41 @@ impl Retry {
     }
 }
 
+/// Outside the venue's session hours: reports a scheduled down once and
+/// waits (returns false on shutdown). `true` = open, go ahead.
+async fn wait_for_session_hours(
+    cfg: &GatewayConfig,
+    events: &broadcast::Sender<GatewayEvent>,
+    kind: SessionKind,
+    sd: &mut watch::Receiver<bool>,
+    reported: &mut bool,
+) -> bool {
+    let Some(h) = &cfg.session_hours else {
+        return true;
+    };
+    loop {
+        let (open, wait) = h.is_open(unix_ms() / 1000);
+        if open {
+            *reported = false;
+            return true;
+        }
+        if !*reported {
+            *reported = true;
+            down(
+                events,
+                kind,
+                "scheduled: outside venue session hours".into(),
+            );
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(wait.clamp(5, 3600))) => {
+                if *sd.borrow() { return false; }
+            }
+            _ = sd.changed() => return false,
+        }
+    }
+}
+
 /// Sleeps; returns false on shutdown.
 async fn backoff(cfg: &GatewayConfig, retry: &Retry, sd: &mut watch::Receiver<bool>) -> bool {
     tokio::select! {
@@ -578,7 +621,11 @@ async fn md_task(
     let mut session = Some(session);
     let mut req_counter = 0u64;
     let mut retry = Retry::default();
+    let mut hours_reported = false;
     while let Some(s) = session.take() {
+        if !wait_for_session_hours(&cfg, &events, kind, &mut sd, &mut hours_reported).await {
+            break;
+        }
         let io = match connect(&cfg.md.addr, tls.as_ref(), &mut sd).await {
             None => break,
             Some(Ok(io)) => io,
@@ -716,6 +763,10 @@ fn to_body(cfg: &GatewayConfig, c: &OrderCommand) -> Result<Body, String> {
                 fields: f,
             }
         }
+        OrderCommand::ListStatus { list_id } => Body::Unknown {
+            msg_type: "M".into(),
+            fields: vec![(66, list_id.clone().into_bytes())],
+        },
         OrderCommand::Trades {
             req_id,
             from,
@@ -818,7 +869,11 @@ async fn trade_task(
         .store_dir
         .as_ref()
         .map(|d| crate::fixlog::spawn(d.join("fixlog"), cfg.lp.clone()));
+    let mut hours_reported = false;
     while let Some(s) = session.take() {
+        if !wait_for_session_hours(&cfg, &events, kind, &mut sd, &mut hours_reported).await {
+            break;
+        }
         let io = match connect(&cfg.trade.addr, tls.as_ref(), &mut sd).await {
             None => break,
             Some(Ok(io)) => io,

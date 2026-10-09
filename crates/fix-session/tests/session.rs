@@ -441,3 +441,40 @@ async fn transport_over_duplex() {
     ih.await.unwrap();
     ah.await.unwrap();
 }
+
+/// Solid FX restarts the Order Entry sequence every day at 17:05 ET: on
+/// our reconnect their Logon comes with MsgSeqNum 1 and no ResetSeqNumFlag
+/// while our store still expects a higher number. The session takes the
+/// venue's restart (counter continues at 2) instead of "too low".
+#[test]
+fn peer_sequence_restart_at_logon_is_taken() {
+    let now = Instant::now();
+    let peer_logon = encode(
+        &Header {
+            begin_string: FIX44.into(),
+            sender_comp_id: "LP".into(),
+            target_comp_id: "CLIENT".into(),
+            msg_seq_num: 1,
+            sending_time: now_timestamp(),
+            poss_dup: false,
+            orig_sending_time: None,
+        },
+        &Body::Logon(Logon {
+            heart_bt_int: 30,
+            reset_seq_num: false,
+            username: None,
+            password: None,
+        }),
+    )
+    .unwrap();
+    let (mut ic, _) = cfgs();
+    ic.reset_on_logon = false;
+    let mut store = MemoryStore::new();
+    store.set_next_target_seq(42).unwrap(); // yesterday's session
+    let mut i = Session::new(ic, store, now);
+    assert!(!sends(&i.on_connect(now).unwrap()).is_empty());
+    let acts = feed(&mut i, vec![peer_logon], now);
+    assert!(acts.contains(&Action::LoggedOn), "{acts:?}");
+    assert!(i.is_active());
+    assert_eq!(i.next_target_seq(), 2);
+}

@@ -25,6 +25,8 @@ fn gateway_config(sim: &lp_simulator::SimHandle) -> GatewayConfig {
         max_orders_per_sec: 0,
         enabled: true,
         security_id_source: "8".into(),
+        begin_string: "FIX.4.4".into(),
+        session_hours: None,
         store_dir: None,
         md: ep(sim.md_addr.to_string(), "FXVPS-MD", "LMXBDM"),
         trade: ep(sim.trade_addr.to_string(), "FXVPS-TRD", "LMXBD"),

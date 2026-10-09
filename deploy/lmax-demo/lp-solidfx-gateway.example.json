@@ -1,0 +1,38 @@
+{
+  "_comment": "MAS Markets / Solid FX gateway template (FIX 4.2, Symbol(55) instruments). Copy to lp-solidfx-gateway.json, fill the CompIDs/addresses from MAS onboarding; passwords come from FIX_GATEWAY_MD_PASSWORD / FIX_GATEWAY_TRADE_PASSWORD, never from this file.",
+  "lp": "MAS",
+  "begin_string": "FIX.4.2",
+  "session_hours": { "open_day": 0, "open_time": "17:05", "close_day": 5, "close_time": "17:00", "daily_break": ["17:00", "17:05"] },
+  "security_id_source": "SYMBOL",
+  "heartbeat_secs": 30,
+  "market_depth": 5,
+  "reconnect_delay_ms": 3000,
+  "max_logon_failures": 5,
+  "max_orders_per_sec": 20,
+  "enabled": false,
+  "store_dir": "/var/lib/fix-gateway/mas",
+  "md": {
+    "addr": "MD_HOST:PORT",
+    "sender_comp_id": "SENDER_MD",
+    "target_comp_id": "TARGET_MD",
+    "username": null,
+    "password": null,
+    "reset_on_logon": true,
+    "tls": null
+  },
+  "trade": {
+    "addr": "TRADE_HOST:PORT",
+    "sender_comp_id": "SENDER_TRD",
+    "target_comp_id": "TARGET_TRD",
+    "username": null,
+    "password": null,
+    "reset_on_logon": true,
+    "tls": null
+  },
+  "instruments": [
+    { "symbol": "EUR/USD", "security_id": "EUR/USD", "tick_size": "0.00001", "qty_step": "1000", "contract_size": 1 },
+    { "symbol": "GBP/USD", "security_id": "GBP/USD", "tick_size": "0.00001", "qty_step": "1000", "contract_size": 1 },
+    { "symbol": "XAU/USD", "security_id": "XAU/USD", "tick_size": "0.01", "qty_step": "1", "contract_size": 1 }
+  ],
+  "nats": null
+}

@@ -78,6 +78,8 @@ fn config(md: String, trade: String, server_name: &str) -> GatewayConfig {
         max_orders_per_sec: 0,
         enabled: true,
         security_id_source: "8".into(),
+        begin_string: "FIX.4.4".into(),
+        session_hours: None,
         store_dir: None,
         md: ep(md, "FXVPS-MD", "LMXBDM"),
         trade: ep(trade, "FXVPS-TRD", "LMXBD"),
