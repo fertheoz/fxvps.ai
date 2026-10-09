@@ -4,7 +4,7 @@ import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Label, PageHea
 import { useToast } from "@/components/shell/providers";
 import { api, useApiMutation, useApiQuery } from "@/lib/queries";
 import { useActor, useFormat, useT } from "@/lib/hooks";
-import { HEDGE_MODES, NEWS_ACTIONS, type HedgeMode, type HedgePolicy, type MarginCallRow, type NewsAction } from "@/lib/api";
+import { HEDGE_MODES, NEWS_ACTIONS, type HedgeMode, type HedgePolicy, type HedgePreview, type MarginCallRow, type NewsAction } from "@/lib/api";
 import { NumField, SelectField } from "@/components/form";
 import { useMfaOk } from "@/lib/queries";
 import type { MessageKey } from "@/lib/i18n";
@@ -98,6 +98,7 @@ export default function RiskPage() {
           <CardContent>{list(calls, "margin-calls")}</CardContent>
         </Card>
         <HedgeCard />
+        <ManualHedgeCard symbols={(exp.data ?? []).map((r) => r.symbol)} />
         <Card>
           <CardHeader><CardTitle>{t("risk.presets")}</CardTitle></CardHeader>
           <CardContent className="grid gap-3">
@@ -148,8 +149,10 @@ function HedgeForm({ initial }: { initial: HedgePolicy }) {
   const [limitsText, setLimitsText] = React.useState(Object.entries(initial.symbolLimits).map(([k, v]) => `${k} ${v}`).join("\n"));
   const [ccyText, setCcyText] = React.useState(Object.entries(initial.currencyLimitsUsd ?? {}).map(([k, v]) => `${k} ${v}`).join("\n"));
   const mut = useApiMutation((v: HedgePolicy) => api().saveHedgePolicy(v, actor), () => toast(t("risk.hedgeSaved")));
+  const [preview, setPreview] = React.useState<HedgePreview | null>(null);
+  const prev = useApiMutation((v: HedgePolicy) => api().previewHedgePolicy(v, actor), setPreview);
   const set = <K extends keyof HedgePolicy>(k: K, v: HedgePolicy[K]) => setP({ ...p, [k]: v });
-  const save = () => {
+  const assemble = (): HedgePolicy => {
     const symbolLimits: Record<string, number> = {};
     for (const line of limitsText.split("\n")) {
       const [sym, lots] = line.trim().split(/[\s,=]+/);
@@ -162,8 +165,9 @@ function HedgeForm({ initial }: { initial: HedgePolicy }) {
       const n = Number(usd);
       if (c && n > 0) currencyLimitsUsd[c.toUpperCase()] = Math.round(n);
     }
-    mut.mutate({ ...p, symbolLimits, currencyLimitsUsd });
+    return { ...p, symbolLimits, currencyLimitsUsd };
   };
+  const save = () => mut.mutate(assemble());
   return (
     <Card data-testid="hedge-policy">
       <CardHeader><CardTitle>{t("risk.hedge")}</CardTitle></CardHeader>
@@ -208,7 +212,85 @@ function HedgeForm({ initial }: { initial: HedgePolicy }) {
             </select>
           </Label>
         </div>
-        {editable && <div><Button onClick={save} disabled={mut.isPending} data-testid="hedge-save">{t("common.save")}</Button></div>}
+        {preview && <HedgePreviewTable p={preview} />}
+        {editable && <div className="flex gap-2"><Button variant="outline" onClick={() => prev.mutate(assemble())} disabled={prev.isPending} data-testid="hedge-preview">{t("risk.preview")}</Button><Button onClick={save} disabled={mut.isPending} data-testid="hedge-save">{t("common.save")}</Button></div>}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Parça 10b: what the policy in the form would do right now, before saving. */
+function HedgePreviewTable({ p }: { p: HedgePreview }) {
+  const t = useT();
+  const f = useFormat();
+  const moves = p.symbols.filter((r) => r.firstOrder);
+  return (
+    <div className="rounded-md border border-border p-2 text-xs" data-testid="hedge-preview-table">
+      <div className="mb-1 font-medium">{t("risk.previewTitle")}</div>
+      <div className="mb-2 text-muted-foreground">
+        {t("risk.varNow")} {f.num(p.varTotalUsd, 0)} USD{p.varLimitUsd != null && <> / {f.num(p.varLimitUsd, 0)} {p.varOver && <Badge tone="danger">{t("risk.over")}</Badge>}</>}
+        {p.currency.filter((c) => c.over).map((c) => <Badge key={c.currency} tone="danger" className="ml-1">{c.currency} {f.num(c.usd, 0)} &gt; {f.num(c.limitUsd ?? 0, 0)}</Badge>)}
+      </div>
+      {p.symbols.length === 0 && <div className="text-muted-foreground">{t("risk.previewNone")}</div>}
+      {p.symbols.length > 0 && (
+        <table className="w-full">
+          <thead><tr>{[t("risk.symbol"), t("risk.bBookNet"), t("risk.hedgeNow"), t("risk.hedgeTarget"), t("risk.delta"), t("risk.firstOrder"), "VaR"].map((h, i) => <th key={i} className="px-2 py-1 text-left font-medium text-muted-foreground">{h}</th>)}</tr></thead>
+          <tbody>
+            {p.symbols.map((r) => (
+              <tr key={r.symbol} className="border-t border-border/60 tabular-nums">
+                <td className="px-2 py-1 font-medium">{r.symbol}</td>
+                <td className="px-2 py-1">{f.num(r.bBookNetLots)}</td>
+                <td className="px-2 py-1">{f.num(r.hedgeLots)}</td>
+                <td className="px-2 py-1">{f.num(r.targetLots)}</td>
+                <td className="px-2 py-1">{r.deltaLots ? <Badge tone={Math.abs(r.deltaLots) >= 1 ? "warning" : "muted"}>{r.deltaLots > 0 ? "+" : ""}{f.num(r.deltaLots)}</Badge> : "—"}</td>
+                <td className="px-2 py-1">{r.firstOrder ? `${r.firstOrder.side.toUpperCase()} ${f.num(r.firstOrder.lots)}` : "—"}</td>
+                <td className="px-2 py-1">{r.varUsd == null ? "—" : f.num(r.varUsd, 0)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="mt-1 text-muted-foreground">{t("risk.previewMoves", { n: moves.length })}</div>
+    </div>
+  );
+}
+
+/** Parça 10b: dealer sends a broker hedge order to the LP by hand (MFA). */
+function ManualHedgeCard({ symbols }: { symbols: string[] }) {
+  const t = useT();
+  const actor = useActor();
+  const toast = useToast();
+  const mfaOk = useMfaOk();
+  const editable = actor.can("risk.edit") && mfaOk;
+  const [symbol, setSymbol] = React.useState("");
+  const [side, setSide] = React.useState<"buy" | "sell">("sell");
+  const [lots, setLots] = React.useState(0.1);
+  const [confirm, setConfirm] = React.useState(false);
+  const mut = useApiMutation((v: { symbol: string; side: "buy" | "sell"; lots: number }) => api().manualHedge(v, actor), () => { toast(t("risk.manualSent")); setConfirm(false); });
+  const sym = symbol || symbols[0] || "";
+  return (
+    <Card data-testid="manual-hedge">
+      <CardHeader><CardTitle>{t("risk.manual")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-xs text-muted-foreground">{t("risk.manualHint")}</p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Label>
+            {t("risk.symbol")}
+            <input className="rounded-md border border-border bg-background p-2 font-mono text-sm uppercase" list="manual-hedge-symbols" value={sym} onChange={(e) => setSymbol(e.target.value.toUpperCase())} disabled={!editable} data-testid="manual-hedge-symbol" />
+            <datalist id="manual-hedge-symbols">{symbols.map((s) => <option key={s} value={s} />)}</datalist>
+          </Label>
+          <SelectField label={t("risk.side")} value={side} options={["buy", "sell"] as const} onChange={setSide} disabled={!editable} />
+          <NumField label={t("positions.lots")} value={lots} onChange={(v) => setLots(Math.max(0.01, Math.round(v * 100) / 100))} step={0.1} disabled={!editable} />
+        </div>
+        {editable && !confirm && <div><Button variant="outline" onClick={() => setConfirm(true)} disabled={!sym || lots < 0.01} data-testid="manual-hedge-arm">{t("risk.manualArm")}</Button></div>}
+        {editable && confirm && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2 text-sm">
+            <span>{t("risk.manualConfirm", { side: side.toUpperCase(), lots, symbol: sym })}</span>
+            <Button onClick={() => mut.mutate({ symbol: sym, side, lots })} disabled={mut.isPending} data-testid="manual-hedge-send">{t("risk.manualSend")}</Button>
+            <Button variant="ghost" onClick={() => setConfirm(false)}>{t("common.cancel")}</Button>
+          </div>
+        )}
+        {!mfaOk && actor.can("risk.edit") && <p className="text-xs text-amber-600 dark:text-amber-400">{t("risk.manualMfa")}</p>}
       </CardContent>
     </Card>
   );

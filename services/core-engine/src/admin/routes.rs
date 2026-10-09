@@ -3,8 +3,9 @@
 
 use super::auth::{self, Actor, Claims, Role};
 use super::store::{
-    AdminCmd, AdminState, AdminUserRec, AlertSettings, BalanceKind, BalanceOp, FundingKind,
-    FundingMethod, FundingRequest, FundingStatus, KycDoc, OpStatus, PlatformUser, SettingsRec,
+    AdminCmd, AdminState, AdminUserRec, AlertRule, AlertSettings, BalanceKind, BalanceOp,
+    FundingKind, FundingMethod, FundingRequest, FundingStatus, KycDoc, OpStatus, PlatformUser,
+    SettingsRec,
 };
 use super::{need, views, AdminCtx, ApiError, ApiResult, ClientActor};
 use axum::extract::{Path, Query, State};
@@ -131,6 +132,13 @@ pub fn router() -> Router<AdminCtx> {
         .route("/v1/risk/margin-calls", get(margin_calls))
         .route("/v1/risk/presets", get(presets))
         .route("/v1/risk/hedge", get(hedge_get).put(hedge_put))
+        .route("/v1/risk/hedge/manual", post(hedge_manual))
+        .route("/v1/risk/hedge/preview", post(hedge_preview))
+        .route(
+            "/v1/alerts/rules",
+            get(alert_rules_get).put(alert_rules_put),
+        )
+        .route("/v1/alerts/rules/preview", post(alert_rules_preview))
         .route("/v1/settings/swap", get(swap_get).put(swap_put))
         .route("/v1/settings/swap/rollover", post(swap_rollover))
         .route("/v1/alerts", get(list_alerts))
@@ -3193,6 +3201,160 @@ async fn hedge_put(
     drop(store);
     ctx.notify(&["hedgePolicy", "exposure", "listAudit"]);
     Ok(Json(ctx.q(views::hedge_policy).await?))
+}
+
+#[derive(Deserialize)]
+struct ManualHedgeReq {
+    symbol: String,
+    /// `buy` | `sell`
+    side: String,
+    lots: f64,
+}
+
+/// Dealer sends a broker hedge order to the LP by hand (MFA required).
+async fn hedge_manual(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(req): Json<ManualHedgeReq>,
+) -> ApiResult {
+    need(&actor, "risk.edit")?;
+    if !actor.mfa_ok {
+        return Err(ApiError::forbidden("mfa"));
+    }
+    if !(req.lots >= 0.01 && req.lots <= 1000.0) {
+        return Err(ApiError::bad("lots must be 0.01..1000"));
+    }
+    let side = match req.side.as_str() {
+        "buy" => oms::Side::Buy,
+        "sell" => oms::Side::Sell,
+        _ => return Err(ApiError::bad("side must be buy or sell")),
+    };
+    let symbol = req.symbol.trim().to_uppercase();
+    let known = {
+        let s = symbol.clone();
+        ctx.q(move |e| e.symbol_spec(&s).is_some()).await?
+    };
+    if !known {
+        return Err(ApiError::bad("unknown symbol"));
+    }
+    let volume = Qty::from_raw((req.lots * 1e8).round() as i64);
+    let details = format!("{} {} {:.2} lots", req.side, symbol, req.lots);
+    let mut store = ctx.store.lock().await;
+    ctx.cmd(Command::ManualHedge {
+        symbol,
+        side,
+        volume,
+    })
+    .await?;
+    store.append(&actor, AdminCmd::ManualHedge { details })?;
+    drop(store);
+    ctx.notify(&["exposure", "listAudit", "lpExecutions"]);
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// What a hedge policy would do right now, before it is saved.
+async fn hedge_preview(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(policy): Json<risk::HedgePolicy>,
+) -> ApiResult {
+    need(&actor, "risk.view")?;
+    policy.validate().map_err(ApiError::bad)?;
+    Ok(Json(
+        ctx.q(move |e| views::hedge_preview(e, &policy)).await?,
+    ))
+}
+
+fn validate_rules(rules: &[AlertRule]) -> Result<(), ApiError> {
+    if rules.len() > 50 {
+        return Err(ApiError::bad("at most 50 rules"));
+    }
+    let mut ids = BTreeSet::new();
+    for r in rules {
+        if r.id.is_empty()
+            || r.id.len() > 32
+            || !r
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            || !ids.insert(r.id.clone())
+        {
+            return Err(ApiError::bad(
+                "rule ids must be unique, 1-32 chars [a-z0-9-_]",
+            ));
+        }
+        if !super::alerts::RULE_METRICS.contains(&r.metric.as_str()) {
+            return Err(ApiError::bad(format!("unknown metric {}", r.metric)));
+        }
+        if r.op != "gt" && r.op != "lt" {
+            return Err(ApiError::bad("op must be gt or lt"));
+        }
+        if !r.threshold.is_finite() || r.target.len() > 16 || r.title.len() > 80 {
+            return Err(ApiError::bad(
+                "threshold must be finite; target ≤ 16, title ≤ 80 chars",
+            ));
+        }
+        if !["info", "warning", "critical"].contains(&r.severity.as_str()) {
+            return Err(ApiError::bad("severity must be info, warning or critical"));
+        }
+    }
+    Ok(())
+}
+
+async fn eval_rules(ctx: &AdminCtx, rules: Vec<AlertRule>) -> Result<Value, ApiError> {
+    let st = ctx.view_state().await;
+    let lp_latency = super::alerts::lp_latencies(ctx);
+    let now_ns = domain::now_ns();
+    let (evals, conditions) = ctx
+        .q(move |e| super::alerts::rule_conditions(e, &st, now_ns, &lp_latency, &rules))
+        .await?;
+    Ok(json!({
+        "evals": evals,
+        "firing": conditions.iter().map(|c| json!({ "id": c.target, "severity": c.severity, "title": c.title, "detail": c.detail })).collect::<Vec<_>>(),
+    }))
+}
+
+/// Dealer-defined alert rules with their current readings.
+async fn alert_rules_get(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {
+    need(&actor, "dashboard.view")?;
+    let rules = ctx.view_state().await.alert_rules.clone();
+    let mut v = eval_rules(&ctx, rules.clone()).await?;
+    v["rules"] = json!(rules);
+    v["metrics"] = json!(super::alerts::RULE_METRICS);
+    Ok(Json(v))
+}
+
+async fn alert_rules_put(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(rules): Json<Vec<AlertRule>>,
+) -> ApiResult {
+    need(&actor, "settings.edit")?;
+    validate_rules(&rules)?;
+    let mut store = ctx.store.lock().await;
+    store.append(
+        &actor,
+        AdminCmd::AlertRulesSaved {
+            rules: rules.clone(),
+        },
+    )?;
+    drop(store);
+    ctx.notify(&["alertRules", "listAudit"]);
+    let mut v = eval_rules(&ctx, rules.clone()).await?;
+    v["rules"] = json!(rules);
+    v["metrics"] = json!(super::alerts::RULE_METRICS);
+    Ok(Json(v))
+}
+
+/// Which of the proposed rules would fire right now (nothing saved).
+async fn alert_rules_preview(
+    State(ctx): State<AdminCtx>,
+    actor: Actor,
+    Json(rules): Json<Vec<AlertRule>>,
+) -> ApiResult {
+    need(&actor, "settings.view")?;
+    validate_rules(&rules)?;
+    Ok(Json(eval_rules(&ctx, rules).await?))
 }
 
 async fn swap_get(State(ctx): State<AdminCtx>, actor: Actor) -> ApiResult {

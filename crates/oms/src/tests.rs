@@ -3332,3 +3332,29 @@ fn last_look_holds_api_orders_and_rejects_stale_price_picking() {
     });
     assert_eq!(h.e.order(id3).unwrap().status, OrderStatus::Cancelled);
 }
+
+#[test]
+fn manual_hedge_sends_a_broker_order_and_books_it_pending() {
+    let mut h = H::new(EngineConfig::default());
+    h.cmd(Command::ManualHedge {
+        symbol: "EURUSD".into(),
+        side: Side::Sell,
+        volume: qty("0.5"),
+    });
+    let sent = h.router.take();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].volume, qty("0.5"));
+    assert_eq!(h.e.hedge_pending("EURUSD"), -50_000_000);
+    // unknown symbol / zero volume: ignored
+    h.cmd(Command::ManualHedge {
+        symbol: "NOPE".into(),
+        side: Side::Buy,
+        volume: qty("1"),
+    });
+    h.cmd(Command::ManualHedge {
+        symbol: "EURUSD".into(),
+        side: Side::Buy,
+        volume: qty("0"),
+    });
+    assert!(h.router.take().is_empty());
+}

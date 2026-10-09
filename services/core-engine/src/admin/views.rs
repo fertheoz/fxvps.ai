@@ -292,6 +292,57 @@ pub fn currency_exposure(e: &Engine) -> Value {
 }
 
 /// B-book exposure / auto-hedge policy (`GET /v1/risk/hedge`), lots as floats.
+/// Change impact of a hedge policy before it is saved (parça 10b): per symbol
+/// the broker hedge now and under `h`, the order the rebalancer would send
+/// first, VaR against the proposed cap, currency legs against the proposed
+/// limits.
+pub fn hedge_preview(e: &Engine, h: &risk::HedgePolicy) -> Value {
+    let lots = |raw: i64| raw as f64 / 1e8;
+    let mut rows = Vec::new();
+    for s in e.symbols() {
+        let net = e.b_book_net(&s.symbol);
+        let cur = e.hedge_net(&s.symbol) + e.hedge_pending(&s.symbol);
+        if net == 0 && cur == 0 {
+            continue;
+        }
+        let target = e.hedge_target(h, &s.symbol).unwrap_or(cur);
+        let delta = (target - cur) / 1_000_000 * 1_000_000;
+        let first = h
+            .slice_lots
+            .map(|q| delta.clamp(-q.raw(), q.raw()))
+            .unwrap_or(delta);
+        rows.push(json!({
+            "symbol": s.symbol,
+            "bBookNetLots": lots(net),
+            "hedgeLots": lots(cur),
+            "targetLots": lots(target),
+            "deltaLots": lots(delta),
+            "firstOrder": (first != 0).then(|| json!({ "side": if first > 0 { "buy" } else { "sell" }, "lots": lots(first.abs()) })),
+            "limitLots": h.enabled.then(|| h.symbol_limit(&s.symbol)).flatten().map(qty_f),
+            "varUsd": e.var_symbol_usd(&s.symbol).map(|m| m.minor as f64 / 100.0),
+        }));
+    }
+    let var_total = e.var_total_usd().minor as f64 / 100.0;
+    let currency: Vec<Value> = e
+        .currency_exposure()
+        .iter()
+        .filter_map(|(c, (_, usd))| {
+            let usd = *usd as f64 / 100.0;
+            let limit = h.currency_limits_usd.get(c.as_str()).copied();
+            (limit.is_some() || usd.abs() > 0.0).then(|| {
+                json!({ "currency": c.as_str(), "usd": usd, "limitUsd": limit, "over": limit.is_some_and(|l| usd.abs() > l as f64) })
+            })
+        })
+        .collect();
+    json!({
+        "symbols": rows,
+        "varTotalUsd": var_total,
+        "varLimitUsd": h.var_limit_usd,
+        "varOver": h.var_limit_usd.is_some_and(|l| var_total > l as f64),
+        "currency": currency,
+    })
+}
+
 pub fn hedge_policy(e: &Engine) -> Value {
     let h = e.hedge_policy();
     let lots = |q: Option<Qty>| q.map(qty_f);

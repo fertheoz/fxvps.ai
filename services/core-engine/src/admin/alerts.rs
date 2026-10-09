@@ -5,6 +5,7 @@
 //! resolves it. The console shows the active list and a short history.
 
 use super::activity::{self, AccountActivity, IpActivity};
+use super::store::AlertRule;
 use super::{store::AdminCmd, views, AdminCtx};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -564,6 +565,194 @@ fn night_watch_lines() -> String {
     out
 }
 
+/// Metrics a dealer-defined rule can read (parça 10b).
+pub const RULE_METRICS: [&str; 11] = [
+    "exposure_net_lots",
+    "unhedged_b_lots",
+    "b_book_net_lots",
+    "var_total_usd",
+    "var_symbol_usd",
+    "currency_exposure_usd",
+    "margin_calls",
+    "stop_outs",
+    "orders_per_min",
+    "open_positions",
+    "lp_latency_ms",
+];
+
+/// One rule's current reading.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleEval {
+    pub id: String,
+    pub value: Option<f64>,
+    pub fired: bool,
+}
+
+/// Current value of `metric` for `target` ("" = whole book: the largest
+/// absolute symbol / currency value). `None`: unknown metric or target.
+fn metric_value(
+    e: &oms::Engine,
+    admin: &super::store::AdminState,
+    now_ns: u64,
+    lp_latency: &BTreeMap<String, u64>,
+    metric: &str,
+    target: &str,
+) -> Option<f64> {
+    let pick = |rows: Vec<(String, f64)>| -> Option<f64> {
+        if target.is_empty() {
+            rows.iter()
+                .map(|(_, v)| v.abs())
+                .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))))
+        } else {
+            rows.iter().find(|(k, _)| k == target).map(|(_, v)| v.abs())
+        }
+    };
+    match metric {
+        "exposure_net_lots" | "unhedged_b_lots" | "b_book_net_lots" => {
+            let key = match metric {
+                "exposure_net_lots" => "netLots",
+                "unhedged_b_lots" => "unhedgedBLots",
+                _ => "bBookLots",
+            };
+            let Value::Array(rows) = views::exposure(e) else {
+                return None;
+            };
+            pick(
+                rows.iter()
+                    .map(|r| {
+                        (
+                            r["symbol"].as_str().unwrap_or_default().to_string(),
+                            r[key].as_f64().unwrap_or(0.0),
+                        )
+                    })
+                    .collect(),
+            )
+        }
+        "var_total_usd" => Some(e.var_total_usd().minor as f64 / 100.0),
+        "var_symbol_usd" => pick(
+            e.symbols()
+                .filter_map(|s| {
+                    e.var_symbol_usd(&s.symbol)
+                        .map(|m| (s.symbol.clone(), m.minor as f64 / 100.0))
+                })
+                .collect(),
+        ),
+        "currency_exposure_usd" => pick(
+            e.currency_exposure()
+                .iter()
+                .map(|(c, (_, usd))| (c.as_str().to_string(), *usd as f64 / 100.0))
+                .collect(),
+        ),
+        "margin_calls" | "stop_outs" => {
+            let want = if metric == "margin_calls" {
+                "margin_call"
+            } else {
+                "stop_out"
+            };
+            let Value::Array(rows) = views::margin_calls(e, admin) else {
+                return None;
+            };
+            Some(rows.iter().filter(|r| r["state"] == want).count() as f64)
+        }
+        "orders_per_min" => {
+            let since = now_ns.saturating_sub(60_000_000_000);
+            Some(
+                e.orders()
+                    .filter(|o| o.created_ts >= since && o.origin == oms::OrderOrigin::Client)
+                    .count() as f64,
+            )
+        }
+        "open_positions" => Some(e.positions().count() as f64),
+        "lp_latency_ms" => pick(
+            lp_latency
+                .iter()
+                .map(|(k, v)| (k.clone(), *v as f64))
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// Evaluates dealer-defined rules: readings for the console and a condition
+/// per rule that fires (kind `rule`, target = rule id).
+pub fn rule_conditions(
+    e: &oms::Engine,
+    admin: &super::store::AdminState,
+    now_ns: u64,
+    lp_latency: &BTreeMap<String, u64>,
+    rules: &[AlertRule],
+) -> (Vec<RuleEval>, Vec<Condition>) {
+    let mut evals = Vec::new();
+    let mut out = Vec::new();
+    for r in rules {
+        let value = metric_value(e, admin, now_ns, lp_latency, &r.metric, &r.target);
+        let fired = r.enabled
+            && value.is_some_and(|v| {
+                if r.op == "lt" {
+                    v < r.threshold
+                } else {
+                    v > r.threshold
+                }
+            });
+        evals.push(RuleEval {
+            id: r.id.clone(),
+            value,
+            fired,
+        });
+        if fired {
+            let severity = match r.severity.as_str() {
+                "critical" => Severity::Critical,
+                "info" => Severity::Info,
+                _ => Severity::Warning,
+            };
+            let what = if r.target.is_empty() {
+                r.metric.clone()
+            } else {
+                format!("{} {}", r.metric, r.target)
+            };
+            out.push(Condition {
+                kind: "rule",
+                target: r.id.clone(),
+                severity,
+                title: if r.title.trim().is_empty() {
+                    format!(
+                        "{what} {} {}",
+                        if r.op == "lt" { "<" } else { ">" },
+                        r.threshold
+                    )
+                } else {
+                    r.title.clone()
+                },
+                detail: format!("{what} = {:.2} (rule {})", value.unwrap_or(f64::NAN), r.id),
+            });
+        }
+    }
+    (evals, out)
+}
+
+/// Market-data latency per LP from the gateway status table (for `lp_latency_ms`).
+pub fn lp_latencies(ctx: &AdminCtx) -> BTreeMap<String, u64> {
+    let mut m = BTreeMap::new();
+    if let Some(rows) = ctx
+        .lp_status
+        .as_ref()
+        .and_then(|s| s.read().ok().map(|t| t.clone()))
+    {
+        for r in rows {
+            if r.kind == fix_gateway::SessionKind::MarketData {
+                let lp = if r.lp.is_empty() {
+                    r.target_comp_id.clone()
+                } else {
+                    r.lp.clone()
+                };
+                m.insert(lp, r.latency_ms);
+            }
+        }
+    }
+    m
+}
+
 /// Account-behaviour conditions (parça 10a): one warning per flagged account
 /// and per brute-forcing IP.
 pub fn behavior_conditions(accounts: &[AccountActivity], ips: &[IpActivity]) -> Vec<Condition> {
@@ -643,9 +832,14 @@ pub fn spawn(ctx: AdminCtx) {
                     ctx.notify(&["listPlatformUsers"]);
                 }
             }
+            let lp_latency = lp_latencies(&ctx);
             let Ok(mut conditions) = ctx
                 .engine
-                .read(move |e| engine_conditions(e, &st, now_ns))
+                .read(move |e| {
+                    let mut c = engine_conditions(e, &st, now_ns);
+                    c.extend(rule_conditions(e, &st, now_ns, &lp_latency, &st.alert_rules).1);
+                    c
+                })
                 .await
             else {
                 break;

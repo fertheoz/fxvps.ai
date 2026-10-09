@@ -2,7 +2,8 @@ import { BalanceOpRequest, Group as GroupSchema, Settings as SettingsSchema, Sym
 import type { AdminUser, AuditEntry, Client, Group, Settings, SymbolSpec } from "../schemas";
 import { balancePermission, can } from "../rbac";
 import { formatMoney } from "../money";
-import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, ReconciliationRow, Statement, SymbolExposure, IbPayoutPreview, AccountActivity, ActivityEvent, PlatformUser } from "./types";
+import type { Actor, AdminApi, ApprovalRequest, EconEvent, EconEventInput, RoutingRule, RulesDryRun, LpConfig, HedgePolicy, ClientFlowRow, SwapConfig, Alert, FundingRequest, KycDocMeta, AlertSettings, TradingCalendar, RuleVersionMeta, Tenant, LpAggregation, LpAggregationInput, LpPolicyRuntime, LpReportRow, BalanceOpResult, DashboardBucket, DashboardRange, DashboardSeries, DashboardStats, DashboardTotals, ExecutionReport, ExecutionRow, ExecutionSummary, LpExecution, MarginCallRow, RevenueReport, RevenueRow, ReconciliationRow, Statement, SymbolExposure, IbPayoutPreview, AccountActivity, ActivityEvent, PlatformUser, AlertRule } from "./types";
+import { RULE_METRICS } from "./types";
 import { mulberry32, notionalMinor, positionPnlMinor, seed, SEED_NOW, type SeedData } from "./seed";
 
 let mockRules: RoutingRule[] = [
@@ -32,6 +33,7 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
 
   let lpConfig: LpConfig | null = null;
   let tenants: Tenant[] = [{ id: "fxvps", name: "fxvps.ai", groups: ["demo-retail", "demo-hedge"], hostnames: ["trade.fxvps.ai", "console.fxvps.ai"] }];
+  let alertRules: AlertRule[] = [{ id: "var-cap", enabled: true, metric: "var_total_usd", target: "", op: "gt", threshold: 50_000, severity: "critical", title: "Book VaR over 50k" }];
   const platformUsers: PlatformUser[] = [
     { institution: "demo-broker", login: 500123, name: "Ayşe Kaya", email: "ayse@example.com", phone: "+90 555 000 0001", country: "TR", city: "İstanbul", address: "Levent Mah. 12", group: "real\\pro", server: "MT5-Demo", leverage: 100, balance: 12_500.5, currency: "USD", registeredAt: "2026-09-01T10:00:00Z", lastLoginAt: new Date(Date.now() - 3_600_000).toISOString(), lastIp: "85.100.1.2", status: "active", comment: "", extra: { agent: "IB-7", zip: "34330" }, updatedMs: Date.now() - 60_000 },
     { institution: "demo-broker", login: 500124, name: "John Smith", email: "john@example.com", phone: "+44 7700 900001", country: "GB", city: "London", address: "1 Fleet St", group: "real\\standard", server: "MT5-Demo", leverage: 30, balance: 900, currency: "EUR", registeredAt: "2026-07-14T09:30:00Z", lastLoginAt: new Date(Date.now() - 86_400_000).toISOString(), lastIp: "31.1.1.1", status: "active", comment: "KYC pending", extra: {}, updatedMs: Date.now() - 600_000 },
@@ -263,6 +265,19 @@ export function createMockApi(opts: { seed?: number; latencyMs?: number } = {}):
       return delay({ active: alerts.filter((x) => !x.resolvedAt), recent: alerts.filter((x) => x.resolvedAt) });
     },
     async hedgePolicy() { return delay(hedge); },
+    async manualHedge(req, actor) { guard(actor, "risk.edit"); audit(actor, "risk.manualHedge", "lp", `${req.side} ${req.symbol} ${req.lots} lots`); return delay({ ok: true }); },
+    async previewHedgePolicy(p) {
+      const sym = (symbol: string, net: number, cur: number) => {
+        const limit = p.symbolLimits[symbol] ?? p.defaultSymbolLimit;
+        const target = p.enabled && p.mode === "hedge_excess" && limit != null && Math.abs(net) > limit ? -(net - Math.sign(net) * limit) * p.hedgeRatioPct / 100 : cur;
+        const delta = Math.round((target - cur) * 100) / 100;
+        return { symbol, bBookNetLots: net, hedgeLots: cur, targetLots: target, deltaLots: delta, firstOrder: delta ? { side: delta > 0 ? "buy" as const : "sell" as const, lots: Math.abs(delta) } : null, limitLots: limit ?? null, varUsd: Math.abs(net) * 900 };
+      };
+      return delay({ symbols: [sym("EURUSD", 12.4, -2), sym("XAUUSD", -3.1, 0)], varTotalUsd: 13_950, varLimitUsd: p.varLimitUsd ?? null, varOver: p.varLimitUsd != null && 13_950 > p.varLimitUsd, currency: [{ currency: "EUR", usd: 1_364_000, limitUsd: p.currencyLimitsUsd?.EUR ?? null, over: (p.currencyLimitsUsd?.EUR ?? Infinity) < 1_364_000 }] });
+    },
+    async alertRules() { return delay({ rules: alertRules, metrics: [...RULE_METRICS], evals: alertRules.map((r) => ({ id: r.id, value: 7.5, fired: r.enabled && (r.op === "gt" ? 7.5 > r.threshold : 7.5 < r.threshold) })), firing: [] }); },
+    async saveAlertRules(rules, actor) { guard(actor, "settings.edit"); alertRules = rules; audit(actor, "alerts.rules", "alerts", `${rules.length} rule(s)`); return delay({ rules: alertRules, metrics: [...RULE_METRICS], evals: alertRules.map((r) => ({ id: r.id, value: 7.5, fired: false })), firing: [] }); },
+    async previewAlertRules(rules) { return delay({ evals: rules.map((r) => ({ id: r.id, value: 7.5, fired: r.enabled && (r.op === "gt" ? 7.5 > r.threshold : 7.5 < r.threshold) })), firing: rules.filter((r) => r.enabled && (r.op === "gt" ? 7.5 > r.threshold : 7.5 < r.threshold)).map((r) => ({ id: r.id, severity: r.severity, title: r.title || `${r.metric} ${r.op} ${r.threshold}`, detail: `${r.metric} = 7.50` })) }); },
     async saveHedgePolicy(p: HedgePolicy, actor) {
       guard(actor, "risk.edit");
       hedge = p;
