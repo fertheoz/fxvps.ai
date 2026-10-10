@@ -135,6 +135,7 @@ trading süreci kapalıyken gelen icra Denetçi farkı olarak görünür.
 | 13 | **Tik ambarı + analitik** | oneZero/MahiFX | kotasyon/derinlik/işlem → sütunlu ambar; markout, likidite-zaman haritası, VaR girdisi, "bu ayarla dün gelir ne olurdu" |
 | 14 | **Algoritmik fiyatlama modülü** | oneZero/MahiFX | broker'ın kendi fiyat/skew algoritması, sandbox'ta, hot-swap |
 | 14b | **Dahili eşleştirme** | Your Bourse | aynı sembolde ters yönlü müşteri akışını LP'ye gitmeden içeride eşleştir; spread kârı tamamen bizde; omnibus yalnız net fazlayı taşır; Denetçi değişmezi korunur (kurucu: "bu özellikle çok güzel") |
+| 16 | **Müşteri robotları** | TradingView/MT5 | kademe 1: TradingView uyarı webhook'u → REST (`docs/15`); kademe 2: terminal içi sandbox strateji betiği + backtest sekmesi; kademe 3: sunucuda barındırma |
 | 15 | **Anlaşma anı kitap anlık görüntüsü** | PrimeXM | LP emri anında birleşik 5 seviye kitap `LpOrder`'a; icra raporunda görüntüle |
 
 ## 3. Teknoloji kararları ("en ileri stack", tek kişilik işletim)
