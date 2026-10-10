@@ -541,3 +541,88 @@ async fn orders_positions_and_idempotency_against_the_core() {
 
     demo.shutdown().await;
 }
+
+/// TradingView alerts carry the token in the body and may be delivered twice.
+#[tokio::test]
+async fn tradingview_webhook_opens_replays_and_closes() {
+    let cfg = ClientGatewayConfig {
+        rest_requests_per_second: 1_000,
+        rest_burst: 1_000,
+        ..Default::default()
+    };
+    let demo = Demo::start_with(
+        cfg,
+        Authenticator::hs256(KEY),
+        DemoOptions {
+            tick_ms: Some(20),
+            volatility_ticks: Some(1),
+            data_dir: None,
+        },
+    )
+    .await
+    .unwrap();
+    let api = Api::new(serve(demo.hub.clone()).await);
+    let t = key_token(&["DEMO-H1"], "trade");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let (s, _) = api.get("/quotes/EURUSD", &t).await;
+        if s == StatusCode::OK {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no quote");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // no bearer header at all: the token is in the body
+    let alert = json!({ "token": t, "symbol": "EURUSD", "side": "buy", "qty": "100000", "client_order_id": "tv-2026-10-10T12:00:00Z" });
+    let (s, v) = api
+        .call(
+            Method::POST,
+            "/webhooks/tradingview",
+            None,
+            Some(alert.clone()),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["action"], "open");
+    let (s, v) = api
+        .call(Method::POST, "/webhooks/tradingview", None, Some(alert))
+        .await;
+    assert_eq!(
+        (s, v["replayed"].as_bool()),
+        (StatusCode::OK, Some(true)),
+        "{v}"
+    );
+    let (s, v) = api
+        .call(
+            Method::POST,
+            "/webhooks/tradingview",
+            None,
+            Some(json!({ "token": "nope", "symbol": "EURUSD", "side": "buy", "qty": "1" })),
+        )
+        .await;
+    assert_eq!((s, code(&v)), (StatusCode::UNAUTHORIZED, "unauthenticated"));
+    let (s, v) = api
+        .call(
+            Method::POST,
+            "/webhooks/tradingview",
+            None,
+            Some(json!({ "token": t, "action": "dance" })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    // the market order fills in the demo; close everything on the symbol
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let (_, v) = api.get("/positions?account=DEMO-H1", &t).await;
+        if v["positions"].as_array().is_some_and(|p| !p.is_empty()) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no position");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let (s, v) = api
+        .call(Method::POST, "/webhooks/tradingview", None, Some(json!({ "token": t, "action": "close", "symbol": "EURUSD", "client_order_id": "tv-close-1" })))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["closed"].as_array().map(Vec::len), Some(1), "{v}");
+}

@@ -55,6 +55,7 @@ pub fn router() -> Router<Arc<Hub>> {
         .route("/positions/{id}/close", post(close_position))
         .route("/orders", get(orders).post(place_order))
         .route("/orders/{id}", patch(modify_order).delete(cancel_order))
+        .route("/webhooks/tradingview", post(tradingview_webhook))
         .route("/deals", get(deals))
         .route("/symbols", get(symbols))
         .route("/quotes/{symbol}", get(quote))
@@ -1013,6 +1014,170 @@ struct PlaceBody {
     max_deviation_points: Option<u32>,
     #[serde(default)]
     client_order_id: Option<String>,
+}
+
+/// TradingView alert webhook body (parça 16, kademe 1). TradingView sends no
+/// headers, so the API-key token travels in the body and the alert message
+/// *is* this JSON. `action`: `open` (default; a market / limit / stop order
+/// exactly like `POST /orders`) or `close` (every position of the account on
+/// `symbol`, or `position_id` only). Idempotent per `client_order_id` (use
+/// `{{timenow}}` in the alert).
+#[derive(Deserialize)]
+struct TvBody {
+    token: String,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
+    account: Option<String>,
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    side: Option<String>,
+    #[serde(rename = "type", default)]
+    order_type: Option<String>,
+    #[serde(default)]
+    qty: Option<Num>,
+    #[serde(default)]
+    limit_price: Option<Num>,
+    #[serde(default)]
+    stop_price: Option<Num>,
+    #[serde(default)]
+    sl: Option<Num>,
+    #[serde(default)]
+    tp: Option<Num>,
+    #[serde(default)]
+    tif: Option<String>,
+    #[serde(default)]
+    position_id: Option<String>,
+    #[serde(default)]
+    client_order_id: Option<String>,
+}
+
+async fn tradingview_webhook(
+    State(hub): State<Arc<Hub>>,
+    crate::PeerIp(ip): crate::PeerIp,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> ApiResult {
+    let b: TvBody = body(&bytes)?;
+    let claims = hub.auth.verify(b.token.trim()).map_err(|e| {
+        hub.metrics.auth_failures.inc();
+        tracing::debug!(error = %e, "TradingView webhook token rejected");
+        ApiError::unauthenticated("invalid token")
+    })?;
+    if !hub.allow_rest(&claims) {
+        return Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "request rate limit exceeded",
+        ));
+    }
+    hub.metrics.rest_requests.inc();
+    let account = target_account(&claims, b.account.as_deref())?;
+    hub.authorize_trade(&claims, &account)?;
+    let symbol = b
+        .symbol
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_uppercase);
+    let clid = client_order_id(b.client_order_id, &headers)?;
+    match b.action.as_deref().map(str::trim).unwrap_or("open") {
+        "close" => {
+            need_core(&hub)?;
+            let snap = hub.account_snapshot(&account).await.ok_or_else(|| {
+                ApiError::new(StatusCode::NOT_FOUND, "unknown_account", "unknown account")
+            })?;
+            let targets: Vec<String> = snap
+                .positions
+                .iter()
+                .filter(|p| {
+                    b.position_id
+                        .as_deref()
+                        .is_none_or(|id| p.position_id == id)
+                })
+                .filter(|p| {
+                    symbol
+                        .as_deref()
+                        .is_none_or(|s| p.symbol.eq_ignore_ascii_case(s))
+                })
+                .map(|p| p.position_id.clone())
+                .collect();
+            let mut closed = Vec::new();
+            for (i, pid) in targets.iter().enumerate() {
+                let id = if targets.len() == 1 {
+                    clid.clone()
+                } else {
+                    format!("{clid}-{i}")
+                };
+                match hub.close_position(&account, pid, None, &id).await {
+                    Ok(order_id) => closed.push(json!({
+                        "position_id": pid, "order_id": order_id.to_string(), "client_order_id": id,
+                    })),
+                    Err(e) if e.is_duplicate_order() => closed.push(
+                        json!({ "position_id": pid, "client_order_id": id, "replayed": true }),
+                    ),
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            ok(
+                StatusCode::OK,
+                json!({ "account": account, "action": "close", "closed": closed }),
+            )
+        }
+        "open" => {
+            let symbol = symbol.ok_or_else(|| ApiError::bad_request("symbol required"))?;
+            let side = side(
+                b.side
+                    .as_deref()
+                    .ok_or_else(|| ApiError::bad_request("side required"))?,
+            )?;
+            let qty = b
+                .qty
+                .ok_or_else(|| ApiError::bad_request("qty required"))?
+                .0;
+            let order = NewOrder {
+                request_id: clid.clone(),
+                account_id: account.clone(),
+                symbol,
+                side,
+                ord_type: order_kind(b.order_type.as_deref())?,
+                qty,
+                limit_price: b.limit_price.map(|n| n.0),
+                tif: tif(b.tif.as_deref())?,
+                stop_price: b.stop_price.map(|n| n.0),
+                sl: b.sl.map(|n| n.0),
+                tp: b.tp.map(|n| n.0),
+                trailing_distance: None,
+                oco_group: None,
+                expire_at_ns: None,
+                max_deviation_points: None,
+                platform: core_engine::api::Platform::Api,
+                ip: ip.map(|i| i.to_string()),
+            };
+            match hub.place_order(order).await {
+                Ok(order_id) => ok(
+                    StatusCode::CREATED,
+                    json!({
+                        "order_id": order_id.to_string(),
+                        "client_order_id": clid,
+                        "account": account,
+                        "action": "open",
+                        "replayed": false,
+                    }),
+                ),
+                // the same alert delivered twice (TradingView retries): once is enough
+                Err(e) if e.is_duplicate_order() => ok(
+                    StatusCode::OK,
+                    json!({ "client_order_id": clid, "account": account, "action": "open", "replayed": true }),
+                ),
+                Err(e) => Err(e.into()),
+            }
+        }
+        other => Err(ApiError::bad_request(format!(
+            "unknown action {other:?} (open | close)"
+        ))),
+    }
 }
 
 /// A command whose client order id the engine already holds: answer from the
