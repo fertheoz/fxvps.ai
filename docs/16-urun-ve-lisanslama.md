@@ -1,6 +1,6 @@
 # fxvps.ai — Ürün Ailesi, Modül Kataloğu ve Lisanslama Modeli
 
-Sürüm: 1.0 — 12 Ekim 2026. Sahibi: kurucu. Bu belge, depodaki canlı yazılımı (main, #203–#222 dahil) **satılabilir, lisanslanabilir ürün modülleri** olarak adlandırır, her modülün teknoloji/kapasite/piyasa karşılığını verir ve aylık icra-politikası lisansından tam white-label/marka devrine kadar kademeli lisanslama yelpazesini tanımlar. Her modül depodaki çalışma alanına atıfla fiyatlanır; yeni modüller ek lisans sözleşmesiyle yelpazeye eklenir (bkz. §7).
+Sürüm: 1.1 — 12 Ekim 2026 (1.1: mülkiyet/marka/türev eser düzeltmeleri, Taraf 2 mutabakatı). Sahibi: kurucu. Bu belge, depodaki canlı yazılımı (main, #203–#222 dahil) **satılabilir, lisanslanabilir ürün modülleri** olarak adlandırır, her modülün teknoloji/kapasite/piyasa karşılığını verir ve aylık icra-politikası lisansından tam white-label/marka devrine kadar kademeli lisanslama yelpazesini tanımlar. Her modül depodaki çalışma alanına atıfla fiyatlanır; yeni modüller ek lisans sözleşmesiyle yelpazeye eklenir (bkz. §7).
 
 ---
 
@@ -116,13 +116,14 @@ Bilinen boşluklar (dürüst): MT5 eklentisinin kendisi (plan var, `docs/11`), �
 | L3 | **Nexus Prime** | Aylık/yıllık, barındırılan; tam platform (terminal + konsol + kimlik + copy + MT5 köprü) | L2 + NX-TERM (web/PWA, masaüstü, mobil kabuk), NX-CONSOLE, NX-ID, NX-COPY, NX-MT5 (1 kurum) | 10.000 hesap, 5 LP, 50.000 lot/ay; aşan 1 $/lot; ek kurum 1.500 $/ay | **19.900 $/ay** veya **199.000 $/yıl** + kurulum 25.000 $ | 12/24 ay |
 | L4 | **Nexus White Label** | Yıllık; müşterinin markası, alan adı, renkleri; ayrı tenant; 7/24 SLA; özel yayın penceresi | L3 tamamı + tenant markalama, ayrı web sitesi/terminal alan adı, özel e-posta/ekstre şablonları, API anahtarı tahsisi, özel raporlar | 50.000 hesap, 10 LP, 250.000 lot/ay; aşan 0,6 $/lot | **24.900 $/ay** veya **249.000 $/yıl** + kurulum 35.000 $ | 24 ay |
 | L5 | **Nexus Enterprise (kendi altyapısı)** | Yıllık; müşterinin bulutunda/veri merkezinde kurulum, iki bölge, mavi/yeşil, DR tatbikatı; kaynak erişimi (salt-okunur, escrow) | L4 + NX-OPS devri, dağıtım betikleri, izleme, felaket kurtarma; kaynak kodu escrow; güvenlik incelemesi raporu | sınırsız hesap; 15 LP; 1M lot/ay; aşan 0,3 $/lot | **480.000 $/yıl** + kurulum 120.000 $ | 36 ay |
-| L6 | **Nexus Sovereign (marka ve isim hakkı devri)** | Çok yıllık/kalıcı; tam kullanım serbestisi, bölgesel münhasırlık, kendi markasıyla alt-lisanslama hakkı, isim hakkı devri seçeneği | Tüm modüller + kaynak kodu (değiştirme hakkı), yeni modüllerde ilk erişim, eğitim/teknoloji transferi, 12 ay yerinde mühendis | sınırsız; münhasırlık: ülke/bölge başına | **1.200.000 $/yıl (min 3 yıl)** veya **kalıcı lisans 3.500.000 $** + yıllık bakım %18 | 3+ yıl / kalıcı |
+| L6 | **Nexus Sovereign (bölgesel münhasırlık ve marka kullanım lisansı)** | Çok yıllık/kalıcı; tam kullanım serbestisi, bölgesel münhasırlık, kendi markasıyla alt-lisanslama hakkı, marka kullanım lisansı (bölgesel, süreli; devir değil) — Baş Lisans Veren'in yazılı ön onayına tabi | Tüm modüller + kaynak koduna erişim ve değiştirme lisansı (türev eserler grant-back ile Baş Lisans Veren'e döner), yeni modüllerde ilk erişim, eğitim/teknoloji transferi, 12 ay yerinde mühendis | sınırsız; münhasırlık: ülke/bölge başına | **1.200.000 $/yıl (min 3 yıl)** veya **kalıcı lisans 3.500.000 $** + yıllık bakım %18 | 3+ yıl / kalıcı |
 
 Ek kurallar:
 - **Hacim katmanı:** aylık lot aşımı faturaya eklenir; yıllık ödemede %10 indirim; 24 ay sözleşmede kurulum ücreti yarıya iner.
 - **SLA:** L1–L2 iş günü 9/5, %99,5; L3 7/24 kritik, %99,9; L4+ %99,95, 15 dk müdahale, aylık rapor, kredi: her 0,1 puan için fatura %5.
 - **Güncellemeler:** sürüm güncellemeleri tüm kademelerde dahil; **yeni modüller** §7'ye göre ayrı lisanslanır (L6 ilk 12 ay ücretsiz dahil).
 - **Veri:** müşteri verisi müşterinindir; L4+ ayrı tenant/veri tabanı; L5+ veri tamamen müşteride.
+- **Mülkiyet ve onay zinciri:** yazılımın ve markaların mülkiyeti Baş Lisans Veren'de (Ferdi Özkurnaz); IPROYALTY FZCO inhisari lisans alan ve alt-lisans verendir; hiçbir kademede mülkiyet devredilmez. L1–L5 IPR takdirinde (liste fiyatından en çok ‑%20); L5'te kaynak erişimi/escrow Baş Lisans Veren'e bildirim; L6, kalıcı lisans, bölgesel münhasırlık, marka kullanım lisansı ve alt-lisanslama hakkı Baş Lisans Veren'in yazılı ön onayına tabidir. Alt-lisans alanın türev eserleri grant-back ile Baş Lisans Veren'e lisanslanır/devredilir.
 
 ---
 
@@ -183,8 +184,8 @@ Toplam ~110k satır Rust/TypeScript, 2 canlı LP oturumu (LMAX), 4 canlı alan a
 
 ## 8. Sözleşme iskeleti (hukuk ekibine devredilecek)
 
-- **Ana Lisans Sözleşmesi (MLA):** taraflar, tanımlar (modül, tenant, hesap, lot, LP), lisans kapsamı ve kademe, ölçüm ve faturalama, SLA eki, destek eki, güncelleme/yeni modül eki (§7), fikri mülkiyet (kaynak kodu mülkiyeti bizde; L6'da devir/alt-lisans hakkı), gizlilik, veri işleme (DPA, KVKK/GDPR), sorumluluk sınırı (12 aylık ücret), mücbir sebep, fesih ve geçiş (veri dışa aktarımı 90 gün), uygulanacak hukuk/tahkim (DIFC-LCIA veya ICC).
-- **Ekler:** A) Modül kataloğu (bu belge §1–2), B) Fiyat listesi (§4–5), C) SLA, D) Destek ve yayın takvimi, E) Güvenlik ve DR (docs/06, 09), F) Kabul testleri (yük sınavı, Denetçi 0 olay, e2e), G) Escrow (L5+), H) Marka kullanım kılavuzu (L4+), I) Münhasırlık ve isim hakkı devri (L6).
+- **Ana Lisans Sözleşmesi (MLA):** taraflar, tanımlar (modül, tenant, hesap, lot, LP), lisans kapsamı ve kademe, ölçüm ve faturalama, SLA eki, destek eki, güncelleme/yeni modül eki (§7), fikri mülkiyet (mülkiyet Baş Lisans Veren'de; IPR inhisari lisans alan; L6'da alt-lisanslama hakkı ve marka **kullanım** lisansı; mülkiyet hiçbir kademede devredilmez; türev eserlerde grant-back), gizlilik, veri işleme (DPA, KVKK/GDPR), sorumluluk sınırı (12 aylık ücret), mücbir sebep, fesih ve geçiş (veri dışa aktarımı 90 gün), uygulanacak hukuk/tahkim (DIFC-LCIA veya ICC).
+- **Ekler:** A) Modül kataloğu (bu belge §1–2), B) Fiyat listesi (§4–5), C) SLA, D) Destek ve yayın takvimi, E) Güvenlik ve DR (docs/06, 09), F) Kabul testleri (yük sınavı, Denetçi 0 olay, e2e), G) Escrow (L5+), H) Marka kullanım kılavuzu (L4+), I) Münhasırlık ve marka kullanım lisansı (L6).
 - **Uyumluluk notu:** yazılım lisansı mali hizmet lisansı değildir; müşteri kendi regülasyonundan sorumludur (sözleşmede açık beyan).
 
 ---
@@ -214,6 +215,6 @@ Depoda bugün var olanlar ✅ ve lisanslı dağıtım için eksikler 🔧:
 - **Yeni başlayan broker (500 hesap, tek LP, A/B kural):** Nexus Execute 4.900 $/ay + 5.000 $ kurulum; 3. ayda 3.000 lot → +2.500 $. Yıl: ~70k $.
 - **Büyüyen broker (3 LP, risk masası, analitik):** Nexus Bridge Pro 9.900 $/ay + Denetçi dahil; MT5 köprüsü 1 kurum +1.500 $. Yıl: ~150k $.
 - **Marka sahibi broker (kendi terminali/konsolu, 2 tenant):** Nexus White Label 249.000 $/yıl + ek tenant 42.000 $ + kurulum 35.000 $. Yıl 1: ~326k $.
-- **Bölgesel teknoloji sağlayıcısı (alt-broker'lara satış):** Nexus Sovereign 1,2M $/yıl × 3 yıl, bölgesel münhasırlık (ör. MENA), alt-lisanslama hakkı; veya kalıcı 3,5M $ + %18 bakım.
+- **Bölgesel teknoloji sağlayıcısı (alt-broker'lara satış):** Nexus Sovereign 1,2M $/yıl × 3 yıl, bölgesel münhasırlık (ör. MENA), alt-lisanslama hakkı (Baş Lisans Veren ön onayıyla); veya kalıcı 3,5M $ + %18 bakım.
 
 Toplam adreslenebilir gelir (illüstratif, 24 ay): 10 Execute + 6 Bridge Pro + 3 Prime + 2 White Label + 1 Enterprise ≈ **2,9M $/yıl** yinelenen; tek Sovereign anlaşması bunun üstüne.
